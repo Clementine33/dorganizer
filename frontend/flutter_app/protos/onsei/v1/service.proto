@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package onsei.v1;
+
+option go_package = "github.com/onsei/organizer/backend/gen/go/onsei/v1";
+
+message GetConfigRequest {}
+message GetConfigResponse {
+  string config_json = 1;
+}
+
+message UpdateConfigRequest {
+  string config_json = 1;
+}
+message UpdateConfigResponse {}
+
+message ScanRequest {
+  string folder_path = 1;
+}
+
+message ListFoldersRequest {
+  string parent_path = 1;
+}
+message ListFoldersResponse {
+  repeated string folders = 1;
+}
+
+message ListFilesRequest {
+  string folder_path = 1;
+}
+message ListFilesResponse {
+  repeated string files = 1;
+}
+
+message PlanOperationsRequest {
+  repeated string source_files = 1;
+  string target_format = 2;
+  string folder_path = 3;
+  repeated string folder_paths = 4;
+  string plan_type = 5;
+  bool prune_matched_excluded = 6;
+}
+message PlanOperationsResponse {
+  string plan_id = 1;
+  repeated PlannedOperation operations = 2;
+  int32 total_count = 3;
+  int32 actionable_count = 4;
+  reserved 5;
+  reserved "keep_count";
+  string summary_reason = 6;
+  repeated FolderError plan_errors = 7;
+  repeated string successful_folders = 8;
+}
+
+// FolderError represents a structured error attributed to a specific folder
+message FolderError {
+  string stage = 1;
+  string code = 2;
+  string message = 3;
+  string folder_path = 4;
+  string plan_id = 5;
+  string root_path = 6;
+  string timestamp = 7;
+  string event_id = 8;
+}
+
+message PlannedOperation {
+  string source_path = 1;
+  string target_path = 2;
+  string operation_type = 3;
+}
+
+message ExecutePlanRequest {
+  string plan_id = 1;
+  bool soft_delete = 2;
+}
+
+message ListPlansRequest {
+  string root_path = 1;
+  int32 limit = 2;
+}
+message ListPlansResponse {
+  repeated PlanInfo plans = 1;
+}
+
+message RefreshFoldersRequest {
+  string root_path = 1;
+  repeated string folder_paths = 2;
+}
+
+message RefreshFoldersResponse {
+  repeated string successful_folders = 1;
+  repeated FolderError errors = 2;
+}
+
+message PlanInfo {
+  string plan_id = 1;
+  string root_path = 2;
+  string plan_type = 3;
+  string status = 4;
+  string created_at = 5;
+}
+
+message JobEvent {
+  string event_type = 1;
+  string message = 2;
+  int32 progress_percent = 3;
+  string timestamp = 4;
+  // Structured error attribution fields (Task 1)
+  string stage = 5;
+  string code = 6;
+  string folder_path = 7;
+  string plan_id = 8;
+  string root_path = 9;
+  string event_id = 10;
+  string item_source_path = 11;
+  string item_target_path = 12;
+  string correlation_id = 13;
+}
+
+service OnseiService {
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc Scan(ScanRequest) returns (stream JobEvent);
+  rpc ListFolders(ListFoldersRequest) returns (ListFoldersResponse);
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  rpc PlanOperations(PlanOperationsRequest) returns (PlanOperationsResponse);
+  rpc ExecutePlan(ExecutePlanRequest) returns (stream JobEvent);
+  rpc ListPlans(ListPlansRequest) returns (ListPlansResponse);
+  rpc RefreshFolders(RefreshFoldersRequest) returns (RefreshFoldersResponse);
+}

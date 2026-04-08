@@ -1,0 +1,34 @@
+#go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment files
+.env
+.log
+
+# Test binary, built with `go test -c`
+*.test
+test/
+!frontend/flutter_app/test/
+!frontend/flutter_app/test/**
+
+# Test config
+frontend/flutter_app/.dev_data
+
+# IDE
+.vscode/
+
+# AI
+.gemini
+.specify
+.opencode
+.worktrees/
+**/nul
+docs/
+
+#release
+dist

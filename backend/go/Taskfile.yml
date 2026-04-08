@@ -1,0 +1,74 @@
+version: '3'
+
+vars:
+  GO: go
+  PROTOC: protoc
+  PROTO_ROOT: api/proto
+  PROTO_FILES: onsei/v1/service.proto
+  PROTO_GEN_DIR: internal/gen
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  test:
+    desc: Run all Go tests
+    cmds:
+      - '{{.GO}} test ./...'
+
+  test:e2e:
+    desc: Run e2e tests only
+    cmds:
+      - '{{.GO}} test ./tests/e2e -v'
+
+  build:
+    desc: Build backend binary
+    cmds:
+      - '{{.GO}} build -o bin/onsei-organizer-backend ./cmd/onsei-organizer-backend'
+
+  build:windows:
+    desc: Build Windows backend binary
+    env:
+      GOOS: windows
+      GOARCH: amd64
+    cmds:
+      - '{{.GO}} build -o bin/onsei-organizer-backend.exe ./cmd/onsei-organizer-backend'
+
+  run:
+    desc: Run backend service
+    cmds:
+      - '{{.GO}} run ./cmd/onsei-organizer-backend'
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - '{{.GO}} clean'
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - '{{.GO}} fmt ./...'
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - '{{.GO}} vet ./...'
+
+  check:tools:
+    desc: Check protoc and Go plugins are available
+    cmds:
+      - '{{.PROTOC}} --version'
+      - '{{.GO}} list -f ''{{if .Target}}{{.Target}}{{end}}'' google.golang.org/protobuf/cmd/protoc-gen-go'
+      - '{{.GO}} list -f ''{{if .Target}}{{.Target}}{{end}}'' google.golang.org/grpc/cmd/protoc-gen-go-grpc'
+
+  proto:
+    desc: Regenerate protobuf Go stubs
+    deps: [check:tools]
+    cmds:
+      - >
+        {{.PROTOC}} -I {{.PROTO_ROOT}}
+        --go_out={{.PROTO_GEN_DIR}} --go_opt=paths=source_relative
+        --go-grpc_out={{.PROTO_GEN_DIR}} --go-grpc_opt=paths=source_relative
+        {{.PROTO_FILES}}

@@ -1,0 +1,84 @@
+version: '3'
+
+vars:
+  RAW_TAG: '{{ .RAW_TAG | default (env "RAW_TAG" | default "v0.0.0-dev") }}'
+  VERSION: '{{ trimPrefix "v" .RAW_TAG }}'
+  DIST_DIR: dist/windows
+  PKG_NAME: onsei-organizer
+  PKG_ROOT: '{{.DIST_DIR}}/{{.PKG_NAME}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  test:go:
+    desc: Run Go tests
+    dir: backend/go
+    cmds:
+      - go test ./...
+
+  test:flutter:
+    desc: Run Flutter tests
+    dir: frontend/flutter_app
+    cmds:
+      - flutter test
+
+  analyze:flutter:
+    desc: Analyze Flutter code
+    dir: frontend/flutter_app
+    cmds:
+      - flutter analyze
+
+  ci:quality:
+    desc: Run quality checks (Go + Flutter)
+    cmds:
+      - task test:go
+      - task test:flutter
+      - task analyze:flutter
+
+  build:go:windows-x64:
+    desc: Build Windows backend binary (x64)
+    dir: backend/go
+    env:
+      GOOS: windows
+      GOARCH: amd64
+    cmds:
+      - go build -ldflags "-X main.version={{.VERSION}}" -o bin/onsei-organizer-backend.exe ./cmd/onsei-organizer-backend
+
+  build:flutter:windows-x64:
+    desc: Build Windows Flutter app (x64)
+    dir: frontend/flutter_app
+    cmds:
+      - flutter build windows --release --dart-define=APP_VERSION={{.VERSION}}
+
+  bundle:windows-x64:
+    desc: Bundle Windows release payload
+    deps: [build:go:windows-x64, build:flutter:windows-x64]
+    cmds:
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Path '{{.DIST_DIR}}' -Force | Out-Null"
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Path '{{.PKG_ROOT}}' -Force | Out-Null"
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Path '{{.PKG_ROOT}}/bin' -Force | Out-Null"
+      - cmd: powershell -NoProfile -Command "if (Test-Path '{{.PKG_ROOT}}/data') { Remove-Item -Path '{{.PKG_ROOT}}/data' -Recurse -Force }"
+      - cmd: powershell -NoProfile -Command "Copy-Item -Path 'frontend/flutter_app/build/windows/x64/runner/Release/*.exe' -Destination '{{.PKG_ROOT}}' -Force"
+      - cmd: powershell -NoProfile -Command "Copy-Item -Path 'frontend/flutter_app/build/windows/x64/runner/Release/*.dll' -Destination '{{.PKG_ROOT}}' -Force"
+      - cmd: powershell -NoProfile -Command "Copy-Item -Path 'frontend/flutter_app/build/windows/x64/runner/Release/data' -Destination '{{.PKG_ROOT}}/data' -Recurse -Force"
+      - cmd: powershell -NoProfile -Command "Copy-Item -Path 'backend/go/bin/onsei-organizer-backend.exe' -Destination '{{.PKG_ROOT}}/bin/onsei-organizer-backend.exe' -Force"
+      - cmd: powershell -NoProfile -Command "Copy-Item -Path 'config.json.template' -Destination '{{.PKG_ROOT}}/config.json' -Force"
+
+  package:zip:windows-x64:
+    desc: Create Windows x64 zip package
+    deps: [bundle:windows-x64]
+    cmds:
+      - cmd: powershell -NoProfile -Command "if (Test-Path '{{.DIST_DIR}}/{{.PKG_NAME}}-v{{.VERSION}}-windows-x64.zip') { Remove-Item -Path '{{.DIST_DIR}}/{{.PKG_NAME}}-v{{.VERSION}}-windows-x64.zip' -Force }"
+      - cmd: powershell -NoProfile -Command "Compress-Archive -Path '{{.PKG_ROOT}}' -DestinationPath '{{.DIST_DIR}}/{{.PKG_NAME}}-v{{.VERSION}}-windows-x64.zip' -Force"
+
+  release:windows-x64:
+    desc: Build and package Windows x64 release
+    deps: [package:zip:windows-x64]
+
+  release:gh:
+    desc: Create GitHub release for current tag
+    cmds:
+      - gh release create "v{{.VERSION}}" "{{.DIST_DIR}}/{{.PKG_NAME}}-v{{.VERSION}}-windows-x64.zip"
