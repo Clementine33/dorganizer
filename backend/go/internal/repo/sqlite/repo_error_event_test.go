@@ -1,6 +1,9 @@
 package sqlite
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestRepository_CreateAndListErrorEvents_PathNullableRoundTrip(t *testing.T) {
 	repo := newTestRepository(t)
@@ -106,5 +109,80 @@ func TestRepository_CreateAndListErrorEvents_PathNullableRoundTrip(t *testing.T)
 	}
 	if event2.RootPath != "/music" {
 		t.Errorf("expected root_path /music, got %s", event2.RootPath)
+	}
+}
+
+func TestRepository_DeleteErrorEventsOlderThanTx_RespectsCutoffBoundary(t *testing.T) {
+	repo := newTestRepository(t)
+
+	cutoff := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	oldTime := cutoff.Add(-1 * time.Second) // strictly before cutoff
+	newTime := cutoff                       // exactly at cutoff (>= cutoff, should be kept)
+
+	// Create old error event
+	oldErr := &ErrorEvent{
+		Scope:     "scan",
+		RootPath:  "/music",
+		Code:      "OLD_ERR",
+		Message:   "old error",
+		Retryable: false,
+	}
+	if err := repo.CreateErrorEvent(oldErr); err != nil {
+		t.Fatalf("create old error event: %v", err)
+	}
+	_, err := repo.db.Exec("UPDATE error_events SET created_at = ? WHERE id = ?", oldTime.Format(timeFormat), oldErr.ID)
+	if err != nil {
+		t.Fatalf("patch old error event time: %v", err)
+	}
+
+	// Create new error event (at cutoff, should be retained)
+	newErr := &ErrorEvent{
+		Scope:     "scan",
+		RootPath:  "/music",
+		Code:      "NEW_ERR",
+		Message:   "new error",
+		Retryable: false,
+	}
+	if err := repo.CreateErrorEvent(newErr); err != nil {
+		t.Fatalf("create new error event: %v", err)
+	}
+	_, err = repo.db.Exec("UPDATE error_events SET created_at = ? WHERE id = ?", newTime.Format(timeFormat), newErr.ID)
+	if err != nil {
+		t.Fatalf("patch new error event time: %v", err)
+	}
+
+	// Run delete within a transaction
+	tx, err := repo.db.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	deleted, err := repo.DeleteErrorEventsOlderThanTx(tx, cutoff)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("DeleteErrorEventsOlderThanTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if deleted != 1 {
+		t.Errorf("deleted count = %d, want 1", deleted)
+	}
+
+	// Verify only the new event remains
+	var count int
+	if err := repo.db.QueryRow("SELECT COUNT(*) FROM error_events").Scan(&count); err != nil {
+		t.Fatalf("count error_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("error_events remaining = %d, want 1", count)
+	}
+
+	var retainedCode string
+	if err := repo.db.QueryRow("SELECT code FROM error_events").Scan(&retainedCode); err != nil {
+		t.Fatalf("select retained event: %v", err)
+	}
+	if retainedCode != "NEW_ERR" {
+		t.Errorf("retained event code = %q, want NEW_ERR", retainedCode)
 	}
 }

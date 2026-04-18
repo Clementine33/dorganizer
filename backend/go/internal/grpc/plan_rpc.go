@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,7 +43,9 @@ func (s *OnseiServer) PlanOperations(_ context.Context, req *pb.PlanOperationsRe
 	}
 
 	if planType != "prune" && planCfg.Slim.RequireScope && len(req.GetSourceFiles()) == 0 && req.GetFolderPath() == "" && len(req.GetFolderPaths()) == 0 {
-		return globalNoScopePlanResponse(), nil
+		resp := globalNoScopePlanResponse()
+		s.persistGlobalNoScope(resp)
+		return resp, nil
 	}
 
 	analyzer := analyze.NewAnalyzer(s.repo)
@@ -81,12 +84,17 @@ func (s *OnseiServer) PlanOperations(_ context.Context, req *pb.PlanOperationsRe
 			}
 		}
 
-		pruneRegex, err := s.getPruneRegexPattern()
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "prune regex config unavailable: %v", err)
-		}
-
 		if len(req.GetFolderPaths()) == 0 && req.GetFolderPath() == "" && len(req.GetSourceFiles()) == 0 {
+			if planCfg.Slim.RequireScope {
+				resp := globalNoScopePlanResponse()
+				s.persistGlobalNoScope(resp)
+				return resp, nil
+			}
+			// Legacy: require_scope=false allows global prune scan.
+			pruneRegex, err := s.getPruneRegexPattern()
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "prune regex config unavailable: %v", err)
+			}
 			planDBQueryCount++ // AnalyzePrune loads entries via DB when no explicit scope.
 			plan, err = analyzer.AnalyzePrune(pruneRegex, pruneTarget)
 			if err != nil {
@@ -94,6 +102,10 @@ func (s *OnseiServer) PlanOperations(_ context.Context, req *pb.PlanOperationsRe
 				return nil, status.Errorf(codes.Internal, "analyze: %v", err)
 			}
 		} else {
+			pruneRegex, err := s.getPruneRegexPattern()
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "prune regex config unavailable: %v", err)
+			}
 			entries, err := s.collectPruneEntriesByScopes(req.GetFolderPaths(), req.GetFolderPath(), req.GetSourceFiles())
 			if err != nil {
 				recordSQLiteBusyLocked(err)
@@ -271,6 +283,27 @@ func (s *OnseiServer) PlanOperations(_ context.Context, req *pb.PlanOperationsRe
 		return nil, status.Errorf(codes.Internal, "persist plan: %v", err)
 	}
 
+	// Persist plan errors into error_events (best-effort)
+	for _, pe := range planErrors {
+		if pe.GetCode() == "" {
+			continue
+		}
+		var pathPtr *string
+		if fp := pe.GetFolderPath(); fp != "" {
+			pathPtr = &fp
+		}
+		if insertErr := s.repo.CreateErrorEvent(&sqlite.ErrorEvent{
+			Scope:     planType,
+			RootPath:  pe.GetRootPath(),
+			Path:      pathPtr,
+			Code:      pe.GetCode(),
+			Message:   pe.GetMessage(),
+			Retryable: false,
+		}); insertErr != nil {
+			log.Printf("warning: failed to persist plan error event: %v", insertErr)
+		}
+	}
+
 	var ops []*pb.PlannedOperation
 	totalCount := int32(len(plan.Operations))
 	for _, op := range plan.Operations {
@@ -320,5 +353,32 @@ func globalNoScopePlanResponse() *pb.PlanOperationsResponse {
 			Timestamp:  timestamp,
 			EventId:    eventID,
 		}},
+	}
+}
+
+// persistGlobalNoScope best-effort persists a GLOBAL_NO_SCOPE error into
+// error_events. Uses scope "plan" to match the plan-stage nature of the error.
+func (s *OnseiServer) persistGlobalNoScope(resp *pb.PlanOperationsResponse) {
+	if s.repo == nil {
+		return
+	}
+	for _, pe := range resp.GetPlanErrors() {
+		if pe.GetCode() == "" {
+			continue
+		}
+		var pathPtr *string
+		if fp := pe.GetFolderPath(); fp != "" {
+			pathPtr = &fp
+		}
+		if err := s.repo.CreateErrorEvent(&sqlite.ErrorEvent{
+			Scope:     "plan",
+			RootPath:  pe.GetRootPath(),
+			Path:      pathPtr,
+			Code:      pe.GetCode(),
+			Message:   pe.GetMessage(),
+			Retryable: false,
+		}); err != nil {
+			log.Printf("warning: failed to persist global no-scope error event: %v", err)
+		}
 	}
 }

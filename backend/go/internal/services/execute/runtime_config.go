@@ -14,15 +14,9 @@ const (
 	Stage3Workers = 1
 )
 
-// stage2Workers returns min(4, max(1, runtime.NumCPU()/2)).
+// stage2Workers returns runtime.NumCPU().
 func stage2Workers() int {
-	n := runtime.NumCPU() / 2
-	if n < 1 {
-		n = 1
-	}
-	if n > 4 {
-		n = 4
-	}
+	n := runtime.NumCPU()
 	return n
 }
 

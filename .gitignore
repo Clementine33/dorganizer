@@ -21,6 +21,7 @@ frontend/flutter_app/.dev_data
 
 # IDE
 .vscode/
+.idea/
 
 # AI
 .gemini

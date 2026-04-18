@@ -1,6 +1,6 @@
 {
   "prune": {
-    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无)(?:[Ss][Ee]|音效)"
+    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无)(?:[Ss][Ee]|音效|效果音)"
   },
   "tools": {
     "encoder": "lame",
@@ -8,6 +8,6 @@
     "lame_path": "lame"
   },
   "execute": {
-    "max_io_workers": 4
+    "max_io_workers": 6
   }
 }

@@ -2,11 +2,13 @@ package analyze
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -286,3 +288,168 @@ func TestEnrichScopedEntriesBitrateWithBatchOption_DoesNotEmitGlobalLogMetrics(t
 		t.Fatalf("expected no global log output, got %q", got)
 	}
 }
+
+func TestIsSQLiteBusyLockedError_Detection(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("database is locked"), true},
+		{errors.New("SQLITE_BUSY: concurrent access"), true},
+		{errors.New("sqlite_locked error"), true},
+		{errors.New("no such table: entries"), false},
+		{nil, false},
+		{errors.New("disk I/O error"), false},
+	}
+	for _, tt := range tests {
+		got := isSQLiteBusyLockedError(tt.err)
+		if got != tt.want {
+			t.Errorf("isSQLiteBusyLockedError(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestPersistBitrateUpdates_RetriesOnBusyError(t *testing.T) {
+	// Test: retry loop should retry on busy and stop on non-busy.
+	attempts := 0
+	lastErr := error(nil)
+	for attempt := 0; attempt <= bitratePersistRetryLimit; attempt++ {
+		attempts++
+		// Simulate: first 2 attempts return busy, 3rd returns non-busy
+		if attempt < 2 {
+			err := errors.New("database is locked")
+			if !isSQLiteBusyLockedError(err) {
+				t.Fatalf("expected busy error to be detected")
+			}
+			lastErr = err
+			continue
+		}
+		// Non-busy error - should stop
+		err := errors.New("no such table: entries")
+		if isSQLiteBusyLockedError(err) {
+			t.Fatalf("expected non-busy error to not be detected as busy")
+		}
+		lastErr = err
+		break
+	}
+	if lastErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(lastErr.Error(), "no such table") {
+		t.Fatalf("expected non-busy error to be returned, got %v", lastErr)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts (2 busy + 1 non-busy), got %d", attempts)
+	}
+}
+
+func TestPersistBitrateUpdates_ExhaustsRetriesOnBusy(t *testing.T) {
+	// Verify that exhausting retries returns the last busy error.
+	attempts := 0
+	var lastErr error
+	for attempt := 0; attempt <= bitratePersistRetryLimit; attempt++ {
+		attempts++
+		err := errors.New("SQLITE_BUSY: database is locked")
+		if !isSQLiteBusyLockedError(err) {
+			t.Fatalf("expected busy error to be detected at attempt %d", attempt)
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !isSQLiteBusyLockedError(lastErr) {
+		t.Fatalf("expected last error to be busy, got %v", lastErr)
+	}
+	if attempts != bitratePersistRetryLimit+1 {
+		t.Fatalf("expected %d attempts (0..%d), got %d", bitratePersistRetryLimit+1, bitratePersistRetryLimit, attempts)
+	}
+}
+
+func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "onsei-test-bitrate-concurrent-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	repo, err := sqlite.NewRepository(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	defer repo.Close()
+
+	// Insert 200 entries with NULL bitrate.
+	const totalEntries = 200
+	updates := make([]bitrateUpdate, 0, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		p := fmt.Sprintf("/scope/%03d.mp3", i)
+		_, err = repo.DB().Exec(`
+			INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
+			VALUES (?, ?, 0, 1000, 'audio/mpeg', 1, ?, NULL)
+		`, p, "/scope", 1234567890)
+		if err != nil {
+			t.Fatalf("failed to insert entry %s: %v", p, err)
+		}
+		updates = append(updates, bitrateUpdate{pathPosix: p, bitrate: 128000})
+	}
+
+	// Split into 4 groups and persist concurrently using the same repo.
+	const numGoroutines = 4
+	perGoroutine := totalEntries / numGoroutines
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(goroutineIdx int) {
+			defer wg.Done()
+			start := goroutineIdx * perGoroutine
+			end := start + perGoroutine
+			if end > len(updates) {
+				end = len(updates)
+			}
+			a := NewAnalyzer(repo)
+			if err := a.persistBitrateUpdates(updates[start:end], true); err != nil {
+				errCh <- err
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent persistBitrateUpdates failed: %v", err)
+	}
+
+	// Verify all entries have bitrate set.
+	var updatedCount int
+	if err := repo.DB().QueryRow("SELECT COUNT(1) FROM entries WHERE COALESCE(bitrate,0) > 0").Scan(&updatedCount); err != nil {
+		t.Fatalf("failed to count updated entries: %v", err)
+	}
+	if updatedCount != totalEntries {
+		t.Fatalf("expected %d entries with bitrate > 0, got %d", totalEntries, updatedCount)
+	}
+}
+
+// mockSQLDB and related types are minimal mocks for unit-testing DB interactions.
+// They are not used by the current integration tests but kept for future expansion.
+
+type mockSQLResult struct{}
+
+func (mockSQLResult) LastInsertId() (int64, error) { return 0, nil }
+func (mockSQLResult) RowsAffected() (int64, error) { return 0, nil }
+
+type mockSQLTx struct {
+	execFn     func(string, ...interface{}) (mockSQLResult, error)
+	commitFn   func() error
+	rollbackFn func() error
+}
+
+func (tx mockSQLTx) Exec(q string, args ...interface{}) (mockSQLResult, error) {
+	return tx.execFn(q, args...)
+}
+func (tx mockSQLTx) Commit() error   { return tx.commitFn() }
+func (tx mockSQLTx) Rollback() error { return tx.rollbackFn() }

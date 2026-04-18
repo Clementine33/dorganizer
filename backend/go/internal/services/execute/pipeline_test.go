@@ -124,9 +124,14 @@ func (m *mockPipelineRunner) getDeleteCalls() []string {
 func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Create 8 test files to have enough items
+	// Keep enough tail items beyond worker count so fail-fast can be observed.
+	numFiles := maxCPUWorkers() + 8
+	if numFiles < 8 {
+		numFiles = 8
+	}
+
 	var files []string
-	for i := 0; i < 8; i++ {
+	for i := 0; i < numFiles; i++ {
 		file := filepath.Join(tmp, fmt.Sprintf("song%d.wav", i))
 		if err := os.WriteFile(file, []byte("test"), 0644); err != nil {
 			t.Fatal(err)
@@ -134,7 +139,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 		files = append(files, file)
 	}
 
-	// Create plan with 8 convert items
+	// Create plan with convert items
 	var items []PlanItem
 	for i, file := range files {
 		items = append(items, PlanItem{
@@ -172,7 +177,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	convertCalls := mockRunner.getConvertCalls()
 
 	// ROBUST ASSERTION: With worker-claim model, SOME tail items should remain unprocessed
-	// The exact count depends on machine parallelism (stage2Workers = min(4, max(1, NumCPU/2)))
+	// The exact count depends on machine parallelism (stage2Workers = NumCPU).
 	// We verify that not ALL items were processed - this is the core fail-fast invariant.
 	if len(convertCalls) >= len(files) {
 		t.Errorf("fail-fast should stop processing: all %d items were processed", len(convertCalls))
@@ -180,7 +185,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 
 	// ROBUST ASSERTION: At least one source file in the second half of the plan should remain
 	// This verifies that fail-fast prevented processing of items claimed after the stop.
-	// Using midpoint ensures we catch tail items regardless of parallelism (up to 4 workers).
+	// Using midpoint ensures we catch tail items across machine parallelism.
 	midpoint := len(files) / 2
 	unprocessedTail := false
 	for i := midpoint; i < len(files); i++ {
@@ -457,8 +462,11 @@ func TestExecutePlan_Stage3_DeletesOriginalOnSuccess(t *testing.T) {
 func TestExecutePlan_Overlap_PartialSuccessThenFail(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Use more files to clearly observe fail-fast stopping point
-	const numFiles = 10
+	// Keep enough tail items beyond worker count to observe fail-fast stopping point.
+	numFiles := maxCPUWorkers() + 8
+	if numFiles < 10 {
+		numFiles = 10
+	}
 	var files []string
 	for i := 0; i < numFiles; i++ {
 		file := filepath.Join(tmp, fmt.Sprintf("track%d.wav", i))
