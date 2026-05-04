@@ -36,6 +36,8 @@ func insertEntry(t *testing.T, repo *sqlite.Repository, path, rootPath, format s
 	}
 }
 
+func int64Ptr(v int64) *int64 { return &v }
+
 func writeDummyFile(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -374,10 +376,14 @@ func TestPlan_PartialSuccess_FolderErrorsAndSuccessfulFolders(t *testing.T) {
 	validFolder10 := filepath.Join(tmpDir, "10_valid_music")
 
 	writeDummyFile(t, filepath.Join(validFolder2, "song2.flac"))
+	writeDummyFile(t, filepath.Join(validFolder2, "song2.mp3"))
 	writeDummyFile(t, filepath.Join(validFolder10, "song10.flac"))
+	writeDummyFile(t, filepath.Join(validFolder10, "song10.mp3"))
 
 	insertEntry(t, repo, filepath.Join(validFolder2, "song2.flac"), tmpDir, "audio/flac", 2000, nil)
+	insertEntry(t, repo, filepath.Join(validFolder2, "song2.mp3"), tmpDir, "audio/mpeg", 1000, int64(320000))
 	insertEntry(t, repo, filepath.Join(validFolder10, "song10.flac"), tmpDir, "audio/flac", 2000, nil)
+	insertEntry(t, repo, filepath.Join(validFolder10, "song10.mp3"), tmpDir, "audio/mpeg", 1000, int64(320000))
 	insertEntry(t, repo, filepath.ToSlash(invalidFolder)+"/test\x00song.mp3", tmpDir, "audio/mpeg", 1000, nil)
 
 	svc := NewService(repo, tmpDir)
@@ -612,92 +618,117 @@ func TestPlan_StableErrorCodes_PATH_NODE_TOO_LONG(t *testing.T) {
 	}
 }
 
-func TestPlan_StableErrorCodes_SLIM_STEM_MATCH_GT2(t *testing.T) {
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-	repo := newTestRepo(t, tmpDir)
-
-	stemFolder := filepath.Join(tmpDir, "stem_folder")
-	if err := os.MkdirAll(stemFolder, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	insertEntry(t, repo, filepath.Join(stemFolder, "song.flac"), tmpDir, "audio/flac", 2000, nil)
-	insertEntry(t, repo, filepath.Join(stemFolder, "song.mp3"), tmpDir, "audio/mpeg", 1000, int64(192000))
-	insertEntry(t, repo, filepath.Join(stemFolder, "song.wav"), tmpDir, "audio/wav", 3000, nil)
-
-	svc := NewService(repo, tmpDir)
-	resp, err := svc.Plan(ctx, Request{
-		FolderPaths:  []string{stemFolder},
-		PlanType:     "slim",
-		TargetFormat: "slim:mode2",
-	})
-	if err != nil {
-		t.Fatalf("Plan failed: %v", err)
-	}
-
-	foundCode := false
-	for _, pe := range resp.Errors {
-		if pe.Code == "SLIM_STEM_MATCH_GT2" {
-			foundCode = true
+func TestPlan_StableErrorCodes_SlimStemValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		files  []struct {
+			name    string
+			format  string
+			bitrate *int64
 		}
-	}
-	if !foundCode {
-		t.Fatalf("expected SLIM_STEM_MATCH_GT2 in errors, got: %+v", resp.Errors)
+		wantCode string
+	}{
+		{
+			name:   "mixed lossy formats",
+			target: "slim:mode2",
+			files: []struct {
+				name    string
+				format  string
+				bitrate *int64
+			}{
+				{name: "song.mp3", format: "audio/mpeg", bitrate: int64Ptr(320000)},
+				{name: "song.m4a", format: "audio/mp4", bitrate: int64Ptr(256000)},
+			},
+			wantCode: "SLIM_STEM_LOSSY_MIXED_FORMATS",
+		},
+		{
+			name:   "one lossless with multiple lossy",
+			target: "slim:mode2",
+			files: []struct {
+				name    string
+				format  string
+				bitrate *int64
+			}{
+				{name: "song.wav", format: "audio/wav", bitrate: nil},
+				{name: "song.mp3", format: "audio/mpeg", bitrate: int64Ptr(320000)},
+				{name: filepath.Join("nested", "song.mp3"), format: "audio/mpeg", bitrate: int64Ptr(320000)},
+			},
+			wantCode: "SLIM_STEM_LOSSLESS_WITH_MULTI_LOSSY",
+		},
+		{
+			name:   "multiple lossless",
+			target: "slim:mode2",
+			files: []struct {
+				name    string
+				format  string
+				bitrate *int64
+			}{
+				{name: "song.wav", format: "audio/wav", bitrate: nil},
+				{name: filepath.Join("nested", "song.flac"), format: "audio/flac", bitrate: nil},
+				{name: filepath.Join("nested2", "song.mp3"), format: "audio/mpeg", bitrate: int64Ptr(320000)},
+			},
+			wantCode: "SLIM_STEM_MULTI_LOSSLESS",
+		},
+		{
+			name:   "lossless only component",
+			target: "slim:mode1",
+			files: []struct {
+				name    string
+				format  string
+				bitrate *int64
+			}{
+				{name: "song.wav", format: "audio/wav", bitrate: nil},
+			},
+			wantCode: "SLIM_MODE1_LOSSLESS_ONLY",
+		},
 	}
 
-	folderNorm := filepath.ToSlash(filepath.Clean(stemFolder))
-	for _, sf := range resp.SuccessfulFolders {
-		if sf == folderNorm {
-			t.Fatalf("folder with SLIM_STEM_MATCH_GT2 must not be in successful_folders")
-		}
-	}
-	if len(resp.Operations) != 0 {
-		t.Fatalf("failed folder must not contribute operations, got %d ops", len(resp.Operations))
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			tmpDir := t.TempDir()
+			repo := newTestRepo(t, tmpDir)
 
-func TestPlan_StableErrorCodes_SLIM_MODE1_LOSSLESS_ONLY(t *testing.T) {
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-	repo := newTestRepo(t, tmpDir)
+			folder := filepath.Join(tmpDir, "stem_folder")
+			if err := os.MkdirAll(folder, 0o755); err != nil {
+				t.Fatal(err)
+			}
 
-	folder := filepath.Join(tmpDir, "lossless_only")
-	if err := os.MkdirAll(folder, 0755); err != nil {
-		t.Fatal(err)
-	}
+			for _, file := range tt.files {
+				fullPath := filepath.Join(folder, file.name)
+				if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				insertEntry(t, repo, fullPath, tmpDir, file.format, 1000, file.bitrate)
+			}
 
-	insertEntry(t, repo, filepath.Join(folder, "song.wav"), tmpDir, "audio/wav", 1000, nil)
-	insertEntry(t, repo, filepath.Join(folder, "alt.flac"), tmpDir, "audio/flac", 2000, nil)
+			svc := NewService(repo, tmpDir)
+			resp, err := svc.Plan(ctx, Request{FolderPaths: []string{folder}, PlanType: "slim", TargetFormat: tt.target})
+			if err != nil {
+				t.Fatalf("Plan failed: %v", err)
+			}
 
-	svc := NewService(repo, tmpDir)
-	resp, err := svc.Plan(ctx, Request{
-		FolderPaths:  []string{folder},
-		PlanType:     "slim",
-		TargetFormat: "slim:mode1",
-	})
-	if err != nil {
-		t.Fatalf("Plan failed: %v", err)
-	}
+			foundCode := false
+			for _, pe := range resp.Errors {
+				if pe.Code == tt.wantCode {
+					foundCode = true
+				}
+			}
+			if !foundCode {
+				t.Fatalf("expected %s in errors, got %+v", tt.wantCode, resp.Errors)
+			}
 
-	foundCode := false
-	for _, pe := range resp.Errors {
-		if pe.Code == "SLIM_MODE1_LOSSLESS_ONLY" {
-			foundCode = true
-		}
-	}
-	if !foundCode {
-		t.Fatalf("expected SLIM_MODE1_LOSSLESS_ONLY in errors, got: %+v", resp.Errors)
-	}
-
-	folderNorm := filepath.ToSlash(filepath.Clean(folder))
-	for _, sf := range resp.SuccessfulFolders {
-		if sf == folderNorm {
-			t.Fatalf("folder with SLIM_MODE1_LOSSLESS_ONLY must not be in successful_folders")
-		}
-	}
-	if len(resp.Operations) != 0 {
-		t.Fatalf("failed folder must not contribute operations, got %d ops", len(resp.Operations))
+			folderNorm := filepath.ToSlash(filepath.Clean(folder))
+			for _, sf := range resp.SuccessfulFolders {
+				if sf == folderNorm {
+					t.Fatalf("folder with %s must not be in successful_folders", tt.wantCode)
+				}
+			}
+			if len(resp.Operations) != 0 {
+				t.Fatalf("failed folder must not contribute operations, got %d ops", len(resp.Operations))
+			}
+		})
 	}
 }
 

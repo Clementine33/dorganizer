@@ -50,6 +50,88 @@ type Component struct {
 	FileEntries []FileEntry
 }
 
+type StemGroup struct {
+	Stem  string
+	Files []FileEntry
+}
+
+func buildStemGroups(comp Component) []StemGroup {
+	byStem := make(map[string][]FileEntry)
+	for _, f := range comp.FileEntries {
+		byStem[f.Stem] = append(byStem[f.Stem], f)
+	}
+
+	stems := make([]string, 0, len(byStem))
+	for stem := range byStem {
+		stems = append(stems, stem)
+	}
+	sort.Strings(stems)
+
+	groups := make([]StemGroup, 0, len(stems))
+	for _, stem := range stems {
+		groups = append(groups, StemGroup{Stem: stem, Files: byStem[stem]})
+	}
+	return groups
+}
+
+func componentPathHint(comp Component) string {
+	if len(comp.FileEntries) == 0 {
+		return ""
+	}
+	return comp.FileEntries[0].ParentPath
+}
+
+func validateStemGroups(comp Component, groups []StemGroup) []PruneError {
+	pathHint := componentPathHint(comp)
+	var errs []PruneError
+
+	for _, group := range groups {
+		losslessCount := 0
+		lossyCount := 0
+		lossyExts := map[string]struct{}{}
+
+		for _, f := range group.Files {
+			if f.IsLossless {
+				losslessCount++
+			}
+			if f.IsLossy {
+				lossyCount++
+				lossyExts[f.Ext] = struct{}{}
+			}
+		}
+
+		switch {
+		case losslessCount == 0 && lossyCount >= 1 && len(lossyExts) == 1:
+			continue
+		case losslessCount == 1 && lossyCount == 1 && len(lossyExts) == 1:
+			continue
+		case losslessCount > 1:
+			errs = append(errs, PruneError{Path: pathHint, Code: "SLIM_STEM_MULTI_LOSSLESS", Message: fmt.Sprintf("found multiple lossless files for stem: %s", group.Stem)})
+		case losslessCount == 1 && lossyCount > 1:
+			errs = append(errs, PruneError{Path: pathHint, Code: "SLIM_STEM_LOSSLESS_WITH_MULTI_LOSSY", Message: fmt.Sprintf("found 1 lossless and multiple lossy files for stem: %s", group.Stem)})
+		case lossyCount >= 2 && len(lossyExts) > 1:
+			errs = append(errs, PruneError{Path: pathHint, Code: "SLIM_STEM_LOSSY_MIXED_FORMATS", Message: fmt.Sprintf("found mixed lossy formats for stem: %s", group.Stem)})
+		}
+	}
+
+	return errs
+}
+
+func isLosslessOnlyComponent(groups []StemGroup) bool {
+	hasLossless := false
+	for _, group := range groups {
+		for _, f := range group.Files {
+			if f.IsLossy {
+				return false
+			}
+			if f.IsLossless {
+				hasLossless = true
+			}
+		}
+	}
+	return hasLossless
+}
+
 type BranchType string
 
 const (
@@ -168,29 +250,37 @@ func preferredLossless(files []FileEntry) string {
 	return flac
 }
 
-func DetermineBranch(comp Component) BranchResult {
+func DetermineBranch(groups []StemGroup, checkUnknownBitrate bool) BranchResult {
 	hasLossy := false
 	hasLossless := false
 	hasLowLossy := false
+	hasUnknownLossyBitrate := false
+	var allFiles []FileEntry
 
-	for _, f := range comp.FileEntries {
-		if f.IsLossless {
-			hasLossless = true
-		}
-		if !f.IsLossy {
-			continue
-		}
-		hasLossy = true
-		// Unknown-bitrate skip is required for mp3 references in Mode II.
-		if f.Ext == ".mp3" && f.Bitrate == 0 {
-			return BranchResult{BranchType: BranchUnknown, Reason: "lossy bitrate unknown", HasUnknown: true}
-		}
-		if f.Ext == ".mp3" && f.Bitrate < BitrateThreshold {
-			hasLowLossy = true
+	for _, group := range groups {
+		for _, f := range group.Files {
+			allFiles = append(allFiles, f)
+			if f.IsLossless {
+				hasLossless = true
+			}
+			if !f.IsLossy {
+				continue
+			}
+			hasLossy = true
+			if checkUnknownBitrate && f.Ext == ".mp3" && f.Bitrate == 0 {
+				hasUnknownLossyBitrate = true
+				continue
+			}
+			if f.Ext == ".mp3" && f.Bitrate < BitrateThreshold {
+				hasLowLossy = true
+			}
 		}
 	}
 
-	source := preferredLossless(comp.FileEntries)
+	source := preferredLossless(allFiles)
+	if hasUnknownLossyBitrate && hasLossless {
+		return BranchResult{BranchType: BranchUnknown, Reason: "lossy bitrate unknown", HasUnknown: true}
+	}
 	if hasLossy && hasLowLossy {
 		if !hasLossless {
 			return BranchResult{BranchType: BranchSkip, Reason: "lossy below threshold but no lossless source"}
@@ -215,47 +305,34 @@ func convertPath(pathPosix string) string {
 	return strings.TrimSuffix(pathPosix, ext) + ".m4a"
 }
 
-func GenerateOperations(comp Component, branch BranchResult) []Operation {
+func GenerateOperations(groups []StemGroup, branch BranchResult) []Operation {
 	var ops []Operation
 
 	switch branch.BranchType {
 	case BranchConvert:
-		byStem := map[string][]FileEntry{}
 		sourceByStem := map[string]string{}
-		for _, f := range comp.FileEntries {
-			byStem[f.Stem] = append(byStem[f.Stem], f)
-		}
-		for stem, files := range byStem {
-			source := preferredLossless(files)
+		for _, group := range groups {
+			source := preferredLossless(group.Files)
 			if source == "" {
 				continue
 			}
-			sourceByStem[stem] = source
-			ops = append(ops, Operation{
-				Type:       OpTypeConvert,
-				SourcePath: source,
-				TargetPath: convertPath(source),
-				Reason:     branch.Reason,
-			})
+			sourceByStem[group.Stem] = source
+			ops = append(ops, Operation{Type: OpTypeConvert, SourcePath: source, TargetPath: convertPath(source), Reason: branch.Reason})
 		}
-		for _, f := range comp.FileEntries {
-			if !f.IsLossy {
+		for _, group := range groups {
+			if sourceByStem[group.Stem] == "" {
 				continue
 			}
-			if sourceByStem[f.Stem] == "" {
-				continue
+			for _, f := range group.Files {
+				if f.IsLossy {
+					ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
+				}
 			}
-			ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
 		}
 	case BranchDeleteLossless:
-		byStem := map[string][]FileEntry{}
-		for _, f := range comp.FileEntries {
-			byStem[f.Stem] = append(byStem[f.Stem], f)
-		}
-
-		for _, files := range byStem {
+		for _, group := range groups {
 			hasLossy := false
-			for _, f := range files {
+			for _, f := range group.Files {
 				if f.IsLossy {
 					hasLossy = true
 					break
@@ -263,32 +340,23 @@ func GenerateOperations(comp Component, branch BranchResult) []Operation {
 			}
 
 			if hasLossy {
-				for _, f := range files {
-					if !f.IsLossless {
-						continue
+				for _, f := range group.Files {
+					if f.IsLossless {
+						ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
 					}
-					ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
 				}
 				continue
 			}
 
-			source := preferredLossless(files)
+			source := preferredLossless(group.Files)
 			if source == "" {
 				continue
 			}
-
-			ops = append(ops, Operation{
-				Type:       OpTypeConvert,
-				SourcePath: source,
-				TargetPath: convertPath(source),
-				Reason:     branch.Reason,
-			})
-
-			for _, f := range files {
-				if !f.IsLossless || f.PathPosix == source {
-					continue
+			ops = append(ops, Operation{Type: OpTypeConvert, SourcePath: source, TargetPath: convertPath(source), Reason: branch.Reason})
+			for _, f := range group.Files {
+				if f.IsLossless && f.PathPosix != source {
+					ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
 				}
-				ops = append(ops, Operation{Type: OpTypeDelete, SourcePath: f.PathPosix, Reason: branch.Reason})
 			}
 		}
 	}
@@ -328,39 +396,19 @@ func AnalyzeSlimMode2(entries []Entry, purePattern *regexp.Regexp) Plan {
 	plan := Plan{Operations: make([]Operation, 0)}
 	components := BuildComponents(entries)
 	for _, c := range components {
-		branch := DetermineBranch(c)
+		groups := buildStemGroups(c)
+		if errs := validateStemGroups(c, groups); len(errs) > 0 {
+			plan.Errors = append(plan.Errors, errs...)
+			continue
+		}
+
+		branch := DetermineBranch(groups, true)
 		if branch.BranchType == BranchUnknown {
-			pathHint := ""
-			if len(c.FileEntries) > 0 {
-				pathHint = c.FileEntries[0].ParentPath
-			}
-			plan.Errors = append(plan.Errors, PruneError{
-				Path:    pathHint,
-				Code:    "SLIM_GROUP_SKIPPED_BITRATE_UNKNOWN",
-				Message: "component skipped because required mp3 bitrate is unknown",
-			})
+			plan.Errors = append(plan.Errors, PruneError{Path: componentPathHint(c), Code: "SLIM_GROUP_SKIPPED_BITRATE_UNKNOWN", Message: "component skipped because required mp3 bitrate is unknown"})
+			continue
 		}
 
-		// Check for SLIM_STEM_MATCH_GT2: more than 2 files with same stem
-		stemCounts := make(map[string]int)
-		for _, f := range c.FileEntries {
-			stemCounts[f.Stem]++
-		}
-		for stem, count := range stemCounts {
-			if count > 2 {
-				pathHint := ""
-				if len(c.FileEntries) > 0 {
-					pathHint = c.FileEntries[0].ParentPath
-				}
-				plan.Errors = append(plan.Errors, PruneError{
-					Path:    pathHint,
-					Code:    "SLIM_STEM_MATCH_GT2",
-					Message: fmt.Sprintf("found %d files with same stem: %s", count, stem),
-				})
-			}
-		}
-
-		plan.Operations = append(plan.Operations, GenerateOperations(c, branch)...)
+		plan.Operations = append(plan.Operations, GenerateOperations(groups, branch)...)
 	}
 	return plan
 }
@@ -371,53 +419,21 @@ func AnalyzeSlimMode1(entries []Entry, purePattern *regexp.Regexp) Plan {
 	components := BuildComponents(entries)
 
 	for _, c := range components {
-		stemCounts := make(map[string]int)
-		hasLossy := false
-		hasLossless := false
-
-		for _, f := range c.FileEntries {
-			stemCounts[f.Stem]++
-			if f.IsLossy {
-				hasLossy = true
-			}
-			if f.IsLossless {
-				hasLossless = true
-			}
+		groups := buildStemGroups(c)
+		if errs := validateStemGroups(c, groups); len(errs) > 0 {
+			plan.Errors = append(plan.Errors, errs...)
+			continue
 		}
-
-		for stem, count := range stemCounts {
-			if count > 2 {
-				pathHint := ""
-				if len(c.FileEntries) > 0 {
-					pathHint = c.FileEntries[0].ParentPath
-				}
-				plan.Errors = append(plan.Errors, PruneError{
-					Path:    pathHint,
-					Code:    "SLIM_STEM_MATCH_GT2",
-					Message: fmt.Sprintf("found %d files with same stem: %s", count, stem),
-				})
-				return plan
-			}
-		}
-
-		if hasLossless && !hasLossy {
-			pathHint := ""
-			if len(c.FileEntries) > 0 {
-				pathHint = c.FileEntries[0].ParentPath
-			}
-			plan.Errors = append(plan.Errors, PruneError{
-				Path:    pathHint,
-				Code:    "SLIM_MODE1_LOSSLESS_ONLY",
-				Message: "component has only lossless files",
-			})
-			return plan
-		}
-
-		if hasLossy && !hasLossless {
+		if isLosslessOnlyComponent(groups) {
+			plan.Errors = append(plan.Errors, PruneError{Path: componentPathHint(c), Code: "SLIM_MODE1_LOSSLESS_ONLY", Message: "component has only lossless files"})
 			continue
 		}
 
-		plan.Operations = append(plan.Operations, GenerateOperations(c, BranchResult{BranchType: BranchDeleteLossless, Reason: "mode1 keep lossy"})...)
+		branch := DetermineBranch(groups, false)
+		if branch.BranchType == BranchSkip {
+			continue
+		}
+		plan.Operations = append(plan.Operations, GenerateOperations(groups, BranchResult{BranchType: BranchDeleteLossless, Reason: "mode1 keep lossy"})...)
 	}
 
 	return plan

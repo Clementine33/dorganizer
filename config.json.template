@@ -1,6 +1,6 @@
 {
   "prune": {
-    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无)(?:[Ss][Ee]|音效|效果音)"
+    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无|無)(?:[Ss][Ee]|音效|效果音)|(?:反転)"
   },
   "tools": {
     "encoder": "lame",
