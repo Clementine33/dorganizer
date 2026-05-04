@@ -387,24 +387,6 @@ class FolderPaneWidgetState extends State<FolderPaneWidget> {
             ],
           ),
         ),
-        // Container(
-        //   margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-        //   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        //   decoration: BoxDecoration(
-        //     border: Border.all(color: theme.colorScheme.outlineVariant),
-        //     borderRadius: BorderRadius.circular(8),
-        //   ),
-        //   child: Text(
-        //     _selectedRoot == null || _selectedRoot!.isEmpty
-        //         ? 'No directory selected'
-        //         : _selectedRoot!,
-        //     maxLines: 2,
-        //     overflow: TextOverflow.ellipsis,
-        //     style: theme.textTheme.bodySmall?.copyWith(
-        //       fontFamily: 'SarasaUiSC',
-        //     ),
-        //   ),
-        // ),
         if (_folders.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -468,19 +450,6 @@ class FolderPaneWidgetState extends State<FolderPaneWidget> {
             children: [
               Row(
                 children: [
-                  // Checkbox(
-                  //   tristate: true,
-                  //   value: _allFoldersSelected
-                  //       ? true
-                  //       : (_partiallySelected ? null : false),
-                  //   onChanged: (_) {
-                  //     if (_allFoldersSelected || _partiallySelected) {
-                  //       _clearFolderSelection();
-                  //     } else {
-                  //       _selectAllFolders();
-                  //     }
-                  //   },
-                  // ),
                   Expanded(
                     child: Text(
                       'Selected ${widget.selectedFolders.length}/${_folders.length}',
@@ -530,16 +499,22 @@ class FolderPaneWidgetState extends State<FolderPaneWidget> {
                     final isSelected = widget.selectedFolders.contains(folder);
                     final isPrimary = folder == widget.selectedFolder;
                     return GestureDetector(
-                      onLongPress: () => widget.onFolderSelected(folder),
+                      onLongPress: () {
+                        setState(() {
+                          _dropdownFolder = folder;
+                        });
+                        widget.onFolderSelected(folder);
+                      },
                       child: CheckboxListTile(
                         value: isSelected,
                         dense: true,
                         secondary: Icon(
-                          isPrimary ? Icons.folder_open : Icons.folder,
+                          isPrimary ? Icons.folder_open : null,
                           size: 18,
-                          color: isPrimary
-                              ? theme.colorScheme.primary
-                              : theme.colorScheme.onSurfaceVariant,
+                          color: theme.colorScheme.primary,
+                          // color: isPrimary
+                          //     ? theme.colorScheme.primary
+                          //     : theme.colorScheme.onSurfaceVariant,
                         ),
                         title: Text(
                           folder.split(RegExp(r'[/\\]')).last,
@@ -548,14 +523,14 @@ class FolderPaneWidgetState extends State<FolderPaneWidget> {
                             fontFamily: 'SarasaUiSC',
                           ),
                         ),
-                        subtitle: isPrimary
-                            ? Text(
-                                'Current',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                ),
-                              )
-                            : null,
+                        // subtitle: isPrimary
+                        //     ? Text(
+                        //         'Current',
+                        //         style: theme.textTheme.labelSmall?.copyWith(
+                        //           color: theme.colorScheme.primary,
+                        //         ),
+                        //       )
+                        //     : null,
                         onChanged: (checked) =>
                             _setFolderSelected(folder, checked ?? false),
                         controlAffinity: ListTileControlAffinity.leading,
