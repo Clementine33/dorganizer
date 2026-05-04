@@ -30,6 +30,7 @@ frontend/flutter_app/.dev_data
 .worktrees/
 **/nul
 docs/
+.claude/
 
 #release
 dist
