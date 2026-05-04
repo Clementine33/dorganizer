@@ -1,284 +1,72 @@
 package grpc
 
 import (
-	"database/sql"
-	"fmt"
-	"log"
-	"path/filepath"
-	"strings"
 	"time"
 
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/execute"
+	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// mapExecuteError maps an execute usecase error to a gRPC status error.
+// This keeps status creation transport-only.
+func mapExecuteError(err error) error {
+	if e, ok := executeusecase.AsError(err); ok {
+		switch e.Kind {
+		case executeusecase.ErrKindInvalidArgument:
+			return status.Errorf(codes.InvalidArgument, "%s", e.Message)
+		case executeusecase.ErrKindNotFound:
+			return status.Errorf(codes.NotFound, "%s", e.Message)
+		case executeusecase.ErrKindFailedPrecondition:
+			return status.Errorf(codes.FailedPrecondition, "%s", e.Message)
+		}
+		// ErrKindInternal and unknown kinds fall through to Internal
+		return status.Errorf(codes.Internal, "%s", e.Message)
+	}
+	return status.Errorf(codes.Internal, "%v", err)
+}
+
 // ExecutePlan executes a saved plan and streams JobEvent progress.
+// This is a thin transport adapter that maps protobuf requests/responses to the execute usecase.
 func (s *OnseiServer) ExecutePlan(req *pb.ExecutePlanRequest, stream grpc.ServerStreamingServer[pb.JobEvent]) error {
-	if req.PlanId == "" {
-		eventID := generateEventID()
-		timestamp := time.Now().Format(time.RFC3339Nano)
-		_ = stream.Send(&pb.JobEvent{EventType: "error", Message: "plan_id is required", Stage: "execute", Code: "INVALID_PLAN_ID", FolderPath: "", EventId: eventID, Timestamp: timestamp})
-		s.persistExecuteErrorGlobal("INVALID_PLAN_ID", "plan_id is required")
-		return status.Errorf(codes.InvalidArgument, "plan_id is required")
+	usecaseReq := executeusecase.Request{
+		PlanID:     req.PlanId,
+		SoftDelete: req.GetSoftDelete(),
 	}
 
-	planRow, err := s.repo.GetPlan(req.PlanId)
-	if err == sql.ErrNoRows {
-		eventID := generateEventID()
-		timestamp := time.Now().Format(time.RFC3339Nano)
-		_ = stream.Send(&pb.JobEvent{EventType: "error", Message: fmt.Sprintf("Plan not found: %s", req.PlanId), Stage: "execute", Code: "PLAN_NOT_FOUND", FolderPath: "", PlanId: req.PlanId, EventId: eventID, Timestamp: timestamp})
-		s.persistExecuteErrorGlobal("PLAN_NOT_FOUND", fmt.Sprintf("Plan not found: %s", req.PlanId))
-		return status.Errorf(codes.NotFound, "plan not found: %s", req.PlanId)
-	}
+	sink := &grpcEventSink{stream: stream}
+
+	result, err := s.executeService.Execute(stream.Context(), usecaseReq, sink)
 	if err != nil {
-		eventID := generateEventID()
-		timestamp := time.Now().Format(time.RFC3339Nano)
-		_ = stream.Send(&pb.JobEvent{EventType: "error", Message: fmt.Sprintf("Internal error: %v", err), Stage: "execute", Code: "INTERNAL_ERROR", FolderPath: "", PlanId: req.PlanId, EventId: eventID, Timestamp: timestamp})
-		s.persistExecuteErrorGlobal("INTERNAL_ERROR", fmt.Sprintf("load plan: %v", err))
-		return status.Errorf(codes.Internal, "load plan: %v", err)
+		return mapExecuteError(err)
 	}
 
-	itemRows, err := s.repo.ListPlanItems(req.PlanId)
-	if err != nil {
-		eventID := generateEventID()
-		timestamp := time.Now().Format(time.RFC3339Nano)
-		_ = stream.Send(&pb.JobEvent{EventType: "error", Message: fmt.Sprintf("Failed to load plan items: %v", err), Stage: "execute", Code: "INTERNAL_ERROR", FolderPath: "", PlanId: req.PlanId, EventId: eventID, Timestamp: timestamp})
-		s.persistExecuteErrorGlobal("INTERNAL_ERROR", fmt.Sprintf("load plan items: %v", err))
-		return status.Errorf(codes.Internal, "load plan items: %v", err)
-	}
-
-	rootPath := filepath.FromSlash(firstNonEmpty(planRow.ScanRootPath, planRow.RootPath))
-	planID := req.PlanId
-
-	execPlan := &execute.Plan{PlanID: planRow.PlanID, RootPath: rootPath, Items: make([]execute.PlanItem, 0, len(itemRows)), SoftDelete: req.GetSoftDelete()}
-	for _, item := range itemRows {
-		execItem := execute.PlanItem{
-			SourcePath:             filepath.FromSlash(item.SourcePath),
-			PreconditionPath:       filepath.FromSlash(item.PreconditionPath),
-			PreconditionContentRev: item.PreconditionContentRev,
-			PreconditionSize:       item.PreconditionSize,
-			PreconditionMtime:      item.PreconditionMtime,
-		}
-		if item.TargetPath != nil {
-			execItem.TargetPath = filepath.FromSlash(*item.TargetPath)
-		}
-		if strings.EqualFold(item.OpType, "delete") {
-			execItem.Type = execute.ItemTypeDelete
-		} else {
-			execItem.Type = execute.ItemTypeConvert
-		}
-		execPlan.Items = append(execPlan.Items, execItem)
-	}
-
-	_ = stream.Send(&pb.JobEvent{EventType: "started", Message: fmt.Sprintf("Executing plan %s", planID), PlanId: planID, RootPath: filepath.ToSlash(rootPath)})
-
-	hasConvertOp := false
-	for _, item := range itemRows {
-		if strings.EqualFold(item.OpType, "convert_and_delete") {
-			hasConvertOp = true
-			break
-		}
-	}
-
-	var toolsConfig execute.ToolsConfig
-	if hasConvertOp {
-		toolsConfig, err = s.getToolsConfig()
-		if err != nil {
-			eventID := generateEventID()
-			timestamp := time.Now().Format(time.RFC3339Nano)
-			_ = stream.Send(&pb.JobEvent{EventType: "error", Message: fmt.Sprintf("Failed to load tools config: %v", err), Stage: "execute", Code: "CONFIG_INVALID", FolderPath: "", PlanId: planID, RootPath: filepath.ToSlash(rootPath), EventId: eventID, Timestamp: timestamp})
-			s.persistExecuteErrorGlobal("CONFIG_INVALID", fmt.Sprintf("Failed to load tools config: %v", err))
-			return status.Errorf(codes.Internal, "load tools config: %v", err)
-		}
-	}
-
-	eventHandler := &executeEventHandler{stream: stream, rootPath: filepath.ToSlash(rootPath), planID: planID, failedFolders: make(map[string]bool), successfulFolders: make(map[string]bool), repo: s.repo}
-	emitFolderScopeEvents := func() {
-		for folderPath := range eventHandler.failedFolders {
-			eventID := generateEventID()
-			timestamp := time.Now().Format(time.RFC3339Nano)
-			_ = stream.Send(&pb.JobEvent{EventType: "folder_failed", Message: fmt.Sprintf("Scope %s failed", folderPath), Stage: "execute", FolderPath: folderPath, RootPath: filepath.ToSlash(rootPath), PlanId: planID, EventId: eventID, Timestamp: timestamp})
-		}
-	}
-
-	svc := execute.NewExecuteService(newExecuteRepoAdapter(s.repo), toolsConfig)
-	execCfg, _ := s.getExecuteConfig()
-	svc.SetExecuteConfig(execCfg)
-	svc.SetEventHandler(eventHandler)
-	result, err := svc.ExecutePlan(execPlan)
-	if err != nil {
-		emitFolderScopeEvents()
-		if result != nil && result.ErrorCode == "CONFIG_INVALID" {
-			eventID := generateEventID()
-			timestamp := time.Now().Format(time.RFC3339Nano)
-			_ = stream.Send(&pb.JobEvent{EventType: "error", Message: firstNonEmpty(result.ErrorMsg, err.Error()), Stage: "execute", Code: "CONFIG_INVALID", FolderPath: "", PlanId: planID, RootPath: filepath.ToSlash(rootPath), EventId: eventID, Timestamp: timestamp})
-			s.persistExecuteErrorGlobal("CONFIG_INVALID", firstNonEmpty(result.ErrorMsg, err.Error()))
-		}
-		return status.Errorf(codes.FailedPrecondition, "execute plan failed: %v", err)
-	}
-
-	emitFolderScopeEvents()
-
-	_ = stream.Send(&pb.JobEvent{EventType: "completed", Message: fmt.Sprintf("Execution complete: %s", result.Status), ProgressPercent: 100, PlanId: planID, RootPath: filepath.ToSlash(rootPath)})
+	_ = result
 	return nil
 }
 
-// executeEventHandler implements execute.EventHandler.
-type executeEventHandler struct {
-	stream            grpc.ServerStreamingServer[pb.JobEvent]
-	rootPath          string
-	planID            string
-	failedFolders     map[string]bool
-	successfulFolders map[string]bool
-	repo              *sqlite.Repository
+// grpcEventSink adapts a gRPC server stream to the usecase EventSink interface.
+// It maps usecase.Event protobuf-free events to pb.JobEvent for streaming.
+type grpcEventSink struct {
+	stream grpc.ServerStreamingServer[pb.JobEvent]
 }
 
-// persistExecuteError best-effort persists an execute error into error_events.
-func (h *executeEventHandler) persistExecuteError(code, message, folderPath string, retryable bool) {
-	if h.repo == nil {
-		return
-	}
-	var pathPtr *string
-	if folderPath != "" {
-		pathPtr = &folderPath
-	}
-	if err := h.repo.CreateErrorEvent(&sqlite.ErrorEvent{
-		Scope:     "execute",
-		RootPath:  h.rootPath,
-		Path:      pathPtr,
-		Code:      code,
-		Message:   message,
-		Retryable: retryable,
-	}); err != nil {
-		log.Printf("warning: failed to persist execute error event: %v", err)
-	}
-}
-
-// persistExecuteErrorGlobal best-effort persists an execute-level error with no
-// folder attribution. Used for RPC-level short-circuit errors (before per-item
-// streaming begins) where no rootPath is yet resolved.
-func (s *OnseiServer) persistExecuteErrorGlobal(code, message string) {
-	if s.repo == nil {
-		return
-	}
-	if err := s.repo.CreateErrorEvent(&sqlite.ErrorEvent{
-		Scope:     "execute",
-		RootPath:  "",
-		Code:      code,
-		Message:   message,
-		Retryable: false,
-	}); err != nil {
-		log.Printf("warning: failed to persist execute error event: %v", err)
-	}
-}
-
-func (h *executeEventHandler) OnPreconditionFailed(itemIndex int, item execute.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-
-	itemType := "delete"
-	if item.Type == execute.ItemTypeConvert {
-		itemType = "convert"
-	}
-	message := fmt.Sprintf("Item %d (%s) precondition failed: %v", itemIndex, itemType, err)
-	if strings.HasPrefix(err.Error(), "SOURCE_MISSING:") {
-		message = fmt.Sprintf("SOURCE_MISSING: item %d (%s) source missing: %v", itemIndex, itemType, err)
-	}
-
-	_ = h.stream.Send(&pb.JobEvent{EventType: "error", Stage: "execute", Code: "EXEC_PRECONDITION_FAILED", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp, ItemSourcePath: item.SourcePath, ItemTargetPath: item.TargetPath, Message: message})
-	h.persistExecuteError("EXEC_PRECONDITION_FAILED", message, folderPath, false)
-	if folderPath != "" {
-		h.failedFolders[folderPath] = true
-	}
-}
-
-func (h *executeEventHandler) OnStage1CopyFailed(itemIndex int, item execute.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, item.SourcePath)
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-	message := fmt.Sprintf("Stage1 copy failed for item %d: %v", itemIndex, err)
-	_ = h.stream.Send(&pb.JobEvent{EventType: "error", Stage: "execute", Code: "EXEC_STAGE1_COPY_FAILED", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp, ItemSourcePath: item.SourcePath, ItemTargetPath: item.TargetPath, Message: message})
-	h.persistExecuteError("EXEC_STAGE1_COPY_FAILED", message, folderPath, false)
-	if folderPath != "" {
-		h.failedFolders[folderPath] = true
-	}
-}
-
-func (h *executeEventHandler) OnStage2EncodeFailed(itemIndex int, item execute.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, item.SourcePath)
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-	message := fmt.Sprintf("Stage2 encode failed for item %d: %v", itemIndex, err)
-	_ = h.stream.Send(&pb.JobEvent{EventType: "error", Stage: "execute", Code: "EXEC_STAGE2_ENCODE_FAILED", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp, ItemSourcePath: item.SourcePath, ItemTargetPath: item.TargetPath, Message: message})
-	h.persistExecuteError("EXEC_STAGE2_ENCODE_FAILED", message, folderPath, false)
-	if folderPath != "" {
-		h.failedFolders[folderPath] = true
-	}
-}
-
-func (h *executeEventHandler) OnStage3CommitFailed(itemIndex int, item execute.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.TargetPath, item.SourcePath))
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-	message := fmt.Sprintf("Stage3 commit failed for item %d: %v", itemIndex, err)
-	_ = h.stream.Send(&pb.JobEvent{EventType: "error", Stage: "execute", Code: "EXEC_STAGE3_COMMIT_FAILED", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp, ItemSourcePath: item.SourcePath, ItemTargetPath: item.TargetPath, Message: message})
-	h.persistExecuteError("EXEC_STAGE3_COMMIT_FAILED", message, folderPath, false)
-	if folderPath != "" {
-		h.failedFolders[folderPath] = true
-	}
-}
-
-func (h *executeEventHandler) OnDeleteFailed(itemIndex int, item execute.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-
-	message := fmt.Sprintf("Item %d delete failed: %v", itemIndex, err)
-	if strings.HasPrefix(err.Error(), "PERMISSION_DENIED:") {
-		message = fmt.Sprintf("PERMISSION_DENIED: item %d delete blocked: %v", itemIndex, err)
-	} else if strings.HasPrefix(err.Error(), "TARGET_CONFLICT:") {
-		message = fmt.Sprintf("TARGET_CONFLICT: item %d target conflict: %v", itemIndex, err)
-	}
-
-	_ = h.stream.Send(&pb.JobEvent{EventType: "error", Stage: "execute", Code: "EXEC_DELETE_FAILED", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp, ItemSourcePath: item.SourcePath, ItemTargetPath: item.TargetPath, Message: message})
-	h.persistExecuteError("EXEC_DELETE_FAILED", message, folderPath, false)
-	if folderPath != "" {
-		h.failedFolders[folderPath] = true
-	}
-}
-
-func (h *executeEventHandler) OnFolderCompleted(folderPath string) {
-	eventID := generateEventID()
-	timestamp := time.Now().Format(time.RFC3339Nano)
-	_ = h.stream.Send(&pb.JobEvent{EventType: "folder_completed", Message: fmt.Sprintf("Scope %s completed", folderPath), Stage: "execute", FolderPath: folderPath, RootPath: h.rootPath, PlanId: h.planID, EventId: eventID, Timestamp: timestamp})
-}
-
-type executeRepoAdapter struct {
-	repo *sqlite.Repository
-}
-
-func newExecuteRepoAdapter(repo *sqlite.Repository) *executeRepoAdapter {
-	return &executeRepoAdapter{repo: repo}
-}
-
-func (a *executeRepoAdapter) CreateExecuteSession(sessionID, planID, rootPath, status string) error {
-	return a.repo.CreateExecuteSession(&sqlite.ExecuteSession{SessionID: sessionID, PlanID: planID, RootPath: filepath.ToSlash(rootPath), Status: status, StartedAt: time.Now()})
-}
-
-func (a *executeRepoAdapter) UpdateExecuteSessionStatus(sessionID, status, errorCode, errorMessage string) error {
-	return a.repo.UpdateExecuteSessionStatus(sessionID, status, errorCode, errorMessage)
-}
-
-func (a *executeRepoAdapter) GetEntryContentRev(path string) (int, error) {
-	var contentRev int
-	err := a.repo.DB().QueryRow("SELECT COALESCE(content_rev, 0) FROM entries WHERE path = ?", filepath.ToSlash(path)).Scan(&contentRev)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	return contentRev, err
+// Emit sends a usecase event as a protobuf JobEvent through the gRPC stream.
+func (s *grpcEventSink) Emit(evt executeusecase.Event) error {
+	return s.stream.Send(&pb.JobEvent{
+		EventType:       evt.Type,
+		Stage:           evt.Stage,
+		Code:            evt.Code,
+		Message:         evt.Message,
+		PlanId:          evt.PlanID,
+		RootPath:        evt.RootPath,
+		FolderPath:      evt.FolderPath,
+		ItemSourcePath:  evt.ItemSourcePath,
+		ItemTargetPath:  evt.ItemTargetPath,
+		ProgressPercent: evt.ProgressPercent,
+		EventId:         evt.EventID,
+		Timestamp:       evt.Timestamp.Format(time.RFC3339Nano),
+	})
 }

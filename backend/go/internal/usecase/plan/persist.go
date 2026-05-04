@@ -1,4 +1,4 @@
-package grpc
+package plan
 
 import (
 	"database/sql"
@@ -7,14 +7,11 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/analyze"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
-func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, plan *analyze.Plan, planType string, useBatchRootResolve bool) error {
+func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *analyze.Plan, planType string, useBatchRootResolve bool) error {
 	resolveRootFromEntries := func(tx *sql.Tx, path string) (string, error) {
 		pathPosix := filepath.ToSlash(path)
 		if pathPosix == "" {
@@ -32,7 +29,7 @@ func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, 
 		return resolved, nil
 	}
 
-	tx, err := s.repo.DB().Begin()
+	tx, err := repo.DB().Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -65,8 +62,8 @@ func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, 
 		}
 	}
 
-	if rootPath == "" && req.GetFolderPath() != "" {
-		resolved, err := resolveRootFromEntries(tx, req.GetFolderPath())
+	if rootPath == "" && req.FolderPath != "" {
+		resolved, err := resolveRootFromEntries(tx, req.FolderPath)
 		if err != nil {
 			return err
 		}
@@ -75,7 +72,7 @@ func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, 
 		}
 	}
 	if rootPath == "" {
-		for _, scope := range req.GetFolderPaths() {
+		for _, scope := range req.FolderPaths {
 			resolved, err := resolveRootFromEntries(tx, scope)
 			if err != nil {
 				return err
@@ -88,24 +85,24 @@ func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, 
 	}
 
 	if rootPath == "" {
-		rootPath = req.GetFolderPath()
+		rootPath = req.FolderPath
 	}
-	if rootPath == "" && len(req.GetFolderPaths()) > 0 {
-		rootPath = req.GetFolderPaths()[0]
+	if rootPath == "" && len(req.FolderPaths) > 0 {
+		rootPath = req.FolderPaths[0]
 	}
-	if rootPath == "" && len(req.GetSourceFiles()) > 0 {
-		rootPath = filepath.Dir(req.GetSourceFiles()[0])
+	if rootPath == "" && len(req.SourceFiles) > 0 {
+		rootPath = filepath.Dir(req.SourceFiles[0])
 	}
 
-	scopeRootPath := req.GetFolderPath()
-	if scopeRootPath == "" && len(req.GetFolderPaths()) > 0 {
-		scopeRootPath = req.GetFolderPaths()[0]
+	scopeRootPath := req.FolderPath
+	if scopeRootPath == "" && len(req.FolderPaths) > 0 {
+		scopeRootPath = req.FolderPaths[0]
 	}
 	if scopeRootPath == "" && rootPath != "" {
 		scopeRootPath = rootPath
 	}
-	if scopeRootPath == "" && len(req.GetSourceFiles()) > 0 {
-		scopeRootPath = filepath.Dir(req.GetSourceFiles()[0])
+	if scopeRootPath == "" && len(req.SourceFiles) > 0 {
+		scopeRootPath = filepath.Dir(req.SourceFiles[0])
 	}
 	if scopeRootPath == "" {
 		scopeRootPath = rootPath
@@ -119,7 +116,7 @@ func (s *OnseiServer) persistPlan(planID string, req *pb.PlanOperationsRequest, 
 	planRow := &sqlite.Plan{PlanID: planID, RootPath: filepath.ToSlash(scopeRootPath), ScanRootPath: filepath.ToSlash(rootPath), PlanType: effectivePlanType, SnapshotToken: plan.SnapshotToken, Status: "ready", CreatedAt: time.Now()}
 	if err := sqlite.CreatePlanTx(tx, planRow); err != nil {
 		if sqlite.IsPlanIDConflictError(err) {
-			return status.Errorf(codes.AlreadyExists, "PLAN_ID_CONFLICT: plan %s already exists", planID)
+			return NewError(ErrKindAlreadyExists, "PLAN_ID_CONFLICT", fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID), err)
 		}
 		return err
 	}

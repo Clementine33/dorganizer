@@ -292,25 +292,30 @@ func TestExecutePlan_RootedMixedResultBatch_EmitsCompletedForSuccessfulFolderOnl
 		t.Fatal("expected rooted mixed-result execution to fail")
 	}
 
-	completed := handler.getFolderCompletedCalls()
+	// The lower-level service reports per-item completion facts.
+	// Item 0 (folder A) failed → OnItemCompleted(0, ...) is called
+	// Item 1 (folder B) succeeded → OnItemCompleted(1, ...) is called
+	itemCompleted := handler.getItemCompletedCalls()
 	folderAPath := getFolderForItem(plan.RootPath, plan.Items[0])
 	folderBPath := getFolderForItem(plan.RootPath, plan.Items[1])
+	_ = folderAPath
+	_ = folderBPath
 
-	hasA := false
-	hasB := false
-	for _, folder := range completed {
-		if folder == folderAPath {
-			hasA = true
+	has0 := false
+	has1 := false
+	for _, idx := range itemCompleted {
+		if idx == 0 {
+			has0 = true
 		}
-		if folder == folderBPath {
-			hasB = true
+		if idx == 1 {
+			has1 = true
 		}
 	}
-	if hasA {
-		t.Fatalf("did not expect OnFolderCompleted for failed folder A, calls=%v", completed)
+	if !has0 {
+		t.Fatalf("expected OnItemCompleted for item 0 (failed folder A), calls=%v", itemCompleted)
 	}
-	if !hasB {
-		t.Fatalf("expected OnFolderCompleted for successful folder B, calls=%v", completed)
+	if !has1 {
+		t.Fatalf("expected OnItemCompleted for item 1 (successful folder B), calls=%v", itemCompleted)
 	}
 }
 
@@ -467,5 +472,62 @@ func TestExecutePlan_RootedConcurrentPrecheck_PerFolderFailFast_ContinuesOtherFo
 	}
 	if _, err := os.Stat(fileB1); !os.IsNotExist(err) {
 		t.Fatal("fileB1 should be deleted (folder B should continue)")
+	}
+}
+
+// TestExecutePlan_RootedStalePrecondition_ReturnsPreconditionFailed verifies
+// that rooted (RootPath != "") precondition failures return a terminal
+// precondition_failed result, not a completed result with nil error.
+// Regression test for stale-precondition e2e breakage from Tasks 3/4.
+func TestExecutePlan_RootedStalePrecondition_ReturnsPreconditionFailed(t *testing.T) {
+	tmp := t.TempDir()
+
+	testFile := filepath.Join(tmp, "test.mp3")
+	if err := os.WriteFile(testFile, []byte("dummy audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a single-folder rooted plan with a stale precondition.
+	plan := &Plan{
+		PlanID:   "plan-rooted-stale-precondition",
+		RootPath: filepath.ToSlash(tmp),
+		Items: []PlanItem{
+			{
+				Type:                   ItemTypeDelete,
+				SourcePath:             testFile,
+				PreconditionPath:       testFile,
+				PreconditionContentRev: 999, // stale: actual is 0 (not in DB, so file stat used)
+				PreconditionSize:       info.Size(),
+				PreconditionMtime:      info.ModTime().Unix(),
+			},
+		},
+	}
+
+	svc := NewExecuteService(nil, ToolsConfig{})
+	result, execErr := svc.ExecutePlan(plan)
+
+	// Must return non-nil error.
+	if execErr == nil {
+		t.Fatal("expected non-nil error for rooted stale precondition, got nil")
+	}
+	// Must return non-nil result.
+	if result == nil {
+		t.Fatal("expected non-nil result for rooted stale precondition")
+	}
+	// Status must be precondition_failed (not completed or failed).
+	if result.Status != "precondition_failed" {
+		t.Errorf("expected status=precondition_failed, got %q", result.Status)
+	}
+	// ErrorCode must be EXEC_PRECONDITION_FAILED.
+	if result.ErrorCode != "EXEC_PRECONDITION_FAILED" {
+		t.Errorf("expected ErrorCode=EXEC_PRECONDITION_FAILED, got %q", result.ErrorCode)
+	}
+	// Source file should still exist (mutation blocked).
+	if _, statErr := os.Stat(testFile); os.IsNotExist(statErr) {
+		t.Error("expected source file to still exist after stale precondition")
 	}
 }
