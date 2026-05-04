@@ -106,17 +106,40 @@ const ListFilesRequest$json = {
 final $typed_data.Uint8List listFilesRequestDescriptor = $convert.base64Decode(
     'ChBMaXN0RmlsZXNSZXF1ZXN0Eh8KC2ZvbGRlcl9wYXRoGAEgASgJUgpmb2xkZXJQYXRo');
 
+@$core.Deprecated('Use fileListEntryDescriptor instead')
+const FileListEntry$json = {
+  '1': 'FileListEntry',
+  '2': [
+    {'1': 'path', '3': 1, '4': 1, '5': 9, '10': 'path'},
+    {'1': 'bitrate', '3': 2, '4': 1, '5': 5, '10': 'bitrate'},
+  ],
+};
+
+/// Descriptor for `FileListEntry`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List fileListEntryDescriptor = $convert.base64Decode(
+    'Cg1GaWxlTGlzdEVudHJ5EhIKBHBhdGgYASABKAlSBHBhdGgSGAoHYml0cmF0ZRgCIAEoBVIHYm'
+    'l0cmF0ZQ==');
+
 @$core.Deprecated('Use listFilesResponseDescriptor instead')
 const ListFilesResponse$json = {
   '1': 'ListFilesResponse',
   '2': [
     {'1': 'files', '3': 1, '4': 3, '5': 9, '10': 'files'},
+    {
+      '1': 'entries',
+      '3': 2,
+      '4': 3,
+      '5': 11,
+      '6': '.onsei.v1.FileListEntry',
+      '10': 'entries'
+    },
   ],
 };
 
 /// Descriptor for `ListFilesResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listFilesResponseDescriptor = $convert
-    .base64Decode('ChFMaXN0RmlsZXNSZXNwb25zZRIUCgVmaWxlcxgBIAMoCVIFZmlsZXM=');
+final $typed_data.Uint8List listFilesResponseDescriptor = $convert.base64Decode(
+    'ChFMaXN0RmlsZXNSZXNwb25zZRIUCgVmaWxlcxgBIAMoCVIFZmlsZXMSMQoHZW50cmllcxgCIA'
+    'MoCzIXLm9uc2VpLnYxLkZpbGVMaXN0RW50cnlSB2VudHJpZXM=');
 
 @$core.Deprecated('Use planOperationsRequestDescriptor instead')
 const PlanOperationsRequest$json = {
