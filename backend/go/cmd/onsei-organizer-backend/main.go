@@ -24,6 +24,27 @@ import (
 
 var version = "dev"
 
+// retentionCleaner abstracts the repo for startup cleanup so main_test.go can stub it.
+type retentionCleaner interface {
+	RunRetentionCleanup(cutoff time.Time) (sqlite.CleanupStats, error)
+}
+
+// runStartupRetentionCleanup performs a one-time retention cleanup at startup.
+// It is non-fatal: the returned error is logged but does not stop the process.
+func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
+	cutoff := now.UTC().Add(-7 * 24 * time.Hour)
+	start := time.Now()
+	stats, err := repo.RunRetentionCleanup(cutoff)
+	if err != nil {
+		return err
+	}
+	elapsed := time.Since(start)
+	log.Printf("startup retention cleanup: deleted error_events=%d scan_sessions=%d plans=%d cutoff=%s elapsed_ms=%d",
+		stats.DeletedErrorEvents, stats.DeletedScanSessions, stats.DeletedPlans,
+		cutoff.Format(time.RFC3339), elapsed.Milliseconds())
+	return nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -78,6 +99,14 @@ func main() {
 	}
 	defer repo.Close()
 
+	// Route std logger to stdout so host-side stdout drain also covers logs.
+	log.SetOutput(os.Stdout)
+
+	// One-time startup retention cleanup (non-fatal)
+	if err := runStartupRetentionCleanup(repo, time.Now()); err != nil {
+		log.Printf("retention cleanup failed: %v", err)
+	}
+
 	// Start TCP listener on a random available port
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -87,9 +116,6 @@ func main() {
 
 	// Build token (use env if provided, else empty)
 	token := os.Getenv("ONSEI_TOKEN")
-
-	// Route std logger to stdout so host-side stdout drain also covers logs.
-	log.SetOutput(os.Stdout)
 
 	// Register gRPC server
 	grpcServer := grpc.NewServer()

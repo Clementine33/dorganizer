@@ -5,11 +5,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMaxIOWorkers_UsesConfiguredValue(t *testing.T) {
+	svc := NewExecuteService(nil, ToolsConfig{})
+	want := runtime.NumCPU() + 10
+	svc.SetExecuteConfig(ExecuteConfig{MaxIOWorkers: want})
+
+	got := svc.maxIOWorkers()
+	if got != want {
+		t.Fatalf("expected configured maxIOWorkers=%d, got %d", want, got)
+	}
+}
+
+func TestMaxCPUWorkers_EqualsNumCPU(t *testing.T) {
+	got := maxCPUWorkers()
+	want := runtime.NumCPU()
+	if want < 1 {
+		want = 1
+	}
+	if got != want {
+		t.Fatalf("expected maxCPUWorkers=%d, got %d", want, got)
+	}
+}
 
 // instrumentedSem is a semaphore wrapper for tests.
 // It tracks current, peak, and over-limit breach counts.
@@ -499,9 +522,14 @@ func TestExecuteConvertPoolWithTracking_NonRootedFailureSkipsDeleteBarrier(t *te
 func TestExecuteConvertPoolWithTracking_NonRootedGlobalFailFastStopsFurtherAdmission(t *testing.T) {
 	tmp := t.TempDir()
 
-	items := make([]PlanItem, 0, 12)
-	indices := make([]int, 0, 12)
-	for i := 0; i < 12; i++ {
+	totalItems := maxCPUWorkers() + 8
+	if totalItems < 12 {
+		totalItems = 12
+	}
+
+	items := make([]PlanItem, 0, totalItems)
+	indices := make([]int, 0, totalItems)
+	for i := 0; i < totalItems; i++ {
 		src := filepath.Join(tmp, fmt.Sprintf("%02d.wav", i))
 		dst := filepath.Join(tmp, fmt.Sprintf("%02d.m4a", i))
 		if err := os.WriteFile(src, []byte("audio"), 0644); err != nil {

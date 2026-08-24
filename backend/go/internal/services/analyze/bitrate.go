@@ -1,16 +1,25 @@
 package analyze
 
 import (
+	"math/rand"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dmulholl/mp3lib"
 )
 
 const bitrateUpdateBatchSize = 100
+
+// bitratePersistRetryLimit is the maximum number of retry attempts for
+// SQLITE_BUSY/SQLITE_LOCKED errors during bitrate persistence.
+const bitratePersistRetryLimit = 3
+
+// bitratePersistRetryBase is the base delay for retry backoff.
+const bitratePersistRetryBase = 50 * time.Millisecond
 
 func probeBitrate(pathPosix string) (int64, error) {
 	f, err := os.Open(filepath.FromSlash(pathPosix))
@@ -113,6 +122,38 @@ func chunkBitrateUpdates(updates []bitrateUpdate, chunkSize int) [][]bitrateUpda
 }
 
 func (a *Analyzer) persistBitrateUpdates(updates []bitrateUpdate, batchUpdate bool) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Serialize DB writes across concurrent Analyzer goroutines sharing the
+	// same Repository. This prevents SQLITE_BUSY when multiple folder-plan
+	// goroutines persist bitrate updates concurrently.
+	a.repo.BitrateWriteMu.Lock()
+	defer a.repo.BitrateWriteMu.Unlock()
+
+	var lastErr error
+	for attempt := 0; attempt <= bitratePersistRetryLimit; attempt++ {
+		if attempt > 0 {
+			// Linear backoff with small jitter.
+			delay := bitratePersistRetryBase * time.Duration(attempt)
+			jitter := time.Duration(rand.Int63n(int64(bitratePersistRetryBase)))
+			time.Sleep(delay + jitter)
+		}
+
+		err := a.persistBitrateUpdatesOnce(updates, batchUpdate)
+		if err == nil {
+			return nil
+		}
+		if !isSQLiteBusyLockedError(err) {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+func (a *Analyzer) persistBitrateUpdatesOnce(updates []bitrateUpdate, batchUpdate bool) error {
 	if !batchUpdate {
 		for _, update := range updates {
 			if _, err := a.repo.DB().Exec("UPDATE entries SET bitrate = ?, updated_at = datetime('now') WHERE path = ?", update.bitrate, update.pathPosix); err != nil {

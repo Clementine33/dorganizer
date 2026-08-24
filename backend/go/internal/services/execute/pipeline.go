@@ -11,8 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
-
 type stageFailureError struct {
 	stage     string
 	itemIndex int
@@ -88,8 +86,6 @@ func getFolderForItem(rootPath string, item PlanItem) string {
 	// Return first-level child as canonical absolute path
 	return absRootNorm + "/" + parts[0]
 }
-
-
 
 // commitReplace performs safe atomic commit: copy scratchOut to dst.tmp.* then rename.
 // Implements Task 4 requirements:
@@ -197,4 +193,3 @@ func containsSubstr(s, substr string) bool {
 	}
 	return false
 }
-

@@ -95,6 +95,21 @@ func TestNewRepository(t *testing.T) {
 	})
 }
 
+func TestNewRepository_CreatesEntriesRootDirPathIndex(t *testing.T) {
+	repo := newTestRepository(t)
+
+	var count int
+	err := repo.db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_entries_root_dir_path'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query sqlite_master for idx_entries_root_dir_path: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected idx_entries_root_dir_path index to exist, got count=%d", count)
+	}
+}
+
 func TestRepoSchemaInit(t *testing.T) {
 	repo := newTestRepository(t)
 
