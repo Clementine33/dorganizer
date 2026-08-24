@@ -39,34 +39,34 @@ func TestSlimMode1_LossyOnlyGroupSkipped(t *testing.T) {
 	}
 }
 
-func TestSlimMode1_LosslessOnlyGroupErrors(t *testing.T) {
-	entries := []Entry{
-		{PathPosix: "/music/a/song.wav"},
-		{PathPosix: "/music/a/song.flac"},
-	}
+func TestSlimMode1_LosslessOnlyComponentUsesLegacyCode(t *testing.T) {
+	entries := []Entry{{PathPosix: "/music/a/song.wav"}}
 
 	plan := AnalyzeSlimMode1(entries, nil)
-	if len(plan.Errors) == 0 {
-		t.Fatal("expected error for lossless-only group")
+	if len(plan.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %+v", plan.Errors)
 	}
 	if plan.Errors[0].Code != "SLIM_MODE1_LOSSLESS_ONLY" {
 		t.Fatalf("expected SLIM_MODE1_LOSSLESS_ONLY, got %s", plan.Errors[0].Code)
 	}
 }
 
-func TestSlimMode1_StemGreaterThanTwoErrors(t *testing.T) {
+func TestSlimMode1_OneLosslessWithMultipleLossyErrors(t *testing.T) {
 	entries := []Entry{
 		{PathPosix: "/music/a/song.wav"},
-		{PathPosix: "/music/a/song.flac"},
-		{PathPosix: "/music/a/song.mp3", Bitrate: 320000},
+		{PathPosix: "/music/b/song.mp3", Bitrate: 320000},
+		{PathPosix: "/music/c/song.mp3", Bitrate: 320000},
 	}
 
 	plan := AnalyzeSlimMode1(entries, nil)
-	if len(plan.Errors) == 0 {
-		t.Fatal("expected error for stem match > 2")
+	if len(plan.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %+v", plan.Errors)
 	}
-	if plan.Errors[0].Code != "SLIM_STEM_MATCH_GT2" {
-		t.Fatalf("expected SLIM_STEM_MATCH_GT2, got %s", plan.Errors[0].Code)
+	if plan.Errors[0].Code != "SLIM_STEM_LOSSLESS_WITH_MULTI_LOSSY" {
+		t.Fatalf("expected SLIM_STEM_LOSSLESS_WITH_MULTI_LOSSY, got %s", plan.Errors[0].Code)
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("expected no operations when validation fails, got %+v", plan.Operations)
 	}
 }
 

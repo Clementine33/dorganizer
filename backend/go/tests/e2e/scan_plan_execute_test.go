@@ -159,7 +159,7 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 		"test1.mp3",
 		"test1.flac", // Same basename as test1.mp3 - should trigger delete plan
 		"test2.mp3",
-		"test2.m4a", // Same basename as test2.mp3 - should trigger delete plan
+		"test2.flac", // Same basename as test2.mp3 - mode1 deletes lossless, keeps lossy
 		"test3.mp3", // No matching pair - will be kept
 	}
 	t.Logf("rootDir: %s", rootDir)

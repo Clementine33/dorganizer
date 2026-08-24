@@ -9,7 +9,7 @@ func TestGenerateOperations_BranchA(t *testing.T) {
 		toFileEntry(Entry{PathPosix: "/music/album/song.m4a", Bitrate: 256000}),
 	}}
 
-	ops := GenerateOperations(comp, BranchResult{BranchType: BranchConvert, SourcePath: "/music/album/song.wav", Reason: "test"})
+	ops := GenerateOperations(buildStemGroups(comp), BranchResult{BranchType: BranchConvert, SourcePath: "/music/album/song.wav", Reason: "test"})
 	var converts, deletes int
 	for _, op := range ops {
 		if op.Type == OpTypeConvert {
@@ -30,7 +30,7 @@ func TestGenerateOperations_BranchB(t *testing.T) {
 		toFileEntry(Entry{PathPosix: "/music/album/song.mp3", Bitrate: 320000}),
 	}}
 
-	ops := GenerateOperations(comp, BranchResult{BranchType: BranchDeleteLossless, Reason: "test"})
+	ops := GenerateOperations(buildStemGroups(comp), BranchResult{BranchType: BranchDeleteLossless, Reason: "test"})
 	if len(ops) != 1 || ops[0].Type != OpTypeDelete || ops[0].SourcePath != "/music/album/song.wav" {
 		t.Fatalf("expected only wav delete, got %+v", ops)
 	}
@@ -43,7 +43,7 @@ func TestGenerateOperations_BranchDeleteLossless_ConvertsUnpairedLossless(t *tes
 		toFileEntry(Entry{PathPosix: "/music/b/1.mp3", Bitrate: 320000}),
 	}}
 
-	ops := GenerateOperations(comp, BranchResult{BranchType: BranchDeleteLossless, Reason: "test"})
+	ops := GenerateOperations(buildStemGroups(comp), BranchResult{BranchType: BranchDeleteLossless, Reason: "test"})
 
 	var delete1Wav, convert0Wav, delete0Wav bool
 	for _, op := range ops {
@@ -75,8 +75,8 @@ func TestGenerateOperations_BranchC_WavPreferred(t *testing.T) {
 		toFileEntry(Entry{PathPosix: "/music/album/song.wav"}),
 	}}
 
-	branch := DetermineBranch(comp)
-	ops := GenerateOperations(comp, branch)
+	branch := DetermineBranch(buildStemGroups(comp), false)
+	ops := GenerateOperations(buildStemGroups(comp), branch)
 	if len(ops) == 0 || ops[0].Type != OpTypeConvert || ops[0].SourcePath != "/music/album/song.wav" {
 		t.Fatalf("expected wav convert op, got %+v", ops)
 	}
@@ -89,7 +89,7 @@ func TestGenerateOperations_BranchConvert_DeletesOnlyMatchedStemLossy(t *testing
 		toFileEntry(Entry{PathPosix: "/music/album/song2.mp3", Bitrate: 192000}),
 	}}
 
-	ops := GenerateOperations(comp, BranchResult{BranchType: BranchConvert, Reason: "test"})
+	ops := GenerateOperations(buildStemGroups(comp), BranchResult{BranchType: BranchConvert, Reason: "test"})
 
 	var convertSong1, deleteSong1, deleteSong2 bool
 	for _, op := range ops {

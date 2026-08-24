@@ -104,3 +104,56 @@ func mustCompileRegexp(t *testing.T, pattern string) *regexp.Regexp {
 	}
 	return re
 }
+
+func TestSlimMode2Integration_PureLossyRepeatedSingleFormatAllowed(t *testing.T) {
+	entries := []Entry{
+		{PathPosix: "/music/a/song.mp3", Bitrate: 320000},
+		{PathPosix: "/music/b/song.mp3", Bitrate: 320000},
+		{PathPosix: "/music/c/song.mp3", Bitrate: 320000},
+	}
+
+	plan := AnalyzeSlimMode2(entries, nil)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("expected no errors, got %+v", plan.Errors)
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("expected no operations for pure-lossy noise, got %+v", plan.Operations)
+	}
+}
+
+func TestSlimMode2Integration_PureLossyMixedFormatsRejected(t *testing.T) {
+	entries := []Entry{
+		{PathPosix: "/music/a/song.mp3", Bitrate: 320000},
+		{PathPosix: "/music/b/song.m4a", Bitrate: 256000},
+	}
+
+	plan := AnalyzeSlimMode2(entries, nil)
+	if len(plan.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %+v", plan.Errors)
+	}
+	if plan.Errors[0].Code != "SLIM_STEM_LOSSY_MIXED_FORMATS" {
+		t.Fatalf("expected SLIM_STEM_LOSSY_MIXED_FORMATS, got %s", plan.Errors[0].Code)
+	}
+	if len(plan.Operations) != 0 {
+		t.Fatalf("expected no operations when validation fails, got %+v", plan.Operations)
+	}
+}
+
+func TestSlimMode2Integration_PureLosslessComponentDoesNotUseMode1Code(t *testing.T) {
+	entries := []Entry{
+		{PathPosix: "/music/a/song.wav"},
+	}
+
+	plan := AnalyzeSlimMode2(entries, nil)
+	for _, err := range plan.Errors {
+		if err.Code == "SLIM_MODE1_LOSSLESS_ONLY" {
+			t.Fatalf("did not expect mode1-only error in mode2: %+v", plan.Errors)
+		}
+	}
+	if len(plan.Operations) != 1 {
+		t.Fatalf("expected 1 convert operation, got %+v", plan.Operations)
+	}
+	if plan.Operations[0].Type != OpTypeConvert || plan.Operations[0].SourcePath != "/music/a/song.wav" || plan.Operations[0].TargetPath != "/music/a/song.m4a" {
+		t.Fatalf("unexpected operation: %+v", plan.Operations[0])
+	}
+}
