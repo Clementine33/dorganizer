@@ -36,6 +36,52 @@ class PlanExecutionResult {
   }
 }
 
+/// Narrow widget-facing coordinator contract.
+///
+/// Keeps FilePaneWidget decoupled from the concrete coordinator implementation
+/// so widget tests can use a simple mock without dragging in gRPC or real
+/// refresh/plan/execute machinery.
+abstract class FilePaneCoordinator {
+  Future<PlanExecutionResult> executeFlowForFiles({
+    required String rootPath,
+    required String? folderPath,
+    required Set<String> selectedFiles,
+    required String targetFormat,
+    required String planType,
+  });
+}
+
+/// Internal gRPC client seam so tests can substitute a fake client
+/// instead of starting an in-process gRPC server.
+@visibleForTesting
+abstract class CoordinatorGrpcClient {
+  Future<RefreshFoldersResponse> refreshFolders(RefreshFoldersRequest request);
+  Future<PlanOperationsResponse> planOperations(PlanOperationsRequest request);
+  Stream<JobEvent> executePlan(ExecutePlanRequest request);
+  Future<ListPlansResponse> listPlans(ListPlansRequest request);
+}
+
+class _RealCoordinatorClient implements CoordinatorGrpcClient {
+  final OnseiServiceClient _client;
+  _RealCoordinatorClient(this._client);
+
+  @override
+  Future<RefreshFoldersResponse> refreshFolders(RefreshFoldersRequest request) =>
+      _client.refreshFolders(request);
+
+  @override
+  Future<PlanOperationsResponse> planOperations(PlanOperationsRequest request) =>
+      _client.planOperations(request);
+
+  @override
+  Stream<JobEvent> executePlan(ExecutePlanRequest request) =>
+      _client.executePlan(request);
+
+  @override
+  Future<ListPlansResponse> listPlans(ListPlansRequest request) =>
+      _client.listPlans(request);
+}
+
 /// Coordinator for unified refresh->plan->execute flow.
 ///
 /// Provides a single shared execution path used by both WorkflowPanelWidget
@@ -43,21 +89,29 @@ class PlanExecutionResult {
 /// - Folder refresh before planning
 /// - Shared softDelete from WorkflowStateStore
 /// - Stale plan retry behavior (exactly once on PLAN_STALE signal)
-class PlanExecutionCoordinator {
-  final ClientChannel _channel;
+class PlanExecutionCoordinator implements FilePaneCoordinator {
   final WorkflowStateStore _store;
-  late final OnseiServiceClient _client;
+  late final CoordinatorGrpcClient _client;
 
   /// The structured error code that signals a stale plan requiring retry.
   /// This is the explicit stale signal contract - no free-form text matching.
   static const String staleSignalCode = 'PLAN_STALE';
 
   PlanExecutionCoordinator({
-    required ClientChannel channel,
+    ClientChannel? channel,
     required WorkflowStateStore store,
-  }) : _channel = channel,
-       _store = store {
-    _client = OnseiServiceClient(_channel);
+    @visibleForTesting CoordinatorGrpcClient? testClient,
+  }) : _store = store {
+    if (testClient != null) {
+      _client = testClient;
+    } else {
+      if (channel == null) {
+        throw ArgumentError(
+          'channel is required when testClient is not provided',
+        );
+      }
+      _client = _RealCoordinatorClient(OnseiServiceClient(channel));
+    }
   }
 
   /// Returns true if the JobEvent represents an explicit stale signal.
@@ -155,6 +209,7 @@ class PlanExecutionCoordinator {
   /// 3. Call planOperations
   /// 4. Call executePlan with shared softDelete
   /// 5. If execute returns PLAN_STALE, retry exactly once
+  @override
   Future<PlanExecutionResult> executeFlowForFiles({
     required String rootPath,
     required String? folderPath,
