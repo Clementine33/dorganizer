@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go/go.mod
+          cache: true
+          cache-dependency-path: backend/go/go.sum
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('frontend/flutter_app/pubspec.lock') }}
+      - uses: arduino/setup-task@v2
+
+      - name: Validate semantic tag
+        run: |
+          if ("${{ github.ref_name }}" -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Tag must match vX.Y.Z; got '${{ github.ref_name }}'"
+          }
+
+      - name: Run quality gate
+        run: task ci:quality RAW_TAG=${{ github.ref_name }}
+
+      - name: Build and package release
+        run: task release:windows-x64 RAW_TAG=${{ github.ref_name }}
+
+      - name: Publish GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: task release:gh RAW_TAG=${{ github.ref_name }}

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go/go.mod
+          cache: true
+          cache-dependency-path: backend/go/go.sum
+      - uses: arduino/setup-task@v2
+      - name: Run Go tests
+        run: task test:go
+
+  flutter-quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('frontend/flutter_app/pubspec.lock') }}
+      - uses: arduino/setup-task@v2
+      - name: Run Flutter tests
+        run: task test:flutter
+      - name: Run Flutter analyze
+        run: task analyze:flutter

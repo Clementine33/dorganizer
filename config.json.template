@@ -1,0 +1,13 @@
+{
+  "prune": {
+    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无)(?:[Ss][Ee]|音效)"
+  },
+  "tools": {
+    "encoder": "lame",
+    "qaac_path": "qaac",
+    "lame_path": "lame"
+  },
+  "execute": {
+    "max_io_workers": 4
+  }
+}
