@@ -75,7 +75,7 @@ func (s *ExecuteService) runEncoderToTmp(src, tmpOut string, runtime poolRuntime
 		runtime.cpuSem = newBoundedSem(maxCPUWorkers())
 	}
 
-	toolPath, args, err := s.encoderCommandArgs()
+	toolPath, args, err := s.encoderCommandArgs(src, tmpOut)
 	if err != nil {
 		return err
 	}
@@ -83,21 +83,12 @@ func (s *ExecuteService) runEncoderToTmp(src, tmpOut string, runtime poolRuntime
 	runtime.ioSem.Acquire()
 	defer runtime.ioSem.Release()
 
-	srcFile, err := os.Open(src)
-	if err != nil {
+	if _, err := os.Stat(src); err != nil {
 		return &sourceOpenError{err: fmt.Errorf("open src: %w", err)}
-	}
-	defer srcFile.Close()
-
-	outFile, err := os.Create(tmpOut)
-	if err != nil {
-		return fmt.Errorf("create tmpOut: %w", err)
 	}
 
 	cmd := exec.Command(toolPath, args...)
 	cmd.Dir = filepath.Dir(src)
-	cmd.Stdin = srcFile
-	cmd.Stdout = outFile
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
@@ -106,20 +97,11 @@ func (s *ExecuteService) runEncoderToTmp(src, tmpOut string, runtime poolRuntime
 	runtime.cpuSem.Release()
 
 	if runErr != nil {
-		_ = outFile.Close()
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
 			return fmt.Errorf("encoder run failed: %w: %s", runErr, msg)
 		}
 		return fmt.Errorf("encoder run failed: %w", runErr)
-	}
-
-	if err := outFile.Sync(); err != nil {
-		_ = outFile.Close()
-		return fmt.Errorf("sync tmpOut: %w", err)
-	}
-	if err := outFile.Close(); err != nil {
-		return fmt.Errorf("close tmpOut: %w", err)
 	}
 
 	return nil
@@ -138,19 +120,19 @@ func (e *sourceOpenError) Error() string {
 
 func (e *sourceOpenError) Unwrap() error { return e.err }
 
-func (s *ExecuteService) encoderCommandArgs() (string, []string, error) {
+func (s *ExecuteService) encoderCommandArgs(src, tmpOut string) (string, []string, error) {
 	encoder := strings.ToLower(strings.TrimSpace(s.toolsConfig.Encoder))
 	switch encoder {
 	case "qaac":
 		if s.toolsConfig.QAACPath == "" {
 			return "", nil, fmt.Errorf("qaac selected but qaac_path is not configured")
 		}
-		return s.toolsConfig.QAACPath, []string{"--ignorelength", "--no-optimize", "-s", "-v", "256", "-o", "-", "-"}, nil
+		return s.toolsConfig.QAACPath, []string{"--ignorelength", "--no-optimize", "-s", "-v", "256", "-o", tmpOut, src}, nil
 	case "lame":
 		if s.toolsConfig.LAMEPath == "" {
 			return "", nil, fmt.Errorf("lame selected but lame_path is not configured")
 		}
-		return s.toolsConfig.LAMEPath, []string{"-b", "320", "-", "-"}, nil
+		return s.toolsConfig.LAMEPath, []string{"-b", "320", src, tmpOut}, nil
 	default:
 		return "", nil, fmt.Errorf("invalid encoder: %s", s.toolsConfig.Encoder)
 	}
