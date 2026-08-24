@@ -294,6 +294,59 @@ void main() {
     expect(selectedPath, '/root/beta');
   });
 
+  testWidgets('long press on folder item syncs dropdown selected value', (
+    tester,
+  ) async {
+    final key = GlobalKey<FolderPaneWidgetState>();
+    String? selectedPath;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 240,
+            child: FolderPaneWidget(
+              key: key,
+              channel: channel,
+              selectedRoot: '/root',
+              selectedFolder: null,
+              selectedFolders: const {},
+              onFolderSelected: (path) => selectedPath = path,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    key.currentState!.injectFoldersForTest(
+      ['/root/alpha', '/root/beta'],
+      root: '/root',
+    );
+    await tester.pumpAndSettle();
+
+    // injectFoldersForTest calls onFolderSelected with the first folder.
+    // Verify starting state.
+    expect(selectedPath, '/root/alpha');
+
+    // Long press on the second folder in the list.
+    await tester.longPress(find.text('beta').last);
+    await tester.pumpAndSettle();
+
+    // onFolderSelected should receive the long-pressed folder.
+    expect(selectedPath, '/root/beta');
+
+    // The DropdownSearch widget should now show beta as its selected item.
+    // The dropdownBuilder renders the selected item's display name with SarasaUiSC font.
+    final dropdownFinder = find.byType(DropdownSearch<String>);
+    expect(
+      find.descendant(
+        of: dropdownFinder,
+        matching: find.text('beta'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   // =========================================================================
   // Task 5: Structured Error State Tests
   // =========================================================================
