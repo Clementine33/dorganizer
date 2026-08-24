@@ -39,11 +39,27 @@ class FilePaneWidget extends StatefulWidget {
   State<FilePaneWidget> createState() => _FilePaneWidgetState();
 }
 
+/// Private view model for file list entries.
+class _FileEntry {
+  final String path;
+  final int bitrate; // in bits per second
+
+  const _FileEntry({required this.path, this.bitrate = 0});
+
+  /// Bitrate label like "320 kbps", or empty string if bitrate <= 0.
+  String get bitrateLabel =>
+      bitrate > 0 ? '${(bitrate / 1000).round()} kbps' : '';
+
+  /// Whether to show the bitrate badge (only for .mp3 with positive bitrate).
+  bool get showBitrateBadge =>
+      bitrate > 0 && path.toLowerCase().endsWith('.mp3');
+}
+
 class _FilePaneWidgetState extends State<FilePaneWidget> {
   static const Set<String> _losslessFormats = {'wav', 'flac'};
 
   late OnseiServiceClient _client;
-  List<String> _files = [];
+  List<_FileEntry> _files = [];
   bool _loading = false;
   String? _error;
 
@@ -79,9 +95,28 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
         ListFilesRequest()..folderPath = path,
       );
       if (mounted) {
-        _reconcileSelection(response.files);
+        final List<_FileEntry> entries;
+        if (response.files.isNotEmpty) {
+          // Files is canonical: build rows from files, overlay bitrate
+          // from entries by matching path.
+          final bitrateByPath = <String, int>{};
+          for (final e in response.entries) {
+            bitrateByPath[e.path] = e.bitrate;
+          }
+          entries = response.files
+              .map((f) => _FileEntry(path: f, bitrate: bitrateByPath[f] ?? 0))
+              .toList();
+        } else if (response.entries.isNotEmpty) {
+          // No files: use entries directly.
+          entries = response.entries
+              .map((e) => _FileEntry(path: e.path, bitrate: e.bitrate))
+              .toList();
+        } else {
+          entries = [];
+        }
+        _reconcileSelection(entries);
         setState(() {
-          _files = response.files;
+          _files = entries;
           _loading = false;
         });
       }
@@ -106,7 +141,7 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
   }
 
   void _selectAll() {
-    widget.onSelectionChanged(_files.toSet());
+    widget.onSelectionChanged(_files.map((e) => e.path).toSet());
   }
 
   void _clearSelection() {
@@ -314,13 +349,13 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
     }
   }
 
-  void _reconcileSelection(List<String> refreshedFiles) {
+  void _reconcileSelection(List<_FileEntry> refreshedFiles) {
     final current = widget.selectedPaths;
     if (current.isEmpty) {
       return;
     }
 
-    final existing = refreshedFiles.toSet();
+    final existing = refreshedFiles.map((e) => e.path).toSet();
     final pruned = current.where(existing.contains).toSet();
     if (pruned.length != current.length) {
       widget.onSelectionChanged(pruned);
@@ -839,20 +874,46 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
               : ListView.builder(
                   itemCount: _files.length,
                   itemBuilder: (context, index) {
-                    final file = _files[index];
-                    final isSelected = widget.selectedPaths.contains(file);
-                    final filename = file.split(RegExp(r'[/\\]')).last;
-                    final relativePath = _getRelativePath(file);
+                    final entry = _files[index];
+                    final filePath = entry.path;
+                    final isSelected = widget.selectedPaths.contains(filePath);
+                    final filename = filePath.split(RegExp(r'[/\\]')).last;
+                    final relativePath = _getRelativePath(filePath);
                     return CheckboxListTile(
                       value: isSelected,
-                      onChanged: (_) => _toggleFile(file),
+                      onChanged: (_) => _toggleFile(filePath),
                       dense: true,
-                      title: Text(
-                        filename,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontFamily: 'SarasaUiSC',
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              filename,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontFamily: 'SarasaUiSC',
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (entry.showBitrateBadge)
+                            Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.secondaryContainer,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                entry.bitrateLabel,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSecondaryContainer,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       subtitle: Text(
                         relativePath,
@@ -862,11 +923,11 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      secondary: Icon(
-                        _iconForFile(filename),
-                        size: 18,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                      // secondary: Icon(
+                      //   _iconForFile(filename),
+                      //   size: 18,
+                      //   color: theme.colorScheme.onSurfaceVariant,
+                      // ),
                       controlAffinity: ListTileControlAffinity.leading,
                     );
                   },

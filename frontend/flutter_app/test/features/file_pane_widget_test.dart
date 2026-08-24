@@ -15,19 +15,23 @@ class FakeOnseiService extends OnseiServiceBase {
   final List<RefreshFoldersRequest> refreshRequests = [];
   PlanOperationsResponse? nextPlanResponse;
   List<String> nextFiles = [];
+  List<FileListEntry> nextEntries = [];
   Stream<JobEvent> Function()? nextExecuteStreamFactory;
   String? nextConfigJson;
 
-  // Call counters for coordinator testing
+  // Call counters
   int refreshCallCount = 0;
   int planCallCount = 0;
   int executeCallCount = 0;
 
-  // Default files to return when listFiles is called
-  final List<String> defaultFiles = [
+  // Default files to return when listFiles is called.
+  List<String> defaultFiles = [
     '/test/folder/audio1.mp3',
     '/test/folder/audio2.flac',
   ];
+
+  // Default entries (empty by default; tests opt in via setEntries).
+  final List<FileListEntry> defaultEntries = [];
 
   void reset() {
     planRequests.clear();
@@ -35,11 +39,16 @@ class FakeOnseiService extends OnseiServiceBase {
     refreshRequests.clear();
     nextPlanResponse = null;
     nextFiles = [];
+    nextEntries = [];
     nextExecuteStreamFactory = null;
     nextConfigJson = null;
     refreshCallCount = 0;
     planCallCount = 0;
     executeCallCount = 0;
+    defaultFiles = [
+      '/test/folder/audio1.mp3',
+      '/test/folder/audio2.flac',
+    ];
   }
 
   void setPlanResponse(PlanOperationsResponse response) {
@@ -48,6 +57,14 @@ class FakeOnseiService extends OnseiServiceBase {
 
   void setFiles(List<String> files) {
     nextFiles = files;
+  }
+
+  void setEntries(List<FileListEntry> entries) {
+    nextEntries = entries;
+  }
+
+  void setDefaultFiles(List<String> files) {
+    defaultFiles = files;
   }
 
   void setExecuteStreamFactory(Stream<JobEvent> Function() factory) {
@@ -94,7 +111,10 @@ class FakeOnseiService extends OnseiServiceBase {
     ListFilesRequest request,
   ) async {
     final files = nextFiles.isNotEmpty ? nextFiles : defaultFiles;
-    return ListFilesResponse()..files.addAll(files);
+    final entries = nextEntries.isNotEmpty ? nextEntries : defaultEntries;
+    return ListFilesResponse()
+      ..files.addAll(files)
+      ..entries.addAll(entries);
   }
 
   @override
@@ -1251,5 +1271,104 @@ void main() {
         reason: 'Should not execute for non-lossless source',
       );
     }, skip: true);
+  });
+
+  // =========================================================================
+  // Task: Bitrate badge for mp3 entries
+  // =========================================================================
+
+  /// Pumps until the file pane has finished the gRPC _loadFiles call,
+  /// alternating between real-event-loop bursts (runAsync) and widget
+  /// rebuilds (pump). Returns when the loading spinner disappears.
+  Future<void> settleGprcLoad(WidgetTester tester) async {
+    for (int i = 0; i < 30; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+      if (find.byType(CircularProgressIndicator).evaluate().isEmpty) return;
+    }
+    await tester.pump();
+  }
+
+  group('Task: bitrate badge', () {
+    testWidgets('file pane shows bitrate badge only for mp3 entries with bitrate', (
+      tester,
+    ) async {
+      fakeService.reset();
+      // Entries-only path: clear defaults so files.isEmpty → use entries
+      fakeService.setDefaultFiles([]);
+      // Return mixed entries via fake gRPC service
+      fakeService.setEntries([
+        FileListEntry(path: '/test/folder/song1.mp3', bitrate: 320000),
+        FileListEntry(path: '/test/folder/song2.flac', bitrate: 1411000),
+        FileListEntry(path: '/test/folder/song3.mp3', bitrate: 0),
+        FileListEntry(path: '/test/folder/song4.wav', bitrate: 0),
+        FileListEntry(path: '/test/folder/doc.txt', bitrate: 0),
+      ]);
+      fakeService.setFiles([]); // entries path takes precedence
+
+      await tester.runAsync(() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: FilePaneWidget(
+                channel: channel,
+                rootPath: '/test',
+                folderPath: '/test/folder',
+                selectedPaths: const {},
+                onSelectionChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+      });
+      await settleGprcLoad(tester);
+
+      // song1.mp3 (320000 bps) should show "320 kbps" badge
+      expect(find.text('320 kbps'), findsOneWidget);
+      // song1.mp3 filename should be visible
+      expect(find.text('song1.mp3'), findsAtLeastNWidgets(1));
+
+      // Only one "kbps" badge overall (song1 only)
+      expect(find.textContaining('kbps'), findsOneWidget);
+
+      // Explicitly verify "0 kbps" is absent
+      expect(find.text('0 kbps'), findsNothing);
+    });
+
+    testWidgets('no bitrate badge when entries are empty and only files returned', (
+      tester,
+    ) async {
+      fakeService.reset();
+      // Only plain files, no entries — forces bitrate=0 fallback
+      fakeService.setEntries([]);
+      fakeService.setFiles([
+        '/test/folder/audio1.mp3',
+        '/test/folder/audio2.flac',
+      ]);
+
+      await tester.runAsync(() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: FilePaneWidget(
+                channel: channel,
+                rootPath: '/test',
+                folderPath: '/test/folder',
+                selectedPaths: const {},
+                onSelectionChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+      });
+      await settleGprcLoad(tester);
+
+      // Should show filenames but no bitrate badges
+      expect(find.text('audio1.mp3'), findsAtLeastNWidgets(1));
+      expect(find.text('audio2.flac'), findsAtLeastNWidgets(1));
+      expect(find.textContaining('kbps'), findsNothing);
+    });
   });
 }

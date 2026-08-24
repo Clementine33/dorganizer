@@ -410,12 +410,80 @@ class ListFilesRequest extends $pb.GeneratedMessage {
   void clearFolderPath() => $_clearField(1);
 }
 
+class FileListEntry extends $pb.GeneratedMessage {
+  factory FileListEntry({
+    $core.String? path,
+    $core.int? bitrate,
+  }) {
+    final result = create();
+    if (path != null) result.path = path;
+    if (bitrate != null) result.bitrate = bitrate;
+    return result;
+  }
+
+  FileListEntry._();
+
+  factory FileListEntry.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory FileListEntry.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FileListEntry',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'onsei.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'path')
+    ..aI(2, _omitFieldNames ? '' : 'bitrate')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FileListEntry clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FileListEntry copyWith(void Function(FileListEntry) updates) =>
+      super.copyWith((message) => updates(message as FileListEntry))
+          as FileListEntry;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FileListEntry create() => FileListEntry._();
+  @$core.override
+  FileListEntry createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static FileListEntry getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FileListEntry>(create);
+  static FileListEntry? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get path => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set path($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasPath() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearPath() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get bitrate => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set bitrate($core.int value) => $_setSignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBitrate() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBitrate() => $_clearField(2);
+}
+
 class ListFilesResponse extends $pb.GeneratedMessage {
   factory ListFilesResponse({
     $core.Iterable<$core.String>? files,
+    $core.Iterable<FileListEntry>? entries,
   }) {
     final result = create();
     if (files != null) result.files.addAll(files);
+    if (entries != null) result.entries.addAll(entries);
     return result;
   }
 
@@ -433,6 +501,8 @@ class ListFilesResponse extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'onsei.v1'),
       createEmptyInstance: create)
     ..pPS(1, _omitFieldNames ? '' : 'files')
+    ..pPM<FileListEntry>(2, _omitFieldNames ? '' : 'entries',
+        subBuilder: FileListEntry.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -456,6 +526,9 @@ class ListFilesResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   $pb.PbList<$core.String> get files => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<FileListEntry> get entries => $_getList(1);
 }
 
 class PlanOperationsRequest extends $pb.GeneratedMessage {

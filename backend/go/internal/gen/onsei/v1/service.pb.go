@@ -357,16 +357,69 @@ func (x *ListFilesRequest) GetFolderPath() string {
 	return ""
 }
 
+type FileListEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Bitrate       int32                  `protobuf:"varint,2,opt,name=bitrate,proto3" json:"bitrate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileListEntry) Reset() {
+	*x = FileListEntry{}
+	mi := &file_onsei_v1_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileListEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileListEntry) ProtoMessage() {}
+
+func (x *FileListEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_onsei_v1_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileListEntry.ProtoReflect.Descriptor instead.
+func (*FileListEntry) Descriptor() ([]byte, []int) {
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *FileListEntry) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileListEntry) GetBitrate() int32 {
+	if x != nil {
+		return x.Bitrate
+	}
+	return 0
+}
+
 type ListFilesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Files         []string               `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
+	Entries       []*FileListEntry       `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListFilesResponse) Reset() {
 	*x = ListFilesResponse{}
-	mi := &file_onsei_v1_service_proto_msgTypes[8]
+	mi := &file_onsei_v1_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -378,7 +431,7 @@ func (x *ListFilesResponse) String() string {
 func (*ListFilesResponse) ProtoMessage() {}
 
 func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[8]
+	mi := &file_onsei_v1_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -391,12 +444,19 @@ func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListFilesResponse) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{8}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListFilesResponse) GetFiles() []string {
 	if x != nil {
 		return x.Files
+	}
+	return nil
+}
+
+func (x *ListFilesResponse) GetEntries() []*FileListEntry {
+	if x != nil {
+		return x.Entries
 	}
 	return nil
 }
@@ -415,7 +475,7 @@ type PlanOperationsRequest struct {
 
 func (x *PlanOperationsRequest) Reset() {
 	*x = PlanOperationsRequest{}
-	mi := &file_onsei_v1_service_proto_msgTypes[9]
+	mi := &file_onsei_v1_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +487,7 @@ func (x *PlanOperationsRequest) String() string {
 func (*PlanOperationsRequest) ProtoMessage() {}
 
 func (x *PlanOperationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[9]
+	mi := &file_onsei_v1_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +500,7 @@ func (x *PlanOperationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanOperationsRequest.ProtoReflect.Descriptor instead.
 func (*PlanOperationsRequest) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PlanOperationsRequest) GetSourceFiles() []string {
@@ -500,7 +560,7 @@ type PlanOperationsResponse struct {
 
 func (x *PlanOperationsResponse) Reset() {
 	*x = PlanOperationsResponse{}
-	mi := &file_onsei_v1_service_proto_msgTypes[10]
+	mi := &file_onsei_v1_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -512,7 +572,7 @@ func (x *PlanOperationsResponse) String() string {
 func (*PlanOperationsResponse) ProtoMessage() {}
 
 func (x *PlanOperationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[10]
+	mi := &file_onsei_v1_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -525,7 +585,7 @@ func (x *PlanOperationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanOperationsResponse.ProtoReflect.Descriptor instead.
 func (*PlanOperationsResponse) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PlanOperationsResponse) GetPlanId() string {
@@ -594,7 +654,7 @@ type FolderError struct {
 
 func (x *FolderError) Reset() {
 	*x = FolderError{}
-	mi := &file_onsei_v1_service_proto_msgTypes[11]
+	mi := &file_onsei_v1_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +666,7 @@ func (x *FolderError) String() string {
 func (*FolderError) ProtoMessage() {}
 
 func (x *FolderError) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[11]
+	mi := &file_onsei_v1_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +679,7 @@ func (x *FolderError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FolderError.ProtoReflect.Descriptor instead.
 func (*FolderError) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{11}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *FolderError) GetStage() string {
@@ -689,7 +749,7 @@ type PlannedOperation struct {
 
 func (x *PlannedOperation) Reset() {
 	*x = PlannedOperation{}
-	mi := &file_onsei_v1_service_proto_msgTypes[12]
+	mi := &file_onsei_v1_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +761,7 @@ func (x *PlannedOperation) String() string {
 func (*PlannedOperation) ProtoMessage() {}
 
 func (x *PlannedOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[12]
+	mi := &file_onsei_v1_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +774,7 @@ func (x *PlannedOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlannedOperation.ProtoReflect.Descriptor instead.
 func (*PlannedOperation) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{12}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PlannedOperation) GetSourcePath() string {
@@ -748,7 +808,7 @@ type ExecutePlanRequest struct {
 
 func (x *ExecutePlanRequest) Reset() {
 	*x = ExecutePlanRequest{}
-	mi := &file_onsei_v1_service_proto_msgTypes[13]
+	mi := &file_onsei_v1_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -760,7 +820,7 @@ func (x *ExecutePlanRequest) String() string {
 func (*ExecutePlanRequest) ProtoMessage() {}
 
 func (x *ExecutePlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[13]
+	mi := &file_onsei_v1_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -773,7 +833,7 @@ func (x *ExecutePlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecutePlanRequest.ProtoReflect.Descriptor instead.
 func (*ExecutePlanRequest) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{13}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ExecutePlanRequest) GetPlanId() string {
@@ -800,7 +860,7 @@ type ListPlansRequest struct {
 
 func (x *ListPlansRequest) Reset() {
 	*x = ListPlansRequest{}
-	mi := &file_onsei_v1_service_proto_msgTypes[14]
+	mi := &file_onsei_v1_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +872,7 @@ func (x *ListPlansRequest) String() string {
 func (*ListPlansRequest) ProtoMessage() {}
 
 func (x *ListPlansRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[14]
+	mi := &file_onsei_v1_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +885,7 @@ func (x *ListPlansRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlansRequest.ProtoReflect.Descriptor instead.
 func (*ListPlansRequest) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{14}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListPlansRequest) GetRootPath() string {
@@ -851,7 +911,7 @@ type ListPlansResponse struct {
 
 func (x *ListPlansResponse) Reset() {
 	*x = ListPlansResponse{}
-	mi := &file_onsei_v1_service_proto_msgTypes[15]
+	mi := &file_onsei_v1_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -863,7 +923,7 @@ func (x *ListPlansResponse) String() string {
 func (*ListPlansResponse) ProtoMessage() {}
 
 func (x *ListPlansResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[15]
+	mi := &file_onsei_v1_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -876,7 +936,7 @@ func (x *ListPlansResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlansResponse.ProtoReflect.Descriptor instead.
 func (*ListPlansResponse) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{15}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListPlansResponse) GetPlans() []*PlanInfo {
@@ -896,7 +956,7 @@ type RefreshFoldersRequest struct {
 
 func (x *RefreshFoldersRequest) Reset() {
 	*x = RefreshFoldersRequest{}
-	mi := &file_onsei_v1_service_proto_msgTypes[16]
+	mi := &file_onsei_v1_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -908,7 +968,7 @@ func (x *RefreshFoldersRequest) String() string {
 func (*RefreshFoldersRequest) ProtoMessage() {}
 
 func (x *RefreshFoldersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[16]
+	mi := &file_onsei_v1_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -921,7 +981,7 @@ func (x *RefreshFoldersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshFoldersRequest.ProtoReflect.Descriptor instead.
 func (*RefreshFoldersRequest) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{16}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RefreshFoldersRequest) GetRootPath() string {
@@ -948,7 +1008,7 @@ type RefreshFoldersResponse struct {
 
 func (x *RefreshFoldersResponse) Reset() {
 	*x = RefreshFoldersResponse{}
-	mi := &file_onsei_v1_service_proto_msgTypes[17]
+	mi := &file_onsei_v1_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -960,7 +1020,7 @@ func (x *RefreshFoldersResponse) String() string {
 func (*RefreshFoldersResponse) ProtoMessage() {}
 
 func (x *RefreshFoldersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[17]
+	mi := &file_onsei_v1_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -973,7 +1033,7 @@ func (x *RefreshFoldersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshFoldersResponse.ProtoReflect.Descriptor instead.
 func (*RefreshFoldersResponse) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{17}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RefreshFoldersResponse) GetSuccessfulFolders() []string {
@@ -1003,7 +1063,7 @@ type PlanInfo struct {
 
 func (x *PlanInfo) Reset() {
 	*x = PlanInfo{}
-	mi := &file_onsei_v1_service_proto_msgTypes[18]
+	mi := &file_onsei_v1_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1015,7 +1075,7 @@ func (x *PlanInfo) String() string {
 func (*PlanInfo) ProtoMessage() {}
 
 func (x *PlanInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[18]
+	mi := &file_onsei_v1_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1028,7 +1088,7 @@ func (x *PlanInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanInfo.ProtoReflect.Descriptor instead.
 func (*PlanInfo) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{18}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PlanInfo) GetPlanId() string {
@@ -1088,7 +1148,7 @@ type JobEvent struct {
 
 func (x *JobEvent) Reset() {
 	*x = JobEvent{}
-	mi := &file_onsei_v1_service_proto_msgTypes[19]
+	mi := &file_onsei_v1_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1100,7 +1160,7 @@ func (x *JobEvent) String() string {
 func (*JobEvent) ProtoMessage() {}
 
 func (x *JobEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_onsei_v1_service_proto_msgTypes[19]
+	mi := &file_onsei_v1_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1113,7 +1173,7 @@ func (x *JobEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobEvent.ProtoReflect.Descriptor instead.
 func (*JobEvent) Descriptor() ([]byte, []int) {
-	return file_onsei_v1_service_proto_rawDescGZIP(), []int{19}
+	return file_onsei_v1_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *JobEvent) GetEventType() string {
@@ -1230,9 +1290,13 @@ const file_onsei_v1_service_proto_rawDesc = "" +
 	"\afolders\x18\x01 \x03(\tR\afolders\"3\n" +
 	"\x10ListFilesRequest\x12\x1f\n" +
 	"\vfolder_path\x18\x01 \x01(\tR\n" +
-	"folderPath\")\n" +
+	"folderPath\"=\n" +
+	"\rFileListEntry\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
+	"\abitrate\x18\x02 \x01(\x05R\abitrate\"\\\n" +
 	"\x11ListFilesResponse\x12\x14\n" +
-	"\x05files\x18\x01 \x03(\tR\x05files\"\xf6\x01\n" +
+	"\x05files\x18\x01 \x03(\tR\x05files\x121\n" +
+	"\aentries\x18\x02 \x03(\v2\x17.onsei.v1.FileListEntryR\aentries\"\xf6\x01\n" +
 	"\x15PlanOperationsRequest\x12!\n" +
 	"\fsource_files\x18\x01 \x03(\tR\vsourceFiles\x12#\n" +
 	"\rtarget_format\x18\x02 \x01(\tR\ftargetFormat\x12\x1f\n" +
@@ -1332,7 +1396,7 @@ func file_onsei_v1_service_proto_rawDescGZIP() []byte {
 	return file_onsei_v1_service_proto_rawDescData
 }
 
-var file_onsei_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_onsei_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_onsei_v1_service_proto_goTypes = []any{
 	(*GetConfigRequest)(nil),       // 0: onsei.v1.GetConfigRequest
 	(*GetConfigResponse)(nil),      // 1: onsei.v1.GetConfigResponse
@@ -1342,47 +1406,49 @@ var file_onsei_v1_service_proto_goTypes = []any{
 	(*ListFoldersRequest)(nil),     // 5: onsei.v1.ListFoldersRequest
 	(*ListFoldersResponse)(nil),    // 6: onsei.v1.ListFoldersResponse
 	(*ListFilesRequest)(nil),       // 7: onsei.v1.ListFilesRequest
-	(*ListFilesResponse)(nil),      // 8: onsei.v1.ListFilesResponse
-	(*PlanOperationsRequest)(nil),  // 9: onsei.v1.PlanOperationsRequest
-	(*PlanOperationsResponse)(nil), // 10: onsei.v1.PlanOperationsResponse
-	(*FolderError)(nil),            // 11: onsei.v1.FolderError
-	(*PlannedOperation)(nil),       // 12: onsei.v1.PlannedOperation
-	(*ExecutePlanRequest)(nil),     // 13: onsei.v1.ExecutePlanRequest
-	(*ListPlansRequest)(nil),       // 14: onsei.v1.ListPlansRequest
-	(*ListPlansResponse)(nil),      // 15: onsei.v1.ListPlansResponse
-	(*RefreshFoldersRequest)(nil),  // 16: onsei.v1.RefreshFoldersRequest
-	(*RefreshFoldersResponse)(nil), // 17: onsei.v1.RefreshFoldersResponse
-	(*PlanInfo)(nil),               // 18: onsei.v1.PlanInfo
-	(*JobEvent)(nil),               // 19: onsei.v1.JobEvent
+	(*FileListEntry)(nil),          // 8: onsei.v1.FileListEntry
+	(*ListFilesResponse)(nil),      // 9: onsei.v1.ListFilesResponse
+	(*PlanOperationsRequest)(nil),  // 10: onsei.v1.PlanOperationsRequest
+	(*PlanOperationsResponse)(nil), // 11: onsei.v1.PlanOperationsResponse
+	(*FolderError)(nil),            // 12: onsei.v1.FolderError
+	(*PlannedOperation)(nil),       // 13: onsei.v1.PlannedOperation
+	(*ExecutePlanRequest)(nil),     // 14: onsei.v1.ExecutePlanRequest
+	(*ListPlansRequest)(nil),       // 15: onsei.v1.ListPlansRequest
+	(*ListPlansResponse)(nil),      // 16: onsei.v1.ListPlansResponse
+	(*RefreshFoldersRequest)(nil),  // 17: onsei.v1.RefreshFoldersRequest
+	(*RefreshFoldersResponse)(nil), // 18: onsei.v1.RefreshFoldersResponse
+	(*PlanInfo)(nil),               // 19: onsei.v1.PlanInfo
+	(*JobEvent)(nil),               // 20: onsei.v1.JobEvent
 }
 var file_onsei_v1_service_proto_depIdxs = []int32{
-	12, // 0: onsei.v1.PlanOperationsResponse.operations:type_name -> onsei.v1.PlannedOperation
-	11, // 1: onsei.v1.PlanOperationsResponse.plan_errors:type_name -> onsei.v1.FolderError
-	18, // 2: onsei.v1.ListPlansResponse.plans:type_name -> onsei.v1.PlanInfo
-	11, // 3: onsei.v1.RefreshFoldersResponse.errors:type_name -> onsei.v1.FolderError
-	0,  // 4: onsei.v1.OnseiService.GetConfig:input_type -> onsei.v1.GetConfigRequest
-	2,  // 5: onsei.v1.OnseiService.UpdateConfig:input_type -> onsei.v1.UpdateConfigRequest
-	4,  // 6: onsei.v1.OnseiService.Scan:input_type -> onsei.v1.ScanRequest
-	5,  // 7: onsei.v1.OnseiService.ListFolders:input_type -> onsei.v1.ListFoldersRequest
-	7,  // 8: onsei.v1.OnseiService.ListFiles:input_type -> onsei.v1.ListFilesRequest
-	9,  // 9: onsei.v1.OnseiService.PlanOperations:input_type -> onsei.v1.PlanOperationsRequest
-	13, // 10: onsei.v1.OnseiService.ExecutePlan:input_type -> onsei.v1.ExecutePlanRequest
-	14, // 11: onsei.v1.OnseiService.ListPlans:input_type -> onsei.v1.ListPlansRequest
-	16, // 12: onsei.v1.OnseiService.RefreshFolders:input_type -> onsei.v1.RefreshFoldersRequest
-	1,  // 13: onsei.v1.OnseiService.GetConfig:output_type -> onsei.v1.GetConfigResponse
-	3,  // 14: onsei.v1.OnseiService.UpdateConfig:output_type -> onsei.v1.UpdateConfigResponse
-	19, // 15: onsei.v1.OnseiService.Scan:output_type -> onsei.v1.JobEvent
-	6,  // 16: onsei.v1.OnseiService.ListFolders:output_type -> onsei.v1.ListFoldersResponse
-	8,  // 17: onsei.v1.OnseiService.ListFiles:output_type -> onsei.v1.ListFilesResponse
-	10, // 18: onsei.v1.OnseiService.PlanOperations:output_type -> onsei.v1.PlanOperationsResponse
-	19, // 19: onsei.v1.OnseiService.ExecutePlan:output_type -> onsei.v1.JobEvent
-	15, // 20: onsei.v1.OnseiService.ListPlans:output_type -> onsei.v1.ListPlansResponse
-	17, // 21: onsei.v1.OnseiService.RefreshFolders:output_type -> onsei.v1.RefreshFoldersResponse
-	13, // [13:22] is the sub-list for method output_type
-	4,  // [4:13] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	8,  // 0: onsei.v1.ListFilesResponse.entries:type_name -> onsei.v1.FileListEntry
+	13, // 1: onsei.v1.PlanOperationsResponse.operations:type_name -> onsei.v1.PlannedOperation
+	12, // 2: onsei.v1.PlanOperationsResponse.plan_errors:type_name -> onsei.v1.FolderError
+	19, // 3: onsei.v1.ListPlansResponse.plans:type_name -> onsei.v1.PlanInfo
+	12, // 4: onsei.v1.RefreshFoldersResponse.errors:type_name -> onsei.v1.FolderError
+	0,  // 5: onsei.v1.OnseiService.GetConfig:input_type -> onsei.v1.GetConfigRequest
+	2,  // 6: onsei.v1.OnseiService.UpdateConfig:input_type -> onsei.v1.UpdateConfigRequest
+	4,  // 7: onsei.v1.OnseiService.Scan:input_type -> onsei.v1.ScanRequest
+	5,  // 8: onsei.v1.OnseiService.ListFolders:input_type -> onsei.v1.ListFoldersRequest
+	7,  // 9: onsei.v1.OnseiService.ListFiles:input_type -> onsei.v1.ListFilesRequest
+	10, // 10: onsei.v1.OnseiService.PlanOperations:input_type -> onsei.v1.PlanOperationsRequest
+	14, // 11: onsei.v1.OnseiService.ExecutePlan:input_type -> onsei.v1.ExecutePlanRequest
+	15, // 12: onsei.v1.OnseiService.ListPlans:input_type -> onsei.v1.ListPlansRequest
+	17, // 13: onsei.v1.OnseiService.RefreshFolders:input_type -> onsei.v1.RefreshFoldersRequest
+	1,  // 14: onsei.v1.OnseiService.GetConfig:output_type -> onsei.v1.GetConfigResponse
+	3,  // 15: onsei.v1.OnseiService.UpdateConfig:output_type -> onsei.v1.UpdateConfigResponse
+	20, // 16: onsei.v1.OnseiService.Scan:output_type -> onsei.v1.JobEvent
+	6,  // 17: onsei.v1.OnseiService.ListFolders:output_type -> onsei.v1.ListFoldersResponse
+	9,  // 18: onsei.v1.OnseiService.ListFiles:output_type -> onsei.v1.ListFilesResponse
+	11, // 19: onsei.v1.OnseiService.PlanOperations:output_type -> onsei.v1.PlanOperationsResponse
+	20, // 20: onsei.v1.OnseiService.ExecutePlan:output_type -> onsei.v1.JobEvent
+	16, // 21: onsei.v1.OnseiService.ListPlans:output_type -> onsei.v1.ListPlansResponse
+	18, // 22: onsei.v1.OnseiService.RefreshFolders:output_type -> onsei.v1.RefreshFoldersResponse
+	14, // [14:23] is the sub-list for method output_type
+	5,  // [5:14] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_onsei_v1_service_proto_init() }
@@ -1396,7 +1462,7 @@ func file_onsei_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_onsei_v1_service_proto_rawDesc), len(file_onsei_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

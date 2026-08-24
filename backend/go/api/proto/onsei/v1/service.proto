@@ -28,8 +28,14 @@ message ListFoldersResponse {
 message ListFilesRequest {
   string folder_path = 1;
 }
+message FileListEntry {
+  string path = 1;
+  int32 bitrate = 2;
+}
+
 message ListFilesResponse {
   repeated string files = 1;
+  repeated FileListEntry entries = 2;
 }
 
 message PlanOperationsRequest {

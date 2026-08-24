@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -119,7 +120,49 @@ func (s *OnseiServer) ListFiles(_ context.Context, req *pb.ListFilesRequest) (*p
 		return nil, status.Errorf(codes.NotFound, "read dir %q: %v", folderPath, err)
 	}
 
-	return &pb.ListFilesResponse{Files: result}, nil
+	// Populate entries with path + bitrate (bps) metadata.
+	// Bitrate lookups are only needed for .mp3 files; other formats
+	// default to 0 without touching the DB.
+	entries := make([]*pb.FileListEntry, 0, len(result))
+	for _, p := range result {
+		var bitrate int32
+		if strings.EqualFold(filepath.Ext(p), ".mp3") {
+			var err error
+			bitrate, err = s.lookupBitrate(p)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "lookup bitrate for %q: %v", p, err)
+			}
+		}
+		entries = append(entries, &pb.FileListEntry{
+			Path:    p,
+			Bitrate: bitrate,
+		})
+	}
+
+	return &pb.ListFilesResponse{Files: result, Entries: entries}, nil
+}
+
+// lookupBitrate queries the DB for the bitrate (bps) of a single file path.
+// Returns 0 if the repo is nil or no matching row exists.
+func (s *OnseiServer) lookupBitrate(path string) (int32, error) {
+	if s.repo == nil {
+		return 0, nil
+	}
+	normalized := filepath.ToSlash(path)
+	var bitrate sql.NullInt32
+	err := s.repo.DB().QueryRow(
+		"SELECT bitrate FROM entries WHERE path = ?", normalized,
+	).Scan(&bitrate)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if bitrate.Valid {
+		return bitrate.Int32, nil
+	}
+	return 0, nil
 }
 
 // listDriveRoots returns available drive letters on Windows, or "/" on Unix.
