@@ -2,12 +2,10 @@ package grpc
 
 import (
 	"context"
+
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 // mockServerStream implements grpc.ServerStreamingServer for testing
@@ -64,18 +62,3 @@ func (m *mockServerStreamHelper) SendMsg(msg any) error {
 
 // Ensure mockServerStreamHelper implements the interface
 var _ grpc.ServerStreamingServer[pb.JobEvent] = (*mockServerStreamHelper)(nil)
-
-// createFakeEncoder creates a deterministic fake encoder batch file for tests (Windows-friendly).
-// The fake encoder copies src to dst and exits 0, ensuring convert success path is guaranteed.
-// lame is called as: lame -b 320 src dst (4 arguments total)
-func createFakeEncoder(t *testing.T, tmpDir string) string {
-	batchContent := `@echo off
-copy /Y %3 %4 >nul 2>&1
-exit /b 0
-`
-	encoderPath := filepath.Join(tmpDir, "fake_lame.bat")
-	if err := os.WriteFile(encoderPath, []byte(batchContent), 0755); err != nil {
-		t.Fatalf("failed to create fake encoder: %v", err)
-	}
-	return encoderPath
-}

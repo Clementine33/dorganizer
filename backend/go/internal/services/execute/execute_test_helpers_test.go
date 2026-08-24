@@ -61,12 +61,12 @@ func (m *mockBatchBarrierRunner) getConvertCalls() []string {
 // mockEventHandler tracks callback invocations for testing event routing
 type mockEventHandler struct {
 	mu                        sync.Mutex
-	onDeleteFailedCalls       []int    // item indices where OnDeleteFailed was called
-	onStage3CommitFailedCalls []int    // item indices where OnStage3CommitFailed was called
-	onStage2EncodeFailedCalls []int    // item indices where OnStage2EncodeFailed was called
-	onStage1CopyFailedCalls   []int    // item indices where OnStage1CopyFailed was called
-	onPreconditionFailedCalls []int    // item indices where OnPreconditionFailed was called
-	onFolderCompletedCalls    []string // folder paths where OnFolderCompleted was called
+	onDeleteFailedCalls       []int // item indices where OnDeleteFailed was called
+	onStage3CommitFailedCalls []int // item indices where OnStage3CommitFailed was called
+	onStage2EncodeFailedCalls []int // item indices where OnStage2EncodeFailed was called
+	onStage1CopyFailedCalls   []int // item indices where OnStage1CopyFailed was called
+	onPreconditionFailedCalls []int // item indices where OnPreconditionFailed was called
+	onItemCompletedCalls      []int // item indices where OnItemCompleted was called
 }
 
 func newMockEventHandler() *mockEventHandler {
@@ -103,10 +103,11 @@ func (m *mockEventHandler) OnDeleteFailed(itemIndex int, item PlanItem, err erro
 	m.onDeleteFailedCalls = append(m.onDeleteFailedCalls, itemIndex)
 }
 
-func (m *mockEventHandler) OnFolderCompleted(folderPath string) {
+// OnItemCompleted tracks item completion indices for lower-level service tests.
+func (m *mockEventHandler) OnItemCompleted(itemIndex int, _ PlanItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.onFolderCompletedCalls = append(m.onFolderCompletedCalls, folderPath)
+	m.onItemCompletedCalls = append(m.onItemCompletedCalls, itemIndex)
 }
 
 func (m *mockEventHandler) getDeleteFailedCalls() []int {
@@ -141,10 +142,10 @@ func (m *mockEventHandler) getStage1CopyFailedCalls() []int {
 	return out
 }
 
-func (m *mockEventHandler) getFolderCompletedCalls() []string {
+func (m *mockEventHandler) getItemCompletedCalls() []int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]string, len(m.onFolderCompletedCalls))
-	copy(out, m.onFolderCompletedCalls)
+	out := make([]int, len(m.onItemCompletedCalls))
+	copy(out, m.onItemCompletedCalls)
 	return out
 }

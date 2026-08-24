@@ -97,7 +97,9 @@ type EventHandler interface {
 	OnStage2EncodeFailed(itemIndex int, item PlanItem, err error)
 	OnStage3CommitFailed(itemIndex int, item PlanItem, err error)
 	OnDeleteFailed(itemIndex int, item PlanItem, err error)
-	OnFolderCompleted(folderPath string)
+	// OnItemCompleted is called when an item has been fully processed (success or failure).
+	// The usecase uses this to track item completion and determine folder lifecycle boundaries.
+	OnItemCompleted(itemIndex int, item PlanItem)
 }
 
 // ExecuteService performs plan-level execution with precondition validation.

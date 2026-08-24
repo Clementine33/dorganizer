@@ -1,4 +1,4 @@
-package grpc
+package plan
 
 import (
 	"database/sql"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 )
 
@@ -51,12 +51,12 @@ func normalizeUniquePaths(paths []string) []string {
 	return normalized
 }
 
-func collectDetermineRootCandidates(req *pb.PlanOperationsRequest, plan *analyze.Plan) []string {
+func collectDetermineRootCandidates(req Request, plan *analyze.Plan) []string {
 	planOpsLen := 0
 	if plan != nil {
 		planOpsLen = len(plan.Operations)
 	}
-	candidates := make([]string, 0, planOpsLen+1+len(req.GetFolderPaths())+len(req.GetSourceFiles()))
+	candidates := make([]string, 0, planOpsLen+1+len(req.FolderPaths)+len(req.SourceFiles))
 	if plan != nil {
 		for _, op := range plan.Operations {
 			if op.SourcePath != "" {
@@ -64,20 +64,20 @@ func collectDetermineRootCandidates(req *pb.PlanOperationsRequest, plan *analyze
 			}
 		}
 	}
-	if req.GetFolderPath() != "" {
-		candidates = append(candidates, req.GetFolderPath())
+	if req.FolderPath != "" {
+		candidates = append(candidates, req.FolderPath)
 	}
-	candidates = append(candidates, req.GetFolderPaths()...)
-	candidates = append(candidates, req.GetSourceFiles()...)
+	candidates = append(candidates, req.FolderPaths...)
+	candidates = append(candidates, req.SourceFiles...)
 	return normalizeUniquePaths(candidates)
 }
 
-func collectDetermineRootOperationSourceCandidates(req *pb.PlanOperationsRequest, plan *analyze.Plan) []string {
+func collectDetermineRootOperationSourceCandidates(req Request, plan *analyze.Plan) []string {
 	planOpsLen := 0
 	if plan != nil {
 		planOpsLen = len(plan.Operations)
 	}
-	candidates := make([]string, 0, planOpsLen+len(req.GetSourceFiles()))
+	candidates := make([]string, 0, planOpsLen+len(req.SourceFiles))
 	if plan != nil {
 		for _, op := range plan.Operations {
 			if op.SourcePath != "" {
@@ -85,7 +85,7 @@ func collectDetermineRootOperationSourceCandidates(req *pb.PlanOperationsRequest
 			}
 		}
 	}
-	candidates = append(candidates, req.GetSourceFiles()...)
+	candidates = append(candidates, req.SourceFiles...)
 	return normalizeUniquePaths(candidates)
 }
 
@@ -138,7 +138,7 @@ func resolveRootPathFromExactMatches(paths []string, batchQuery func(chunk []str
 	return "", nil
 }
 
-func (s *OnseiServer) determineRootPath(req *pb.PlanOperationsRequest, plan *analyze.Plan, useBatchRootResolve bool) string {
+func determineRootPath(repo *sqlite.Repository, req Request, plan *analyze.Plan, useBatchRootResolve bool) string {
 	resolveRootFromEntries := func(path string) (string, error) {
 		pathPosix := filepath.ToSlash(path)
 		if pathPosix == "" {
@@ -146,7 +146,7 @@ func (s *OnseiServer) determineRootPath(req *pb.PlanOperationsRequest, plan *ana
 		}
 		prefix := strings.TrimSuffix(pathPosix, "/") + "/%"
 		var resolved string
-		err := s.repo.DB().QueryRow("SELECT root_path FROM entries WHERE path = ? OR path LIKE ? LIMIT 1", pathPosix, prefix).Scan(&resolved)
+		err := repo.DB().QueryRow("SELECT root_path FROM entries WHERE path = ? OR path LIKE ? LIMIT 1", pathPosix, prefix).Scan(&resolved)
 		if err == sql.ErrNoRows {
 			return "", nil
 		}
@@ -157,7 +157,7 @@ func (s *OnseiServer) determineRootPath(req *pb.PlanOperationsRequest, plan *ana
 		candidates := collectDetermineRootCandidates(req, plan)
 		resolved, err := resolveRootPathFromExactMatches(candidates, func(chunk []string) (map[string]string, error) {
 			return loadRootPathsByExactMatch(func(query string, args ...any) (*sql.Rows, error) {
-				return s.repo.DB().Query(query, args...)
+				return repo.DB().Query(query, args...)
 			}, chunk)
 		})
 		if err == nil && resolved != "" {
@@ -172,33 +172,33 @@ func (s *OnseiServer) determineRootPath(req *pb.PlanOperationsRequest, plan *ana
 		}
 	}
 
-	if req.GetFolderPath() != "" {
-		resolved, err := resolveRootFromEntries(req.GetFolderPath())
+	if req.FolderPath != "" {
+		resolved, err := resolveRootFromEntries(req.FolderPath)
 		if err == nil && resolved != "" {
 			return resolved
 		}
 	}
-	for _, scope := range req.GetFolderPaths() {
+	for _, scope := range req.FolderPaths {
 		resolved, err := resolveRootFromEntries(scope)
 		if err == nil && resolved != "" {
 			return resolved
 		}
 	}
 
-	if req.GetFolderPath() != "" {
-		return filepath.ToSlash(filepath.Clean(req.GetFolderPath()))
+	if req.FolderPath != "" {
+		return filepath.ToSlash(filepath.Clean(req.FolderPath))
 	}
-	if len(req.GetFolderPaths()) > 0 {
-		return filepath.ToSlash(filepath.Clean(req.GetFolderPaths()[0]))
+	if len(req.FolderPaths) > 0 {
+		return filepath.ToSlash(filepath.Clean(req.FolderPaths[0]))
 	}
-	if len(req.GetSourceFiles()) > 0 {
-		return filepath.ToSlash(filepath.Clean(filepath.Dir(req.GetSourceFiles()[0])))
+	if len(req.SourceFiles) > 0 {
+		return filepath.ToSlash(filepath.Clean(filepath.Dir(req.SourceFiles[0])))
 	}
 
 	return ""
 }
 
-func (s *OnseiServer) computeDeleteTargetPaths(plan *analyze.Plan, rootPath string) {
+func computeDeleteTargetPaths(plan *analyze.Plan, rootPath string) {
 	if plan == nil || rootPath == "" {
 		return
 	}
@@ -231,7 +231,7 @@ func (s *OnseiServer) computeDeleteTargetPaths(plan *analyze.Plan, rootPath stri
 	}
 
 	normalizeCandidate := func(candidate, src string) (string, bool) {
-		absTarget, err := filepathAbs(filepath.FromSlash(candidate))
+		absTarget, err := FilepathAbs(filepath.FromSlash(candidate))
 		if err != nil {
 			plan.Errors = append(plan.Errors, analyze.PruneError{Path: src, Code: "PATH_ABS_FAILED", Message: fmt.Sprintf("failed to get absolute path for delete target: %v", err)})
 			return "", false

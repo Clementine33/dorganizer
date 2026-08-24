@@ -138,33 +138,18 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 	}
 
-	// Task 4: Per-folder fail-fast tracking
+	// Per-folder fail-fast tracking (execution logic; outcome owned by usecase).
 	failedFolders := make(map[string]bool)
-	successfulFolders := make(map[string]bool)
 	var firstExecutionErr error
-	hadRootedPreconditionFailure := false
-	lastItemIndexByFolder := make(map[string]int)
-	emittedFolderCompleted := make(map[string]bool)
-	if plan.RootPath != "" {
-		for i, item := range plan.Items {
-			folder := getFolderForItem(plan.RootPath, item)
-			if folder != "" {
-				lastItemIndexByFolder[folder] = i
-			}
-		}
-	}
-	emitFolderCompletedIfReady := func(folderPath string, itemIndex int) {
-		if folderPath == "" || emittedFolderCompleted[folderPath] {
-			return
-		}
-		lastIdx, ok := lastItemIndexByFolder[folderPath]
-		if !ok || itemIndex != lastIdx || failedFolders[folderPath] {
-			return
-		}
+	var preconditionFailed bool
+	_ = plan // used below in loop
+
+	// Item-completion callback helper. The usecase owns folder lifecycle;
+	// the lower-level service reports per-item completion facts only.
+	notifyItemCompleted := func(itemIndex int, item PlanItem) {
 		if s.eventHandler != nil {
-			s.eventHandler.OnFolderCompleted(folderPath)
+			s.eventHandler.OnItemCompleted(itemIndex, item)
 		}
-		emittedFolderCompleted[folderPath] = true
 	}
 
 	// Task 4/5A:
@@ -182,7 +167,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 				}
 				if ff.folderPath != "" {
 					failedFolders[ff.folderPath] = true
-					hadRootedPreconditionFailure = true
+					preconditionFailed = true
 					continue
 				}
 
@@ -239,10 +224,10 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 		batchItems := currentBatch
 		batchIndices := currentBatchIndices
-		result, err := s.executeConvertPoolWithTracking(plan, sessionID, currentBatch, currentBatchIndices, failedFolders, successfulFolders)
+		result, err := s.executeConvertPoolWithTracking(plan, sessionID, currentBatch, currentBatchIndices, failedFolders, make(map[string]bool))
 		if plan.RootPath != "" {
 			for i, batchItem := range batchItems {
-				emitFolderCompletedIfReady(getFolderForItem(plan.RootPath, batchItem), batchIndices[i])
+				notifyItemCompleted(batchIndices[i], batchItem)
 			}
 		}
 		currentBatch = nil
@@ -266,7 +251,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 
 		// Skip if folder already failed (per-folder fail-fast)
 		if folderPath != "" && failedFolders[folderPath] {
-			emitFolderCompletedIfReady(folderPath, i)
+			notifyItemCompleted(i, item)
 			continue
 		}
 
@@ -280,8 +265,8 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 				}
 				if folderPath != "" {
 					failedFolders[folderPath] = true
-					hadRootedPreconditionFailure = true
-					emitFolderCompletedIfReady(folderPath, i)
+					preconditionFailed = true
+					notifyItemCompleted(i, item)
 					continue
 				}
 				if s.repo != nil {
@@ -315,7 +300,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 			}
 
 			if folderPath != "" && failedFolders[folderPath] {
-				emitFolderCompletedIfReady(folderPath, i)
+				notifyItemCompleted(i, item)
 				continue
 			}
 
@@ -346,7 +331,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 				// Mark folder as failed for per-folder fail-fast
 				if folderPath != "" {
 					failedFolders[folderPath] = true
-					emitFolderCompletedIfReady(folderPath, i)
+					notifyItemCompleted(i, item)
 				}
 				if firstExecutionErr == nil {
 					firstExecutionErr = fmt.Errorf("delete item failed: %v", delErr)
@@ -366,10 +351,9 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 				continue
 			}
 
-			// Task 4: Mark folder as successful after successful delete
+			// Notify usecase that item completed successfully.
 			if folderPath != "" {
-				successfulFolders[folderPath] = true
-				emitFolderCompletedIfReady(folderPath, i)
+				notifyItemCompleted(i, item)
 			}
 		}
 	}
@@ -385,19 +369,6 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 	}
 
-	if hadRootedPreconditionFailure && len(successfulFolders) == 0 {
-		if s.repo != nil {
-			_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", "all folders failed precondition checks")
-		}
-		return &ExecuteResult{
-			SessionID: sessionID,
-			PlanID:    plan.PlanID,
-			Status:    "precondition_failed",
-			ErrorCode: "EXEC_PRECONDITION_FAILED",
-			ErrorMsg:  "all folders failed precondition checks",
-		}, errors.New("all folders failed precondition checks")
-	}
-
 	if firstExecutionErr != nil {
 		if s.repo != nil {
 			_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXECUTION_FAILED", firstExecutionErr.Error())
@@ -409,6 +380,23 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 			ErrorCode: "EXECUTION_FAILED",
 			ErrorMsg:  firstExecutionErr.Error(),
 		}, firstExecutionErr
+	}
+
+	// Rooted precondition failures: the per-folder fail-fast policy allowed
+	// execution to continue across folders, but the overall result must still
+	// reflect that precondition validation failed.
+	if preconditionFailed {
+		precondErr := errors.New("precondition validation failed for one or more items")
+		if s.repo != nil {
+			_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", precondErr.Error())
+		}
+		return &ExecuteResult{
+			SessionID: sessionID,
+			PlanID:    plan.PlanID,
+			Status:    "precondition_failed",
+			ErrorCode: "EXEC_PRECONDITION_FAILED",
+			ErrorMsg:  precondErr.Error(),
+		}, precondErr
 	}
 
 	if s.repo != nil {

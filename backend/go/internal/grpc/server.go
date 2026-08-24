@@ -1,14 +1,11 @@
 package grpc
 
 import (
-	"path/filepath"
-
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
+	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
-
-// Package-level hooks for deterministic testing
-var filepathAbs = filepath.Abs
 
 // OnseiServer implements pb.OnseiServiceServer.
 //
@@ -17,12 +14,33 @@ var filepathAbs = filepath.Abs
 type OnseiServer struct {
 	pb.UnimplementedOnseiServiceServer
 
-	repo      *sqlite.Repository
-	configDir string
-	ffmpeg    string
+	repo           *sqlite.Repository
+	configDir      string
+	ffmpeg         string
+	planService    planusecase.Service
+	executeService executeusecase.Service
 }
 
-// NewOnseiServer creates a new OnseiServer.
+// NewOnseiServer creates a new OnseiServer with default service construction.
+// This preserves backward compatibility with existing callers.
 func NewOnseiServer(repo *sqlite.Repository, configDir string, ffmpegPath string) *OnseiServer {
-	return &OnseiServer{repo: repo, configDir: configDir, ffmpeg: ffmpegPath}
+	return NewOnseiServerWithServices(
+		planusecase.NewService(repo, configDir),
+		executeusecase.NewService(repo, configDir),
+		repo,
+		configDir,
+		ffmpegPath,
+	)
+}
+
+// NewOnseiServerWithServices creates a new OnseiServer with injected services.
+// This enables clean dependency injection for testing and future wiring.
+func NewOnseiServerWithServices(planService planusecase.Service, executeService executeusecase.Service, repo *sqlite.Repository, configDir string, ffmpegPath string) *OnseiServer {
+	return &OnseiServer{
+		repo:           repo,
+		configDir:      configDir,
+		ffmpeg:         ffmpegPath,
+		planService:    planService,
+		executeService: executeService,
+	}
 }
