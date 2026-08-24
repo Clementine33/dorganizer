@@ -123,6 +123,7 @@ class _FilePaneHeader extends StatelessWidget {
   final bool hasFiles;
   final VoidCallback onSelectAll;
   final VoidCallback onClearSelection;
+  final VoidCallback onInvertSelection;
 
   const _FilePaneHeader({
     required this.selectedCount,
@@ -130,6 +131,7 @@ class _FilePaneHeader extends StatelessWidget {
     required this.hasFiles,
     required this.onSelectAll,
     required this.onClearSelection,
+    required this.onInvertSelection,
   });
 
   @override
@@ -169,6 +171,15 @@ class _FilePaneHeader extends StatelessWidget {
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               child: const Text('None', style: TextStyle(fontSize: 12)),
+            ),
+            TextButton(
+              onPressed: onInvertSelection,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Invert', style: TextStyle(fontSize: 12)),
             ),
           ],
         ],

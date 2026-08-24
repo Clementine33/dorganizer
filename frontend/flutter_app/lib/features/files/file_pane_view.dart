@@ -91,6 +91,12 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
     widget.onSelectionChanged({});
   }
 
+  void _invertSelection() {
+    final allPaths = _files.map((e) => e.path).toSet();
+    final inverted = allPaths.difference(widget.selectedPaths);
+    widget.onSelectionChanged(inverted);
+  }
+
   /// Bridges for use by tests. Actual logic lives in [performDelete] extension.
   @visibleForTesting
   Future<void> triggerDelete() async => performDelete();
@@ -159,6 +165,7 @@ class _FilePaneWidgetState extends State<FilePaneWidget> {
           hasFiles: _files.isNotEmpty,
           onSelectAll: _selectAll,
           onClearSelection: _clearSelection,
+          onInvertSelection: _invertSelection,
         ),
         Expanded(
           child: _FilePaneFileListBody(
