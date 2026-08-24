@@ -1,3 +1,4 @@
+import 'package:dropdown_search/dropdown_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
@@ -190,6 +191,109 @@ void main() {
     expect(exception, isNull);
   });
 
+  testWidgets('folder selector popup shows a search field after reload', (
+    tester,
+  ) async {
+    final key = GlobalKey<FolderPaneWidgetState>();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 240,
+            child: FolderPaneWidget(
+              key: key,
+              channel: channel,
+              selectedRoot: '/root',
+              selectedFolder: null,
+              selectedFolders: const {},
+              onFolderSelected: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    key.currentState!.injectFoldersForTest(
+      ['/root/alpha', '/root/beta'],
+      root: '/root',
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownSearch<String>));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TextField), findsWidgets);
+  });
+
+  testWidgets('reload keeps the folder selector within the narrow pane', (
+    tester,
+  ) async {
+    final key = GlobalKey<FolderPaneWidgetState>();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 240,
+            child: FolderPaneWidget(
+              key: key,
+              channel: channel,
+              selectedRoot: '/root',
+              selectedFolder: null,
+              selectedFolders: const {},
+              onFolderSelected: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    key.currentState!.injectFoldersForTest(
+      ['/root/alpha', '/root/beta'],
+      root: '/root',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Directory'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('searchable selector returns full folder path on selection', (
+    tester,
+  ) async {
+    final key = GlobalKey<FolderPaneWidgetState>();
+    String? selectedPath;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FolderPaneWidget(
+            key: key,
+            channel: channel,
+            selectedRoot: '/root',
+            selectedFolder: null,
+            selectedFolders: const {},
+            onFolderSelected: (path) => selectedPath = path,
+          ),
+        ),
+      ),
+    );
+
+    key.currentState!.injectFoldersForTest(
+      ['/root/alpha', '/root/beta'],
+      root: '/root',
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownSearch<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('beta').last, warnIfMissed: false);
+    await tester.pumpAndSettle();
+
+    expect(selectedPath, '/root/beta');
+  });
+
   // =========================================================================
   // Task 5: Structured Error State Tests
   // =========================================================================
@@ -355,6 +459,23 @@ void main() {
         find.widgetWithText(FilterChip, 'Error View'),
       );
       expect(chip.selected, isTrue);
+    });
+
+    test('folder dropdown filter matches display name case-insensitively', () {
+      const root = '/root';
+
+      expect(
+        folderMatchesDropdownFilter('/root/Alpha', 'alpha', root),
+        isTrue,
+      );
+      expect(
+        folderMatchesDropdownFilter('/root/Beta', 'alpha', root),
+        isFalse,
+      );
+      expect(
+        folderMatchesDropdownFilter('/root/Nested/Child', 'nested', root),
+        isTrue,
+      );
     });
 
     test(

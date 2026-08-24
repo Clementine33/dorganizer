@@ -1,3 +1,4 @@
+import 'package:dropdown_search/dropdown_search.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -28,6 +29,47 @@ List<String> filterFoldersForErrorView(
             errorFolderPaths.contains(normalizePathForComparison(folder)),
       )
       .toList();
+}
+
+@visibleForTesting
+String folderDisplayNameForRoot(String folder, String? root) {
+  final normalizedFolder = folder.replaceAll('\\', '/');
+  final folderSegments = normalizedFolder
+      .split('/')
+      .where((segment) => segment.isNotEmpty)
+      .toList();
+
+  if (root == null || root.isEmpty) {
+    return folderSegments.isNotEmpty ? folderSegments.last : folder;
+  }
+
+  final normalizedRoot = root
+      .replaceAll('\\', '/')
+      .replaceAll(RegExp(r'/+$'), '');
+  final rootPrefix = '$normalizedRoot/';
+  if (normalizedFolder.startsWith(rootPrefix)) {
+    final relative = normalizedFolder.substring(rootPrefix.length);
+    final relativeSegments = relative
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (relativeSegments.isNotEmpty) {
+      return relativeSegments.first;
+    }
+  }
+
+  return folderSegments.isNotEmpty ? folderSegments.last : folder;
+}
+
+@visibleForTesting
+bool folderMatchesDropdownFilter(String folder, String filter, String? root) {
+  final normalizedFilter = filter.trim().toLowerCase();
+  if (normalizedFilter.isEmpty) {
+    return true;
+  }
+
+  final displayName = folderDisplayNameForRoot(folder, root).toLowerCase();
+  return displayName.contains(normalizedFilter);
 }
 
 class FolderPaneWidget extends StatefulWidget {
@@ -62,10 +104,11 @@ class FolderPaneWidget extends StatefulWidget {
   });
 
   @override
-  State<FolderPaneWidget> createState() => _FolderPaneWidgetState();
+  State<FolderPaneWidget> createState() => FolderPaneWidgetState();
 }
 
-class _FolderPaneWidgetState extends State<FolderPaneWidget> {
+@visibleForTesting
+class FolderPaneWidgetState extends State<FolderPaneWidget> {
   late final OnseiServiceClient _client;
 
   List<String> _folders = [];
@@ -252,33 +295,31 @@ class _FolderPaneWidgetState extends State<FolderPaneWidget> {
   //     widget.selectedFolders.isNotEmpty && !_allFoldersSelected;
 
   String _folderDisplayName(String folder) {
-    final normalizedFolder = folder.replaceAll('\\', '/');
-    final folderSegments = normalizedFolder
-        .split('/')
-        .where((segment) => segment.isNotEmpty)
-        .toList();
+    return folderDisplayNameForRoot(folder, _selectedRoot);
+  }
 
-    final root = _selectedRoot;
-    if (root == null || root.isEmpty) {
-      return folderSegments.isNotEmpty ? folderSegments.last : folder;
+  /// Populates folder state directly for widget tests, bypassing gRPC which
+  /// cannot complete in flutter_test's FakeAsync zone on this platform.
+  @visibleForTesting
+  void injectFoldersForTest(List<String> allFolders, {String? root}) {
+    if (root != null) {
+      _selectedRoot = root;
     }
-
-    final normalizedRoot = root
-        .replaceAll('\\', '/')
-        .replaceAll(RegExp(r'/+$'), '');
-    final rootPrefix = '$normalizedRoot/';
-    if (normalizedFolder.startsWith(rootPrefix)) {
-      final relative = normalizedFolder.substring(rootPrefix.length);
-      final relativeSegments = relative
-          .split('/')
-          .where((segment) => segment.isNotEmpty)
-          .toList();
-      if (relativeSegments.isNotEmpty) {
-        return relativeSegments.first;
-      }
+    final filtered = filterFoldersForErrorView(
+      allFolders,
+      widget.errorStateMap,
+      widget.showErrorView,
+    );
+    setState(() {
+      _allFolders = allFolders;
+      _folders = filtered;
+      _dropdownFolder = filtered.isNotEmpty ? filtered.first : null;
+      _loading = false;
+      _error = null;
+    });
+    if (_dropdownFolder != null) {
+      widget.onFolderSelected(_dropdownFolder!);
     }
-
-    return folderSegments.isNotEmpty ? folderSegments.last : folder;
   }
 
   @override
@@ -367,33 +408,57 @@ class _FolderPaneWidgetState extends State<FolderPaneWidget> {
         if (_folders.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            child: DropdownButtonFormField<String>(
-              initialValue: _dropdownFolder,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Directory',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: _folders
-                  .map(
-                    (folder) => DropdownMenuItem<String>(
-                      value: folder,
-                      child: Text(
-                        style: TextStyle(fontFamily: 'SarasaUiSC'),
-                        _folderDisplayName(folder),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
+            child: DropdownSearch<String>(
+              selectedItem: _dropdownFolder,
+              items: (filter, loadProps) => _folders,
+              itemAsString: _folderDisplayName,
+              filterFn: (folder, filter) =>
+                  folderMatchesDropdownFilter(folder, filter, _selectedRoot),
+              onSelected: (value) {
                 if (value == null) return;
                 setState(() {
                   _dropdownFolder = value;
                 });
                 widget.onFolderSelected(value);
               },
+              dropdownBuilder: (context, selectedItem) {
+                return Text(
+                  selectedItem != null
+                      ? folderDisplayNameForRoot(selectedItem, _selectedRoot)
+                      : '',
+                  style: const TextStyle(fontFamily: 'SarasaUiSC'),
+                  // overflow: TextOverflow.ellipsis,
+                );
+              },
+              decoratorProps: const DropDownDecoratorProps(
+                decoration: InputDecoration(
+                  labelText: 'Directory',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              popupProps: PopupProps.menu(
+                showSearchBox: true,
+                searchDelay: const Duration(milliseconds: 250),
+                itemBuilder: (context, item, isDisabled, isSelected) {
+                  return ListTile(
+                    selected: isSelected,
+                    dense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 8.0,
+                    ),
+                    title: Text(
+                      folderDisplayNameForRoot(item, _selectedRoot),
+                      style: const TextStyle(
+                        fontFamily: 'SarasaUiSC',
+                        fontSize: 16.0,
+                        height: 1.3,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         Padding(
