@@ -159,6 +159,73 @@ func TestScannerService_ScanRoot_WithoutRepo(t *testing.T) {
 	}
 }
 
+// failingBatchRepo wraps MockRepository and fails every WriteStagingBatch call
+// after recording the entries, so cleanup has something to remove.
+type failingBatchRepo struct {
+	*MockRepository
+	batchErr   error
+	mergeCalls int
+}
+
+func (f *failingBatchRepo) WriteStagingBatch(sessionID string, batch []StagingEntry) error {
+	f.StagingEntries = append(f.StagingEntries, batch...)
+	return f.batchErr
+}
+
+func (f *failingBatchRepo) MergeStaging(sessionID, rootPath string, stalePaths []string) (int, error) {
+	f.mergeCalls++
+	return f.MergeResult, f.MergeError
+}
+
+// TestScanRootStagingWriteFailureIsNotReportedAsCancellation verifies that a
+// staging write failure during the pipeline is reported as STAGING_WRITE_FAILED
+// and the original write error, even though the consumer's cancellation makes
+// the walker observe context.Canceled. Merge must be skipped and staging
+// cleaned up.
+func TestScanRootStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
+	tmp := t.TempDir()
+	// More than pipelineBatchSize (1000) entries forces at least one mid-pipeline
+	// batch flush, which cancels the derived context; the walker then observes
+	// context.Canceled.
+	for i := 0; i < 15; i++ {
+		album := filepath.Join(tmp, fmt.Sprintf("album-%02d", i))
+		if err := os.MkdirAll(album, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", album, err)
+		}
+		for j := 0; j < 100; j++ {
+			if err := os.WriteFile(filepath.Join(album, fmt.Sprintf("song-%03d.wav", j)), []byte("dummy"), 0644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+		}
+	}
+
+	injected := errors.New("simulated staging write failure")
+	mock := &failingBatchRepo{MockRepository: &MockRepository{}, batchErr: injected}
+	svc := NewScannerService(mock)
+
+	_, err := svc.ScanRoot(tmp)
+	if err == nil {
+		t.Fatal("expected ScanRoot to fail")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected returned error to wrap the staging write failure, got: %v", err)
+	}
+
+	if mock.mergeCalls != 0 {
+		t.Errorf("expected merge to be skipped after staging failure, got %d merge calls", mock.mergeCalls)
+	}
+	if len(mock.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(mock.Sessions))
+	}
+	if mock.Sessions[0].Status != "failed" || mock.Sessions[0].ErrorCode != "STAGING_WRITE_FAILED" {
+		t.Errorf("expected session failed/STAGING_WRITE_FAILED, got status=%q code=%q msg=%q",
+			mock.Sessions[0].Status, mock.Sessions[0].ErrorCode, mock.Sessions[0].ErrorMessage)
+	}
+	if len(mock.StagingEntries) != 0 {
+		t.Errorf("expected staging cleanup after failure, got %d entries", len(mock.StagingEntries))
+	}
+}
+
 func TestScannerService_ScanRoot_UpdatesSessionOnFailure(t *testing.T) {
 	tmp := t.TempDir()
 

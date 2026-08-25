@@ -27,16 +27,27 @@ func (s *serviceImpl) Scan(ctx context.Context, req Request, emit func(Event)) (
 	}
 
 	if req.RootPath == "" {
-		return Result{}, NewError(ErrKindInvalidArgument, "ROOT_PATH_REQUIRED", "root_path is required", nil)
+		err := NewError(ErrKindInvalidArgument, "ROOT_PATH_REQUIRED", "root_path is required", nil)
+		emit(Event{Type: "error", Stage: "scan", Message: err.Message})
+		return Result{}, err
 	}
 
+	// Classify validation failures so a missing root, a non-directory root,
+	// and an inaccessible root (e.g. EACCES) are not conflated, and report each
+	// as a terminal `error` event per the scan lifecycle contract.
 	fi, statErr := os.Stat(req.RootPath)
-	if statErr != nil || !fi.IsDir() {
-		cause := statErr
-		if statErr == nil {
-			cause = fmt.Errorf("not a directory: %s", req.RootPath)
-		}
-		return Result{}, NewError(ErrKindInvalidArgument, "ROOT_PATH_NOT_FOUND", fmt.Sprintf("root_path not found: %s", req.RootPath), cause)
+	var validationErr *Error
+	switch {
+	case statErr != nil && os.IsNotExist(statErr):
+		validationErr = NewError(ErrKindInvalidArgument, "ROOT_PATH_NOT_FOUND", fmt.Sprintf("root_path not found: %s", req.RootPath), statErr)
+	case statErr != nil:
+		validationErr = NewError(ErrKindInternal, "ROOT_PATH_STAT_FAILED", fmt.Sprintf("failed to access root_path: %s", req.RootPath), statErr)
+	case !fi.IsDir():
+		validationErr = NewError(ErrKindInvalidArgument, "ROOT_PATH_NOT_DIRECTORY", fmt.Sprintf("root_path is not a directory: %s", req.RootPath), nil)
+	}
+	if validationErr != nil {
+		emit(Event{Type: "error", Stage: "scan", Message: validationErr.Message})
+		return Result{}, validationErr
 	}
 
 	emit(Event{Type: "started", Stage: "scan", Message: fmt.Sprintf("Scanning %s", req.RootPath)})

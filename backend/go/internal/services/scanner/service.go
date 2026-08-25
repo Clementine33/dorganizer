@@ -321,19 +321,22 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 
 		// Update session status to failed
 		if s.repo != nil {
-			if producerErr != nil {
-				s.repo.UpdateScanSessionStatus(sessionID, "failed", "SCAN_WALK_FAILED", producerErr.Error())
-			} else {
+			if consumerErr != nil {
 				s.repo.UpdateScanSessionStatus(sessionID, "failed", "STAGING_WRITE_FAILED", consumerErr.Error())
+			} else {
+				s.repo.UpdateScanSessionStatus(sessionID, "failed", "SCAN_WALK_FAILED", producerErr.Error())
 			}
 		}
 
-		// Return primary error (not cleanup failure)
+		// Return primary error (not cleanup failure). A staging-write failure
+		// wins over a concurrently observed walker cancellation: the consumer
+		// cancels the derived context to stop the walk, so the producer
+		// commonly records context.Canceled that is a symptom, not the cause.
 		_ = cleanupFailure // We could log this, but primary error is what's expected
-		if producerErr != nil {
-			return "", fmt.Errorf("walk directory: %w", producerErr)
+		if consumerErr != nil {
+			return "", fmt.Errorf("write staging: %w", consumerErr)
 		}
-		return "", fmt.Errorf("write staging: %w", consumerErr)
+		return "", fmt.Errorf("walk directory: %w", producerErr)
 	}
 
 	// Both succeeded - proceed to merge

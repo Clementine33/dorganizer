@@ -53,6 +53,48 @@ func TestScanServiceValidatesRoot(t *testing.T) {
 	}
 }
 
+// TestScanServiceEmitsErrorEventForInvalidRoots verifies validation failures
+// are classified correctly (not-directory vs not-found vs required) and each
+// emits a single terminal `error` event before returning.
+func TestScanServiceEmitsErrorEventForInvalidRoots(t *testing.T) {
+	dir := t.TempDir()
+	repo := newTestRepo(t, dir)
+	svc := NewService(repo)
+
+	filePath := filepath.Join(dir, "somefile.txt")
+	if err := os.WriteFile(filePath, []byte("x"), 0644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		root string
+		code string
+	}{
+		{name: "empty", root: "", code: "ROOT_PATH_REQUIRED"},
+		{name: "missing", root: filepath.Join(dir, "does-not-exist"), code: "ROOT_PATH_NOT_FOUND"},
+		{name: "file-as-root", root: filePath, code: "ROOT_PATH_NOT_DIRECTORY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []Event
+			_, err := svc.Scan(context.Background(), Request{RootPath: tc.root}, func(ev Event) {
+				events = append(events, ev)
+			})
+			var scanErr *Error
+			if !errors.As(err, &scanErr) {
+				t.Fatalf("expected *scan.Error, got %T: %v", err, err)
+			}
+			if scanErr.Code != tc.code {
+				t.Errorf("expected Code=%q, got %q", tc.code, scanErr.Code)
+			}
+			if len(events) != 1 || events[0].Type != "error" {
+				t.Errorf("expected a single error event, got %+v", events)
+			}
+		})
+	}
+}
+
 // TestScanServiceEmitsEventsAndResult verifies the happy path over a real
 // sqlite repo: started -> (progress) -> completed, scan_id non-empty and
 // matching the result, final FilesScanned equal to the audio file count.
