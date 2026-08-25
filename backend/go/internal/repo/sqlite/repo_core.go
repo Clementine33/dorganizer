@@ -263,6 +263,35 @@ CREATE TABLE IF NOT EXISTS execute_sessions (
     error_message TEXT,
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
+
+-- Libraries (web library views)
+CREATE TABLE IF NOT EXISTS libraries (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    root_path TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    last_scan_at TEXT,
+    last_scan_status TEXT NOT NULL DEFAULT '',
+    last_scan_error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path ON libraries(root_path);
+
+-- Library folders derived from scanned entries
+CREATE TABLE IF NOT EXISTS library_folders (
+    id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    relative_path TEXT NOT NULL DEFAULT '',
+    audio_file_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_lib_path ON library_folders(library_id, path);
 `
 	if _, err := db.Exec(schemaTables); err != nil {
 		return err
