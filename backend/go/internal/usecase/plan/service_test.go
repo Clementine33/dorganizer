@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -967,5 +968,49 @@ func TestPlan_Slim_NoScope_RequireScopeDisabled_AllowsLegacyGlobalPath(t *testin
 	// 5. No folder errors for valid entries.
 	if len(resp.Errors) != 0 {
 		t.Errorf("expected 0 errors for valid entries in legacy global path, got %d: %+v", len(resp.Errors), resp.Errors)
+	}
+}
+
+// TestPlan_ImmediateSuccessivePlans_DistinctIDs verifies that immediate
+// successive Plan calls each persist under a unique plan ID. Plan IDs were
+// second-resolution timestamps, so rapid calls within one second collided on
+// the plans primary key and failed with PLAN_ID_CONFLICT; the ID generator
+// now carries nanosecond resolution while keeping the "plan-" prefix.
+func TestPlan_ImmediateSuccessivePlans_DistinctIDs(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	repo := newTestRepo(t, tmpDir)
+
+	svc := NewService(repo, tmpDir)
+	seen := make(map[string]bool)
+	const iterations = 10
+	for i := 0; i < iterations; i++ {
+		src := filepath.Join(tmpDir, fmt.Sprintf("track-%02d.flac", i))
+		writeDummyFile(t, src)
+		insertEntry(t, repo, src, tmpDir, "audio/flac", 1000, nil)
+
+		// single_delete exercises the shared generatePlanID/persist path
+		// without requiring analysis metadata.
+		resp, err := svc.Plan(ctx, Request{
+			PlanType:    "single_delete",
+			SourceFiles: []string{src},
+		})
+		if err != nil {
+			t.Fatalf("Plan iteration %d failed: %v", i, err)
+		}
+		if !strings.HasPrefix(resp.PlanID, "plan-") {
+			t.Fatalf("PlanID %q lost the plan- prefix", resp.PlanID)
+		}
+		if seen[resp.PlanID] {
+			t.Fatalf("duplicate plan ID %q across %d successive calls", resp.PlanID, i)
+		}
+		seen[resp.PlanID] = true
+
+		if _, err := repo.GetPlan(resp.PlanID); err != nil {
+			t.Fatalf("GetPlan(%q) after creation failed: %v", resp.PlanID, err)
+		}
+	}
+	if len(seen) != iterations {
+		t.Fatalf("expected %d distinct plan IDs, got %d", iterations, len(seen))
 	}
 }

@@ -1,6 +1,7 @@
 package pathnorm
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +35,75 @@ func TestIsWindowsUNCPath(t *testing.T) {
 				t.Fatalf("IsWindowsUNCPath(%q)=%v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsWithinRoot(t *testing.T) {
+	tests := []struct {
+		name      string
+		root      string
+		candidate string
+		want      bool
+	}{
+		{name: "same POSIX path", root: "/music", candidate: "/music", want: true},
+		{name: "POSIX descendant", root: "/music", candidate: "/music/album/track.flac", want: true},
+		{name: "rejects sibling prefix", root: "/music", candidate: "/music-other/track.flac", want: false},
+		{name: "cleans parent traversal", root: "/music", candidate: "/music/album/../track.flac", want: true},
+		{name: "rejects escaped traversal", root: "/music", candidate: "/music/../outside.flac", want: false},
+		{name: "Windows separators and case", root: `C:\Music`, candidate: `c:\music\Album\track.flac`, want: true},
+		{name: "same Windows drive root", root: `C:\`, candidate: `c:/`, want: true},
+		{name: "rejects another Windows drive", root: `C:\Music`, candidate: `D:\Music\track.flac`, want: false},
+		{name: "UNC comparison is case insensitive", root: `\\Server\Share\Music`, candidate: `\\server\share\music\track.flac`, want: true},
+		{name: "empty candidate", root: "/music", candidate: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsWithinRoot(tt.root, tt.candidate); got != tt.want {
+				t.Fatalf("IsWithinRoot(%q, %q) = %v, want %v", tt.root, tt.candidate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsResolvedWithinRoot(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "library")
+	insideDir := filepath.Join(root, "album")
+	outsideDir := filepath.Join(workspace, "outside")
+	if err := os.MkdirAll(insideDir, 0o755); err != nil {
+		t.Fatalf("create inside directory: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("create outside directory: %v", err)
+	}
+	insideFile := filepath.Join(insideDir, "inside.flac")
+	outsideFile := filepath.Join(outsideDir, "outside.flac")
+	if err := os.WriteFile(insideFile, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("create inside file: %v", err)
+	}
+	if err := os.WriteFile(outsideFile, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("create outside file: %v", err)
+	}
+
+	within, err := IsResolvedWithinRoot(root, insideFile)
+	if err != nil {
+		t.Fatalf("IsResolvedWithinRoot inside file: %v", err)
+	}
+	if !within {
+		t.Fatal("inside file should resolve within root")
+	}
+
+	linkPath := filepath.Join(root, "linked")
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	within, err = IsResolvedWithinRoot(root, filepath.Join(linkPath, filepath.Base(outsideFile)))
+	if err != nil {
+		t.Fatalf("IsResolvedWithinRoot symlink escape: %v", err)
+	}
+	if within {
+		t.Fatal("file reached through an escaping symlink should not resolve within root")
 	}
 }
 

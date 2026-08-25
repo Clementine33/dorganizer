@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -18,11 +19,34 @@ import (
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
+	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
+	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	"google.golang.org/grpc"
 )
 
 var version = "dev"
+
+// defaultCORSOrigins is the fallback ONSEI_CORS_ORIGINS allowlist: the local
+// Vite dev servers from the Vue prototype.
+const defaultCORSOrigins = "http://localhost:5173,http://127.0.0.1:5173"
+
+// parseCORSOrigins splits a comma-separated allowlist into a slice, trimming
+// whitespace and dropping empty segments. An empty input yields the defaults.
+func parseCORSOrigins(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultCORSOrigins
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // retentionCleaner abstracts the repo for startup cleanup so main_test.go can stub it.
 type retentionCleaner interface {
@@ -123,16 +147,54 @@ func main() {
 	pb.RegisterOnseiServiceServer(grpcServer, srv)
 	startPprofServer("127.0.0.1:6060", http.ListenAndServe)
 
+	// HTTP listener beside gRPC: same repository and usecase instances, so
+	// browser and Flutter clients share one SQLite writer and one planner.
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("http listen: %v", err)
+	}
+	httpPort := httpListener.Addr().(*net.TCPAddr).Port
+
+	// Shared scan/plan usecases power both the gRPC server and the HTTP API.
+	scanSvc := scanusecase.NewService(repo)
+	planSvc := planusecase.NewService(repo, configDir)
+
+	httpSrv := &http.Server{
+		Handler: httpapi.NewServer(httpapi.Dependencies{
+			Repo:        repo,
+			ConfigDir:   configDir,
+			Token:       token,
+			CORSOrigins: parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
+			Version:     version,
+			ScanService: scanSvc,
+			PlanService: planSvc,
+		}),
+	}
+	go func() {
+		if err := httpSrv.Serve(httpListener); err != nil && err != http.ErrServerClosed && ctx.Err() == nil {
+			log.Fatalf("http serve: %v", err)
+		}
+	}()
+
 	var gracefulStopOnce sync.Once
 	gracefulStop := func() {
 		gracefulStopOnce.Do(func() {
-			log.Printf("shutdown requested: draining gRPC server")
+			log.Printf("shutdown requested: draining HTTP and gRPC servers")
 
 			forcedExit := time.AfterFunc(5*time.Second, func() {
 				log.Printf("forced shutdown timeout reached")
 				os.Exit(1)
 			})
 			defer forcedExit.Stop()
+
+			// The HTTP server drains first — Shutdown waits for in-flight
+			// requests (SSE scans included) up to its own timeout, which stays
+			// inside the 5s forced-exit guard alongside GracefulStop.
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer shutdownCancel()
+			if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+				log.Printf("http shutdown: %v", err)
+			}
 
 			grpcServer.GracefulStop()
 		})
@@ -144,10 +206,10 @@ func main() {
 	}()
 
 	// Print ready handshake BEFORE blocking — Flutter reads this line
-	fmt.Println(bootstrap.BuildHandshakeLine(port, token, version))
+	fmt.Println(bootstrap.BuildHandshakeLine(port, token, version, httpPort))
 
 	// Block until killed
-	log.Printf("onsei-backend listening on 127.0.0.1:%d (data=%s)", port, dataDir)
+	log.Printf("onsei-backend listening on grpc 127.0.0.1:%d, http 127.0.0.1:%d (data=%s)", port, httpPort, dataDir)
 	if err := grpcServer.Serve(lis); err != nil {
 		if runtime.GOOS == "windows" {
 			const wsacancelled = 10004

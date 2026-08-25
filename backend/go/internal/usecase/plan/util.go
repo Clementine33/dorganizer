@@ -88,7 +88,10 @@ func buildSingleFileOperations(sourceFiles []string, targetFormat, planType stri
 }
 
 func generatePlanID() string {
-	return "plan-" + time.Now().Format("20060102150405")
+	// Nanosecond resolution keeps the plans PK collision-free even for
+	// immediate successive Plan calls within the same second, while
+	// preserving the sortable "plan-<timestamp>" format.
+	return "plan-" + time.Now().Format("20060102150405.000000000")
 }
 
 func generateSnapshotToken() string {

@@ -15,9 +15,12 @@ func TestVersion_DefaultNonEmptyAndEmittedInHandshake(t *testing.T) {
 		t.Fatal("expected default version to be non-empty")
 	}
 
-	handshake := bootstrap.BuildHandshakeLine(43123, "token-1", version)
+	handshake := bootstrap.BuildHandshakeLine(43123, "token-1", version, 54321)
 	if !strings.Contains(handshake, "version="+version) {
 		t.Fatalf("expected handshake to include version %q, got %q", version, handshake)
+	}
+	if !strings.Contains(handshake, "http_port=54321") {
+		t.Fatalf("expected handshake to include http_port, got %q", handshake)
 	}
 }
 
@@ -64,6 +67,43 @@ func TestRunStartupRetentionCleanup_PropagatesRepoError(t *testing.T) {
 	}
 	if err != errTestCleanup {
 		t.Fatalf("expected errTestCleanup, got %v", err)
+	}
+}
+
+func TestParseCORSOrigins(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "empty falls back to defaults",
+			raw:  "",
+			want: []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		},
+		{
+			name: "custom comma-separated with whitespace",
+			raw:  " http://a.test ,http://b.test , ,http://c.test ",
+			want: []string{"http://a.test", "http://b.test", "http://c.test"},
+		},
+		{
+			name: "single origin",
+			raw:  "http://localhost:8080",
+			want: []string{"http://localhost:8080"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCORSOrigins(tt.raw)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got %v want %v", got, tt.want)
+				}
+			}
+		})
 	}
 }
 
