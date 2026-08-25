@@ -8,33 +8,37 @@ on:
 
 jobs:
   go-test:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      # All runtimes (go, node, pnpm, task) come from mise.toml — single source of truth.
+      - uses: jdx/mise-action@v4
         with:
-          go-version-file: backend/go/go.mod
+          version: 2026.8.13
           cache: true
-          cache-dependency-path: backend/go/go.sum
-      - uses: arduino/setup-task@v2
+          cache_key_prefix: mise-go
       - name: Run Go tests
         run: task test:go
 
   web-quality:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # pnpm/action-setup must run first: setup-node's `cache: pnpm`
-      # reads/writes the pnpm store through an existing pnpm binary.
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
         with:
-          version: 11.22.0
-          run_install: false
-      - uses: actions/setup-node@v4
+          version: 2026.8.13
+          cache: true
+          cache_key_prefix: mise-web
+      # mise-action caches tool installs but not the pnpm store; the old
+      # setup-node `cache: pnpm` is gone, so cache the store explicitly.
+      - name: Get pnpm store path
+        id: pnpm-cache
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
         with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Typecheck web app
@@ -43,14 +47,9 @@ jobs:
         run: pnpm test:web
       - name: Build web app
         run: pnpm build:web
-      # Optional e2e smoke: boots the real Go backend (needs Go on the runner)
+      # Optional e2e smoke: boots the real Go backend (go from mise.toml)
       # + Vite via the Playwright webServer launcher. Non-blocking for now —
       # local runs use `task e2e:web` / ONSEI_E2E=1.
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go/go.mod
-          cache: true
-          cache-dependency-path: backend/go/go.sum
       - name: Install Playwright Chromium
         run: pnpm -C frontend/web exec playwright install chromium
       - name: Playwright e2e smoke (optional)
@@ -60,16 +59,44 @@ jobs:
           ONSEI_E2E: '1'
 
   flutter-quality:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.8.13
+          cache: true
+          cache_key_prefix: mise-flutter
+      # Legacy Flutter app is scheduled for removal — keep flutter installed by
+      # its own action (stable channel); only `task` comes from mise.toml here.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
           pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('frontend/flutter_app/pubspec.lock') }}
-      - uses: arduino/setup-task@v2
       - name: Run Flutter tests
         run: task test:flutter
       - name: Run Flutter analyze
         run: task analyze:flutter
+
+  # Windows dev-environment gate: catches regressions in Windows-only paths
+  # (dev-web.mjs isWin/.cmd handling, .exe build) that Linux CI cannot see.
+  # Main jobs run on Linux for speed/cost; this stays lean.
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.8.13
+          cache: true
+          cache_key_prefix: mise-windows
+      - name: Build Windows backend binary
+        run: task build:go:windows-x64
+      - name: Install Playwright Chromium
+        run: pnpm -C frontend/web exec playwright install chromium
+      - name: Playwright e2e smoke (optional, non-blocking)
+        continue-on-error: true
+        run: pnpm -C frontend/web exec playwright test
+        env:
+          ONSEI_E2E: '1'

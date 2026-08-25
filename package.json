@@ -5,7 +5,6 @@
   "engines": {
     "node": ">=26.0.0"
   },
-  "packageManager": "pnpm@11.22.0",
   "scripts": {
     "dev:web": "node scripts/dev-web.mjs",
     "build:web": "pnpm -C frontend/web build",
