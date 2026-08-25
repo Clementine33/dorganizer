@@ -20,6 +20,45 @@ jobs:
       - name: Run Go tests
         run: task test:go
 
+  web-quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # pnpm/action-setup must run first: setup-node's `cache: pnpm`
+      # reads/writes the pnpm store through an existing pnpm binary.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck web app
+        run: pnpm typecheck:web
+      - name: Run web unit tests
+        run: pnpm test:web
+      - name: Build web app
+        run: pnpm build:web
+      # Optional e2e smoke: boots the real Go backend (needs Go on the runner)
+      # + Vite via the Playwright webServer launcher. Non-blocking for now —
+      # local runs use `task e2e:web` / ONSEI_E2E=1.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go/go.mod
+          cache: true
+          cache-dependency-path: backend/go/go.sum
+      - name: Install Playwright Chromium
+        run: pnpm -C frontend/web exec playwright install chromium
+      - name: Playwright e2e smoke (optional)
+        continue-on-error: true
+        run: pnpm -C frontend/web exec playwright test
+        env:
+          ONSEI_E2E: '1'
+
   flutter-quality:
     runs-on: windows-latest
     steps:
