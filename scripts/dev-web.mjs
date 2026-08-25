@@ -99,8 +99,9 @@ backend.on('exit', (code) => {
     process.exit(teardownExitCode)
   } else {
     console.error(`[dev-web] backend exited unexpectedly (code ${code})`)
-    if (vite) vite.kill()
-    process.exit(code ?? 1)
+    // Route through teardown so Windows process-tree cleanup (taskkill /T)
+    // still runs and Vite is not left holding port 5173.
+    teardown(code ?? 1)
   }
 })
 

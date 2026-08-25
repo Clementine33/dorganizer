@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -108,3 +109,52 @@ func TestParseCORSOrigins(t *testing.T) {
 }
 
 var errTestCleanup = errors.New("test cleanup error")
+
+// TestDrainServersStartsBothAndUnblocksOnDeadline verifies the shutdown
+// coordinator starts HTTP and gRPC drains concurrently (gRPC must not wait for
+// the HTTP drain to finish first) and force-stops both once the graceful
+// deadline arrives, so the drain returns.
+func TestDrainServersStartsBothAndUnblocksOnDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	httpEntered := make(chan struct{}, 1)
+	grpcEntered := make(chan struct{}, 1)
+	httpClosed := make(chan struct{}, 1)
+	grpcStopped := make(chan struct{}, 1)
+
+	drainServers(ctx,
+		func(c context.Context) error {
+			httpEntered <- struct{}{}
+			<-c.Done() // HTTP drain blocks past the caller's request
+			return c.Err()
+		},
+		func() error {
+			httpClosed <- struct{}{}
+			return nil
+		},
+		func() {
+			grpcEntered <- struct{}{}
+			<-grpcStopped // gRPC graceful stop blocks until force-stopped
+		},
+		func() {
+			close(grpcStopped)
+		},
+	)
+
+	select {
+	case <-httpEntered:
+	default:
+		t.Error("http shutdown never entered")
+	}
+	select {
+	case <-grpcEntered:
+	default:
+		t.Error("gRPC graceful stop never entered concurrently")
+	}
+	select {
+	case <-httpClosed:
+	default:
+		t.Error("http force-close never ran at the deadline")
+	}
+}

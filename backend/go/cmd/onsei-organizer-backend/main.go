@@ -187,16 +187,13 @@ func main() {
 			})
 			defer forcedExit.Stop()
 
-			// The HTTP server drains first — Shutdown waits for in-flight
-			// requests (SSE scans included) up to its own timeout, which stays
-			// inside the 5s forced-exit guard alongside GracefulStop.
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// Drain HTTP and gRPC concurrently so gRPC gets the full graceful
+			// window instead of whatever remains after HTTP's own timeout. At
+			// the graceful deadline both drains are force-stopped; the outer
+			// forced-exit guard remains as the final process-level fallback.
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer shutdownCancel()
-			if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-				log.Printf("http shutdown: %v", err)
-			}
-
-			grpcServer.GracefulStop()
+			drainServers(shutdownCtx, httpSrv.Shutdown, httpSrv.Close, grpcServer.GracefulStop, grpcServer.Stop)
 		})
 	}
 
@@ -226,6 +223,30 @@ func main() {
 		}
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// drainServers shuts down both servers concurrently so neither consumes the
+// other's graceful window. httpShutdown runs with ctx; at the deadline (ctx
+// done) httpClose and grpcStop force-stop each server so the drain returns.
+func drainServers(ctx context.Context, httpShutdown func(context.Context) error, httpClose func() error, grpcGraceful func(), grpcStop func()) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := httpShutdown(ctx); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		grpcGraceful()
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = httpClose()
+		grpcStop()
+	}()
+	wg.Wait()
 }
 
 func startPprofServer(addr string, serveFn func(string, http.Handler) error) {

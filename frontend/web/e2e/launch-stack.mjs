@@ -136,8 +136,6 @@ function teardown(exitCode = 0) {
   teardownStarted = true
   console.error(`[e2e] teardown(${exitCode}) — stopping stack`)
 
-  if (vite && vite.exitCode === null) vite.kill()
-
   const finish = () => {
     try {
       rmSync(path.dirname(fixtureRoot), { recursive: true, force: true })
@@ -150,26 +148,45 @@ function teardown(exitCode = 0) {
     process.exit(exitCode)
   }
 
-  if (backend.exitCode !== null) return finish()
+  // Vite first: on Windows it was spawned through a .cmd shim (shell: true),
+  // so killing its pid leaves the real Vite process running; taskkill /T takes
+  // the whole tree, and cleanup proceeds only after the tree is gone so tmp
+  // dirs/state are not removed while children still hold them.
+  const stopBackend = () => {
+    if (backend.exitCode !== null) return finish()
 
-  // Graceful stop: EOF on the pipe we hold makes the backend shut down.
-  try {
-    backend.stdin?.end()
-  } catch {
-    /* pipe may already be closed */
+    // Graceful stop: EOF on the pipe we hold makes the backend shut down.
+    try {
+      backend.stdin?.end()
+    } catch {
+      /* pipe may already be closed */
+    }
+
+    if (isWin) {
+      const kill = spawn('taskkill', ['/pid', String(backend.pid), '/t', '/f'])
+      kill.on('error', finish)
+      kill.on('exit', finish)
+    } else {
+      try {
+        process.kill(-backend.pid, 'SIGTERM')
+      } catch {
+        backend.kill('SIGTERM')
+      }
+      setTimeout(finish, 250)
+    }
   }
 
-  if (isWin) {
-    const kill = spawn('taskkill', ['/pid', String(backend.pid), '/t', '/f'])
-    kill.on('error', finish)
-    kill.on('exit', finish)
-  } else {
-    try {
-      process.kill(-backend.pid, 'SIGTERM')
-    } catch {
-      backend.kill('SIGTERM')
+  if (vite && vite.exitCode === null) {
+    if (isWin) {
+      const kill = spawn('taskkill', ['/pid', String(vite.pid), '/t', '/f'])
+      kill.on('error', stopBackend)
+      kill.on('exit', stopBackend)
+    } else {
+      vite.kill()
+      stopBackend()
     }
-    setTimeout(finish, 250)
+  } else {
+    stopBackend()
   }
 }
 
