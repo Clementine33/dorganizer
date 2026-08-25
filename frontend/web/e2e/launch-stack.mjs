@@ -121,8 +121,9 @@ backend.on('exit', (code) => {
     return
   }
   console.error(`[e2e] backend exited unexpectedly (code ${code})`)
-  if (vite) vite.kill()
-  process.exit(code ?? 1)
+  // Route through teardown so fixture/data/state cleanup and Vite shutdown
+  // still run, preserving the unexpected exit code.
+  teardown(code ?? 1)
 })
 
 backend.on('error', (err) => {

@@ -32,18 +32,24 @@ const pageError = computed(() => {
   return null
 })
 
+let treeRequestSeq = 0
+
 async function loadTree(): Promise<void> {
+  const seq = ++treeRequestSeq
   loading.value = true
   treeErrorCode.value = null
   treeError.value = null
   try {
-    tree.value = await api.getFolderTree(libraryId.value, folderId.value)
+    const result = await api.getFolderTree(libraryId.value, folderId.value)
+    if (seq !== treeRequestSeq) return
+    tree.value = result
   } catch (error) {
+    if (seq !== treeRequestSeq) return
     treeErrorCode.value = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : null
     treeError.value = error instanceof Error ? error.message : '发生未知错误'
     tree.value = null
   } finally {
-    loading.value = false
+    if (seq === treeRequestSeq) loading.value = false
   }
 }
 
@@ -61,10 +67,13 @@ onMounted(async () => {
   await loadTree()
 })
 
-watch([libraryId, folderId], () => {
+watch([libraryId, folderId], async () => {
   tree.value = null
   selectedFiles.value = []
   plans.clearError()
+  // Resolve the new library first so activeLibrary reflects it before the
+  // breadcrumb renders while loadTree is still in flight.
+  await prepareLibrary()
   void loadTree()
 })
 

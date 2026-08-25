@@ -18,16 +18,25 @@ function toggleGroup(folder: string): void {
 
 /**
  * Groups operations under the backend-reported successful folder paths by
- * string prefix match — matching against authoritative data, never building
- * or rewriting paths. Operations outside every reported folder fall into the
- * remaining group.
+ * prefix match — matching against authoritative data, never building or
+ * rewriting paths. A folder matches only when the operation path is the
+ * folder itself or continues with a path separator ("/" or "\"), so sibling
+ * prefixes never group under the wrong folder. Operations outside every
+ * reported folder fall into the remaining group.
  */
 function groupOperations(): { folder: string; operations: PlanOperation[] }[] {
   const groups = new Map<string, PlanOperation[]>()
   for (const operation of props.operations) {
     const folder =
-      props.successfulFolders.filter((f) => f && operation.source_path.startsWith(f)).sort((a, b) => b.length - a.length)[0] ??
-      ''
+      props.successfulFolders
+        .filter(
+          (f) =>
+            f &&
+            (operation.source_path === f ||
+              operation.source_path.startsWith(f + '/') ||
+              operation.source_path.startsWith(f + '\\')),
+        )
+        .sort((a, b) => b.length - a.length)[0] ?? ''
     if (!groups.has(folder)) groups.set(folder, [])
     groups.get(folder)!.push(operation)
   }

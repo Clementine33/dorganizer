@@ -19,6 +19,7 @@ export async function* parseSSEStream<T extends SSEEvent>(
   let buffer = ''
   let eventName = 'message'
   let dataLines: string[] = []
+  let completed = false
 
   const dispatch = (): T | null => {
     if (dataLines.length === 0) {
@@ -71,7 +72,18 @@ export async function* parseSSEStream<T extends SSEEvent>(
     }
     const finalEvent = dispatch()
     if (finalEvent) yield finalEvent
+    completed = true
   } finally {
+    if (!completed) {
+      // The consumer stopped iterating before the stream ended: cancel the
+      // underlying source (reader.read is abandoned). Loss of cancellation is
+      // ignored so the original parser or stream error still propagates.
+      try {
+        await reader.cancel()
+      } catch {
+        /* preserve the original error */
+      }
+    }
     reader.releaseLock()
   }
 }

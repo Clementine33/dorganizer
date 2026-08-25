@@ -97,6 +97,7 @@ describe('libraries store', () => {
     const api = apiStub()
     const store = useLibrariesStore()
 
+    store.setActiveLibrary('lib-a')
     await store.loadFolders('lib-a', api)
     store.toggleFolder('folder-a')
     expect(store.selectedFolderIds).toEqual(['folder-a'])
@@ -107,5 +108,36 @@ describe('libraries store', () => {
 
     store.clearSelection()
     expect(store.selectedFolderIds).toEqual([])
+  })
+
+  it('ignores stale folder results when the active library changes mid-load', async () => {
+    let resolveA!: (folders: Folder[]) => void
+    const listFolders = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Folder[]>((resolve) => {
+            resolveA = resolve
+          }),
+      )
+      .mockResolvedValue(folders)
+    const api = apiStub({ listFolders })
+    const store = useLibrariesStore()
+
+    // Load folders for lib-a; while it is in flight the active library
+    // changes and a load for the new library starts and finishes first.
+    const loadA = store.loadFolders('lib-a', api)
+    store.setActiveLibrary('lib-b')
+    const loadB = store.loadFolders('lib-b', api)
+    await loadB
+    expect(store.folders).toEqual(folders)
+    expect(store.foldersLoading).toBe(false)
+
+    // The superseded lib-a request resolves late: it must not overwrite
+    // lib-b's folders or the loading flag.
+    resolveA([{ id: 'stale', name: 'Stale', path: '/stale', relative_path: 'stale', audio_file_count: 1 }])
+    await loadA
+    expect(store.folders).toEqual(folders)
+    expect(store.foldersLoading).toBe(false)
   })
 })

@@ -116,7 +116,18 @@ function teardown(exitCode = 0) {
 
   // Stop Vite first (it is the foreground piece; the backend is the
   // long-lived daemon that must not outlive us).
-  if (vite && vite.exitCode === null) vite.kill()
+  if (vite && vite.exitCode === null) {
+    if (isWin) {
+      // vite was spawned via a .cmd shim (shell: true), so killing its pid
+      // leaves the real Vite process running; taskkill /T takes the whole
+      // tree, mirroring the backend teardown path.
+      const kill = spawn('taskkill', ['/pid', String(vite.pid), '/t', '/f'])
+      kill.on('error', () => {})
+      kill.on('exit', () => {})
+    } else {
+      vite.kill()
+    }
+  }
 
   const finish = () => process.exit(exitCode)
   if (backend.exitCode !== null) return finish()

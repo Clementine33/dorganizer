@@ -58,6 +58,27 @@ describe('parseSSEStream', () => {
     }).rejects.toThrow('Invalid JSON in SSE event "error"')
   })
 
+  it('cancels the underlying source when the iterator is closed before the stream ends', async () => {
+    const encoder = new TextEncoder()
+    let cancelled = 0
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: started\ndata: {"stage":"scan","message":"hi"}\n\n'))
+      },
+      cancel(_reason: unknown) {
+        cancelled += 1
+      },
+    })
+
+    const generator = parseSSEStream<ScanEvent>(stream)
+    const first = await generator.next()
+    expect(first.value).toEqual({ type: 'started', data: { stage: 'scan', message: 'hi' } })
+
+    // Break out of iteration while the stream is still open.
+    await generator.return(undefined as never)
+    expect(cancelled).toBe(1)
+  })
+
   it('surfaces errors raised by the response stream', async () => {
     const failure = new Error('connection reset')
     const stream = new ReadableStream<Uint8Array>({

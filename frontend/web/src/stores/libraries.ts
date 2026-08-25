@@ -8,6 +8,11 @@ import type {
   UpdateLibraryInput,
 } from '@/lib/api/types'
 
+// Monotonic token for folder loads: bumped on every load and whenever the
+// active library changes, so results from superseded or inactive-library
+// requests can be discarded instead of overwriting the current state.
+let foldersRequestSeq = 0
+
 function errorDetails(error: unknown): { code: string | null; message: string } {
   return {
     code: error instanceof ApiError ? error.code : null,
@@ -96,23 +101,29 @@ export const useLibrariesStore = defineStore('libraries', {
     },
     setActiveLibrary(id: string) {
       if (id === this.activeLibraryId) return
+      foldersRequestSeq++ // invalidate any in-flight folder load
       this.activeLibraryId = id
       this.folders = []
+      this.foldersLoading = false
       this.clearSelection()
     },
     async loadFolders(libraryId: string, client: ApiClientContract) {
+      const seq = ++foldersRequestSeq
       this.foldersLoading = true
       this.clearError()
       try {
-        this.folders = await client.listFolders(libraryId)
+        const folders = await client.listFolders(libraryId)
+        if (seq !== foldersRequestSeq || libraryId !== this.activeLibraryId) return
+        this.folders = folders
         this.selectedFolderIds = this.selectedFolderIds.filter((id) =>
           this.folders.some((folder) => folder.id === id),
         )
       } catch (error) {
+        if (seq !== foldersRequestSeq || libraryId !== this.activeLibraryId) return
         this.setError(error)
         throw error
       } finally {
-        this.foldersLoading = false
+        if (seq === foldersRequestSeq) this.foldersLoading = false
       }
     },
     toggleFolder(id: string) {

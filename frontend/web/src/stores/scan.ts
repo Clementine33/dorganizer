@@ -37,14 +37,19 @@ export const useScanStore = defineStore('scan', {
 
       try {
         for await (const event of client.scanLibrary(libraryId, controller.signal)) {
+          // A reset() or a newer scan superseded this request — never let
+          // its events overwrite the current scan state.
+          if (this.controller !== controller) return
           this.applyEvent(event)
         }
+        if (this.controller !== controller) return
         if (this.status === 'scanning') {
           this.status = 'error'
           this.errorCode = 'STREAM_ENDED'
           this.errorMessage = '扫描连接提前结束，请重试。'
         }
       } catch (error) {
+        if (this.controller !== controller) return
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
           this.status = 'cancelled'
           this.message = '扫描已取消'
