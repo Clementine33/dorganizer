@@ -75,9 +75,22 @@ export const useLibrariesStore = defineStore('libraries', {
     async updateLibrary(id: string, input: UpdateLibraryInput, client: ApiClientContract) {
       this.clearError()
       try {
+        const previous = this.libraries.find((library) => library.id === id)
         const updated = await client.updateLibrary(id, input)
         const index = this.libraries.findIndex((library) => library.id === id)
         if (index !== -1) this.libraries[index] = updated
+
+        // The backend deletes all materialized folders and resets scan state
+        // when the canonical root changes; mirror that invalidation locally so
+        // stale folders/selection are not sent back for now-deleted rows.
+        const rootChanged =
+          previous !== undefined && input.root_path !== undefined && previous.root_path !== updated.root_path
+        if (rootChanged && this.activeLibraryId === id) {
+          foldersRequestSeq++ // invalidate any in-flight folder load
+          this.folders = []
+          this.foldersLoading = false
+          this.clearSelection()
+        }
         return updated
       } catch (error) {
         this.setError(error)

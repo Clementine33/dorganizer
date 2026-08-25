@@ -31,6 +31,7 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
     scanLibrary: vi.fn(),
     listFolders: vi.fn().mockResolvedValue(folders),
     getFolderTree: vi.fn(),
+    getPlan: vi.fn(),
     createPlan: vi.fn(),
     listPlans: vi.fn(),
     ...overrides,
@@ -138,6 +139,86 @@ describe('libraries store', () => {
     resolveA([{ id: 'stale', name: 'Stale', path: '/stale', relative_path: 'stale', audio_file_count: 1 }])
     await loadA
     expect(store.folders).toEqual(folders)
+    expect(store.foldersLoading).toBe(false)
+  })
+})
+
+describe('libraries store root update invalidation', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('clears folders and selection when the active library root changes', async () => {
+    const api = apiStub()
+    const store = useLibrariesStore()
+    await store.loadLibraries(api)
+    store.setActiveLibrary('lib-a')
+    await store.loadFolders('lib-a', api)
+    store.toggleFolder('folder-a')
+    expect(store.selectedFolderIds).toEqual(['folder-a'])
+
+    await store.updateLibrary(
+      'lib-a',
+      { name: 'Archive', root_path: 'D:\\Archive' },
+      apiStub({
+        updateLibrary: vi.fn().mockImplementation(async (id, input) => ({
+          ...libraryA,
+          ...input,
+          id,
+          root_path: 'D:\\Archive',
+          last_scan_status: '',
+        })),
+      }),
+    )
+    expect(store.folders).toEqual([])
+    expect(store.selectedFolderIds).toEqual([])
+    expect(store.activeLibraryId).toBe('lib-a')
+  })
+
+  it('keeps folders and selection for a name-only update', async () => {
+    const api = apiStub()
+    const store = useLibrariesStore()
+    await store.loadLibraries(api)
+    store.setActiveLibrary('lib-a')
+    await store.loadFolders('lib-a', api)
+    store.toggleFolder('folder-a')
+
+    await store.updateLibrary('lib-a', { name: 'Renamed' }, api)
+    expect(store.folders).toHaveLength(2)
+    expect(store.selectedFolderIds).toEqual(['folder-a'])
+  })
+
+  it('invalidates an in-flight folder load when the root changes', async () => {
+    let resolveFolders!: (folders: Folder[]) => void
+    const listFolders = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Folder[]>((resolve) => {
+            resolveFolders = resolve
+          }),
+      )
+    const api = apiStub({ listFolders })
+    const store = useLibrariesStore()
+    await store.loadLibraries(api)
+    store.setActiveLibrary('lib-a')
+
+    const load = store.loadFolders('lib-a', api)
+    await store.updateLibrary(
+      'lib-a',
+      { root_path: 'D:\\Archive' },
+      apiStub({
+        updateLibrary: vi.fn().mockImplementation(async (id, input) => ({
+          ...libraryA,
+          ...input,
+          id,
+          root_path: 'D:\\Archive',
+        })),
+      }),
+    )
+    expect(store.folders).toEqual([])
+
+    resolveFolders(folders)
+    await load
+    expect(store.folders).toEqual([])
     expect(store.foldersLoading).toBe(false)
   })
 })

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { THEME_STORAGE_KEY, useTheme } from './use-theme'
 
@@ -39,5 +39,47 @@ describe('useTheme', () => {
     localStorage.setItem(THEME_STORAGE_KEY, 'dark')
     const { theme } = useTheme()
     expect(theme.value).toBe('dark')
+  })
+})
+
+describe('useTheme storage resilience', () => {
+  it('initializes with the default theme when getItem throws', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError: storage disabled')
+    })
+    try {
+      localStorage.clear()
+      const { theme } = useTheme()
+      expect(theme.value).toBe('dark')
+      expect(document.documentElement.classList.contains('dark')).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('still applies the theme when setItem throws', async () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError: storage disabled')
+    })
+    try {
+      const { theme } = useTheme()
+      theme.value = 'light'
+      await nextTick()
+      expect(document.documentElement.classList.contains('dark')).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('dispose still removes the media listener when storage is broken', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    try {
+      const { dispose } = useTheme()
+      expect(() => dispose()).not.toThrow()
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 })

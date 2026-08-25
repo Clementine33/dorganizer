@@ -17,7 +17,14 @@ function systemPrefersDark(): boolean {
  * follows the OS preference and reacts to live changes while selected.
  */
 export function useTheme() {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  // Storage is best-effort: sandboxed or storage-blocked browsers throw on
+  // access, and that must never abort application startup or a theme change.
+  let stored: string | null = null
+  try {
+    stored = localStorage.getItem(THEME_STORAGE_KEY)
+  } catch {
+    stored = null
+  }
   const theme = ref<Theme>(
     stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'dark',
   )
@@ -28,7 +35,13 @@ export function useTheme() {
   }
 
   watch(theme, (value) => {
-    localStorage.setItem(THEME_STORAGE_KEY, value)
+    // Persist first best-effort, then always apply so a write failure cannot
+    // leave the visual theme stuck on the previous value.
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, value)
+    } catch {
+      /* storage unavailable; theme still applies below */
+    }
     apply()
   })
   apply()
