@@ -367,3 +367,116 @@ func TestReplaceLibraryFoldersEscapesWildcardPaths(t *testing.T) {
 		t.Errorf("expected only folder /music/100Xoff, got %+v", folders)
 	}
 }
+
+func TestCreateLibraryCanonicalIdentity(t *testing.T) {
+	repo := newTestRepository(t)
+
+	if _, err := repo.CreateLibrary("One", "/music"); err != nil {
+		t.Fatalf("CreateLibrary(/music) failed: %v", err)
+	}
+	// Lexically equivalent spelling must conflict.
+	if _, err := repo.CreateLibrary("Two", "/music/."); !errors.Is(err, ErrLibraryExists) {
+		t.Errorf("expected ErrLibraryExists for `/music/.`, got %v", err)
+	}
+	// Windows-syntax roots collide on case regardless of the host OS.
+	if _, err := repo.CreateLibrary("Three", `C:\Music`); err != nil {
+		t.Fatalf("CreateLibrary(C:\\Music) failed: %v", err)
+	}
+	if _, err := repo.CreateLibrary("Four", `c:\music\`); !errors.Is(err, ErrLibraryExists) {
+		t.Errorf("expected ErrLibraryExists for `c:\\music\\` vs `C:\\Music`, got %v", err)
+	}
+}
+
+func TestUpdateLibraryEquivalentRootKeepsDerivedState(t *testing.T) {
+	repo := newTestRepository(t)
+	lib, err := repo.CreateLibrary("Music", "/music")
+	if err != nil {
+		t.Fatalf("CreateLibrary failed: %v", err)
+	}
+	if _, err := repo.DB().Exec(`
+		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
+		VALUES ('folder-1', ?, '/music/album', 'album', 'album', 1)
+	`, lib.ID); err != nil {
+		t.Fatalf("seed library folder: %v", err)
+	}
+	if err := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); err != nil {
+		t.Fatalf("UpdateLibraryScanState failed: %v", err)
+	}
+
+	// A spelling-only root edit must not invalidate folders or scan state,
+	// and the stored root is the cleaned canonical form.
+	updated, err := repo.UpdateLibrary(lib.ID, "Music", "/music/.")
+	if err != nil {
+		t.Fatalf("UpdateLibrary failed: %v", err)
+	}
+	if updated.RootPath != "/music" {
+		t.Errorf("expected cleaned root_path /music, got %q", updated.RootPath)
+	}
+	if updated.LastScanAt == nil || updated.LastScanStatus != "completed" {
+		t.Errorf("scan state must be retained for spelling-only root update: %+v", updated)
+	}
+	folders, err := repo.ListLibraryFolders(lib.ID)
+	if err != nil {
+		t.Fatalf("ListLibraryFolders failed: %v", err)
+	}
+	if len(folders) != 1 {
+		t.Errorf("folder list must survive spelling-only root update, got %d folders", len(folders))
+	}
+}
+
+func TestReplaceLibraryFoldersCaseSensitiveSiblings(t *testing.T) {
+	repo := newTestRepository(t)
+	lib, err := repo.CreateLibrary("Music", "/music")
+	if err != nil {
+		t.Fatalf("CreateLibrary failed: %v", err)
+	}
+
+	// Case-distinct sibling directories, each with one audio file. SQLite's
+	// ASCII-case-insensitive LIKE would attribute both files to both folders;
+	// path identity must be binary.
+	insertEntry(t, repo, "/music/Rock", "/music", "Rock", true)
+	insertEntry(t, repo, "/music/rock", "/music", "rock", true)
+	insertEntry(t, repo, "/music/Rock/a.mp3", "/music/Rock", "a.mp3", false)
+	insertEntry(t, repo, "/music/rock/b.mp3", "/music/rock", "b.mp3", false)
+
+	n, err := repo.ReplaceLibraryFolders(lib.ID, "/music")
+	if err != nil {
+		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 folders, got %d", n)
+	}
+
+	folders, err := repo.ListLibraryFolders(lib.ID)
+	if err != nil {
+		t.Fatalf("ListLibraryFolders failed: %v", err)
+	}
+	counts := map[string]int{}
+	for _, f := range folders {
+		counts[f.Path] = f.AudioFileCount
+	}
+	if counts["/music/Rock"] != 1 || counts["/music/rock"] != 1 {
+		t.Errorf("expected each case-distinct folder to count only its own subtree, got %+v", counts)
+	}
+}
+
+func TestListEntriesUnderPathIsCaseSensitive(t *testing.T) {
+	repo := newTestRepository(t)
+	insertEntry(t, repo, "/music/Rock", "/music", "Rock", true)
+	insertEntry(t, repo, "/music/rock", "/music", "rock", true)
+	insertEntry(t, repo, "/music/Rock/a.mp3", "/music/Rock", "a.mp3", false)
+	insertEntry(t, repo, "/music/rock/b.mp3", "/music/rock", "b.mp3", false)
+
+	entries, err := repo.ListEntriesUnderPath("/music/Rock")
+	if err != nil {
+		t.Fatalf("ListEntriesUnderPath failed: %v", err)
+	}
+	var paths []string
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	want := []string{"/music/Rock", "/music/Rock/a.mp3"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("ListEntriesUnderPath(/music/Rock) = %v, want %v", paths, want)
+	}
+}

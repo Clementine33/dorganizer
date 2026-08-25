@@ -2,11 +2,13 @@ package sqlite
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 	_ "modernc.org/sqlite"
 )
 
@@ -38,11 +40,31 @@ type Plan struct {
 	PlanID        string
 	RootPath      string
 	ScanRootPath  string
+	LibraryID     string  // nullable: owning library when known (web-created plans)
 	PlanType      string  // slim, prune, single_delete, single_convert
 	SlimMode      *string // nullable: 1, 2, or nil
 	SnapshotToken string
 	Status        string // ready, executed, stale, canceled
 	CreatedAt     time.Time
+}
+
+// PlanFolderError is a folder-scoped error persisted with a plan so the plan
+// detail can be reconstructed without error_events (which are retention-managed
+// and not plan-scoped).
+type PlanFolderError struct {
+	PlanID     string
+	ErrorIndex int
+	FolderPath string
+	Code       string
+	Message    string
+	Retryable  bool
+}
+
+// PlanSuccessfulFolder records a folder that analyzed cleanly for a plan.
+type PlanSuccessfulFolder struct {
+	PlanID      string
+	FolderIndex int
+	FolderPath  string
 }
 
 // PlanItem represents a single operation in a plan
@@ -149,7 +171,203 @@ func NewRepository(dbPath string) (*Repository, error) {
 		}
 	}
 
+	if err := migrateLibraryRootPathKeys(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := migratePlansLibrarySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Repository{db: db}, nil
+}
+
+// tableHasColumn reports whether a column exists in a table.
+func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateLibraryRootPathKeys adds libraries.root_path_key to pre-key schemas,
+// backfills it from the canonical root identity, and then enforces uniqueness.
+// If existing rows canonicalize to the same key (e.g. `/music` and `/music/.`,
+// or `C:/Music` and `c:/music`), the migration fails with an explicit
+// diagnostic naming the conflicting libraries instead of silently merging or
+// dropping data.
+func migrateLibraryRootPathKeys(db *sql.DB) error {
+	if _, err := db.Exec("ALTER TABLE libraries ADD COLUMN root_path_key TEXT NOT NULL DEFAULT ''"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+
+	rows, err := db.Query("SELECT id, root_path FROM libraries")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type libRow struct{ id, root string }
+	var libs []libRow
+	for rows.Next() {
+		var l libRow
+		if err := rows.Scan(&l.id, &l.root); err != nil {
+			return err
+		}
+		libs = append(libs, l)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	seen := make(map[string]string, len(libs)) // key -> first library id
+	for _, l := range libs {
+		key := pathnorm.RootPathKey(l.root)
+		if first, ok := seen[key]; ok {
+			return fmt.Errorf("library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database", first, l.root, l.id, l.root, key)
+		}
+		seen[key] = l.id
+		if _, err := db.Exec("UPDATE libraries SET root_path_key = ? WHERE id = ?", key, l.id); err != nil {
+			return err
+		}
+	}
+
+	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migratePlansLibrarySchema upgrades pre-library_id plans schemas. SQLite
+// cannot add a REFERENCES column via ALTER TABLE, so the plans table is
+// rebuilt in a transaction (DDL is transactional) with foreign-key enforcement
+// off for the rebuild. After the column exists it backfills ownership from the
+// canonical root identity and ensures the listing index.
+func migratePlansLibrarySchema(db *sql.DB) error {
+	hasCol, err := tableHasColumn(db, "plans", "library_id")
+	if err != nil {
+		return err
+	}
+	if !hasCol {
+		if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+			return err
+		}
+		defer func() {
+			_, _ = db.Exec("PRAGMA foreign_keys=ON")
+		}()
+
+		if _, err := db.Exec("BEGIN"); err != nil {
+			return err
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_, _ = db.Exec("ROLLBACK")
+			}
+		}()
+
+		steps := []string{
+			`CREATE TABLE plans_new (
+				plan_id TEXT PRIMARY KEY,
+				root_path TEXT NOT NULL,
+				scan_root_path TEXT NOT NULL DEFAULT '',
+				library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+				plan_type TEXT NOT NULL,
+				slim_mode TEXT,
+				snapshot_token TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'ready',
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`INSERT INTO plans_new (plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at)
+			 SELECT plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at FROM plans`,
+			`DROP TABLE plans`,
+			`ALTER TABLE plans_new RENAME TO plans`,
+			`CREATE INDEX idx_plans_root ON plans(root_path)`,
+			`CREATE INDEX idx_plans_status ON plans(status)`,
+			`CREATE INDEX idx_plans_library_created ON plans(library_id, created_at)`,
+		}
+		for _, s := range steps {
+			if _, err := db.Exec(s); err != nil {
+				return fmt.Errorf("plans schema migration: %w", err)
+			}
+		}
+		if _, err := db.Exec("COMMIT"); err != nil {
+			return err
+		}
+		committed = true
+	}
+
+	// Backfill ownership: a legacy plan whose scan_root_path uniquely matches a
+	// library's canonical root key is attributed to that library. Unmatched or
+	// ambiguous plans stay nullable and remain visible in the global list.
+	libKeys := map[string]string{}
+	libs, err := db.Query("SELECT id, root_path_key FROM libraries")
+	if err != nil {
+		return err
+	}
+	for libs.Next() {
+		var id, key string
+		if err := libs.Scan(&id, &key); err != nil {
+			libs.Close()
+			return err
+		}
+		libKeys[key] = id
+	}
+	libs.Close()
+	if err := libs.Err(); err != nil {
+		return err
+	}
+
+	plans, err := db.Query("SELECT plan_id, scan_root_path FROM plans WHERE library_id IS NULL")
+	if err != nil {
+		return err
+	}
+	var toUpdate []struct{ id, libraryID string }
+	for plans.Next() {
+		var planID, scanRoot string
+		if err := plans.Scan(&planID, &scanRoot); err != nil {
+			plans.Close()
+			return err
+		}
+		if scanRoot == "" {
+			continue
+		}
+		if libraryID, ok := libKeys[pathnorm.RootPathKey(scanRoot)]; ok {
+			toUpdate = append(toUpdate, struct{ id, libraryID string }{planID, libraryID})
+		}
+	}
+	plans.Close()
+	if err := plans.Err(); err != nil {
+		return err
+	}
+
+	for _, u := range toUpdate {
+		if _, err := db.Exec("UPDATE plans SET library_id = ? WHERE plan_id = ?", u.libraryID, u.id); err != nil {
+			return err
+		}
+	}
+
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func initSchema(db *sql.DB) error {
@@ -211,16 +429,38 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     finished_at TEXT
 );
 
--- Persisted plans
+-- Persisted plans. Legacy schemas without library_id are upgraded by
+-- migratePlansLibrarySchema (the FK cannot be added via ALTER TABLE).
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
     scan_root_path TEXT NOT NULL DEFAULT '',
+    library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
     plan_type TEXT NOT NULL,
     slim_mode TEXT,
     snapshot_token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ready',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Plan-scoped folder outcomes, persisted with the plan for durable detail.
+CREATE TABLE IF NOT EXISTS plan_errors (
+    plan_id TEXT NOT NULL,
+    error_index INTEGER NOT NULL,
+    folder_path TEXT NOT NULL DEFAULT '',
+    code TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    retryable INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (plan_id, error_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS plan_successful_folders (
+    plan_id TEXT NOT NULL,
+    folder_index INTEGER NOT NULL,
+    folder_path TEXT NOT NULL,
+    PRIMARY KEY (plan_id, folder_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
 -- Plan items
@@ -269,6 +509,7 @@ CREATE TABLE IF NOT EXISTS libraries (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     root_path TEXT NOT NULL DEFAULT '',
+    root_path_key TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     last_scan_at TEXT,
@@ -277,6 +518,8 @@ CREATE TABLE IF NOT EXISTS libraries (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path ON libraries(root_path);
+-- idx_libraries_root_path_key is created in migrateLibraryRootPathKeys after
+-- the column exists on both new and legacy schemas.
 
 -- Library folders derived from scanned entries
 CREATE TABLE IF NOT EXISTS library_folders (
@@ -317,6 +560,8 @@ CREATE INDEX IF NOT EXISTS idx_scan_sessions_status ON scan_sessions(status);
 -- Plan indexes
 CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+-- idx_plans_library_created is created by migratePlansLibrarySchema after the
+-- library_id column exists on both new and legacy schemas.
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);
 
 -- Error event indexes

@@ -95,6 +95,54 @@ func IsResolvedWithinRoot(root, candidate string) (bool, error) {
 		!filepath.IsAbs(relative), nil
 }
 
+// CleanRootPath normalizes a library root for storage: backslashes become
+// forward slashes, `.`/`..` elements and repeated separators are collapsed,
+// and root forms (`/`, `C:/`, `//server/share`) keep their trailing structure.
+// The result is the display/storage form; use RootPathKey for identity.
+func CleanRootPath(p string) string {
+	p = NormalizeToPOSIX(p)
+	if isWindowsDriveRoot(p) {
+		return p
+	}
+	if strings.HasPrefix(p, "//?") {
+		rest := strings.TrimPrefix(p, "//?")
+		if rest == "" {
+			return "//?"
+		}
+		cleaned := path.Clean(rest)
+		if cleaned == "." || cleaned == "/" {
+			return "//?"
+		}
+		return "//?" + "/" + strings.TrimPrefix(cleaned, "/")
+	}
+	if strings.HasPrefix(p, "//") {
+		rest := strings.TrimPrefix(p, "//")
+		if rest == "" {
+			return "//"
+		}
+		cleaned := path.Clean(rest)
+		if cleaned == "." || cleaned == "/" {
+			return "//"
+		}
+		return "//" + cleaned
+	}
+	return path.Clean(p)
+}
+
+// RootPathKey returns the canonical identity key for a library root: the
+// cleaned root, with letter case folded only for syntactically Windows-style
+// paths (drive, UNC, and device paths). POSIX paths stay case-sensitive,
+// matching their filesystems. The decision is based on the path syntax, not
+// the host OS, so `C:/Music` and `c:/music` collide wherever the backend runs.
+func RootPathKey(p string) string {
+	cleaned := CleanRootPath(p)
+	normalized := NormalizeToPOSIX(p)
+	if IsWindowsUNCPath(p) || isWindowsDrivePath(normalized) || strings.HasPrefix(normalized, "//?/") {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
 func isWindowsDrivePath(p string) bool {
 	return len(p) >= 2 && p[1] == ':' && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z'))
 }

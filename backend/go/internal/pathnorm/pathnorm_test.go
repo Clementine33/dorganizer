@@ -16,6 +16,38 @@ func TestNormalizeToPOSIX(t *testing.T) {
 	}
 }
 
+func TestCleanRootPathAndRootPathKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		wantClean string
+		wantKey   string
+	}{
+		{name: "posix trailing", in: "/music/", wantClean: "/music", wantKey: "/music"},
+		{name: "posix dot", in: "/music/.", wantClean: "/music", wantKey: "/music"},
+		{name: "posix repeated separators", in: "/music//A//", wantClean: "/music/A", wantKey: "/music/A"},
+		{name: "posix root", in: "/", wantClean: "/", wantKey: "/"},
+		{name: "posix case preserved", in: "/Music", wantClean: "/Music", wantKey: "/Music"},
+		{name: "posix backslash", in: `\music\x`, wantClean: "/music/x", wantKey: "/music/x"},
+		{name: "windows drive preserves case display", in: `C:\Music\`, wantClean: "C:/Music", wantKey: "c:/music"},
+		{name: "windows drive lower", in: "c:/music", wantClean: "c:/music", wantKey: "c:/music"},
+		{name: "windows drive root", in: "C:/", wantClean: "C:/", wantKey: "c:/"},
+		{name: "windows drive case variant collides", in: `C:\MUSIC\Album`, wantClean: "C:/MUSIC/Album", wantKey: "c:/music/album"},
+		{name: "unc case folded", in: `\\SERVER\Share\Dir\..\`, wantClean: "//SERVER/Share", wantKey: "//server/share"},
+		{name: "device path", in: `\\?\C:\music`, wantClean: `//?/C:/music`, wantKey: `//?/c:/music`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CleanRootPath(tt.in); got != tt.wantClean {
+				t.Errorf("CleanRootPath(%q) = %q, want %q", tt.in, got, tt.wantClean)
+			}
+			if got := RootPathKey(tt.in); got != tt.wantKey {
+				t.Errorf("RootPathKey(%q) = %q, want %q", tt.in, got, tt.wantKey)
+			}
+		})
+	}
+}
+
 func TestIsWindowsUNCPath(t *testing.T) {
 	tests := []struct {
 		name string

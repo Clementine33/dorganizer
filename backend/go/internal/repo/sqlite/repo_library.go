@@ -65,21 +65,12 @@ var (
 // the recognized audio extensions (case-insensitive).
 const audioExtCond = `(lower(name) LIKE '%.mp3' OR lower(name) LIKE '%.flac' OR lower(name) LIKE '%.wav' OR lower(name) LIKE '%.m4a' OR lower(name) LIKE '%.aac' OR lower(name) LIKE '%.ogg')`
 
-// escapeLikeLiteral escapes LIKE wildcard characters in a literal so it can be
-// used as a safe prefix pattern with ESCAPE '\'. The backslash is escaped
-// first so the subsequent %/_ escapes cannot be re-interpreted.
-func escapeLikeLiteral(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `%`, `\%`)
-	s = strings.ReplaceAll(s, `_`, `\_`)
-	return s
-}
-
-// escapedPathPrefixSQL is a SQL expression producing an escaped LIKE prefix
-// for the entries column d.path followed by the wildcard '/%'. Directory
-// names may contain % or _ characters, which must not act as patterns, hence
-// ESCAPE '\' is required at each LIKE that uses it.
-const escapedPathPrefixSQL = `(replace(replace(replace(d.path, '\', '\\'), '%', '\%'), '_', '\_') || '/%')`
+// subtreeFilePredicateSQL matches file rows f at or beneath directory row d at
+// a slash boundary, using binary comparison. SQLite LIKE is ASCII
+// case-insensitive by default, which would conflate case-distinct POSIX
+// siblings (`/music/Rock` vs `/music/rock`), so path identity here must be
+// exact and case-sensitive; % and _ are ordinary characters.
+const subtreeFilePredicateSQL = `(f.path = d.path OR substr(f.path, 1, length(d.path) + 1) = d.path || '/')`
 
 // isUniqueConstraintError reports whether err is a SQLite UNIQUE constraint
 // violation.
@@ -93,15 +84,19 @@ func isUniqueConstraintError(err error) bool {
 
 // ==================== Library CRUD ====================
 
-// CreateLibrary inserts a new library. rootPath is stored POSIX-normalized.
+// CreateLibrary inserts a new library. rootPath is stored as the cleaned
+// canonical root (POSIX separators, lexical cleaning); uniqueness is enforced
+// on the canonical identity key, so equivalent spellings (`/music/.`,
+// `C:/Music` vs `c:/music`) conflict.
 func (r *Repository) CreateLibrary(name, rootPath string) (*Library, error) {
-	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
+	rootPath = pathnorm.CleanRootPath(rootPath)
+	rootPathKey := pathnorm.RootPathKey(rootPath)
 	now := time.Now().Format(timeFormat)
 	id := uuid.NewString()
 	_, err := r.db.Exec(`
-		INSERT INTO libraries (id, name, root_path, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, id, name, rootPath, now, now)
+		INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, id, name, rootPath, rootPathKey, now, now)
 	if err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, ErrLibraryExists
@@ -156,7 +151,8 @@ func (r *Repository) GetLibrary(id string) (*Library, error) {
 // updated row. Changing the root invalidates the materialized folder list and
 // prior scan state in the same transaction so no stale paths remain attached.
 func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) {
-	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
+	candidateRoot := pathnorm.CleanRootPath(rootPath)
+	rootPathKey := pathnorm.RootPathKey(candidateRoot)
 	tx, err := r.db.Begin()
 	if err != nil {
 		return nil, err
@@ -172,17 +168,20 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	}
 
 	now := time.Now().Format(timeFormat)
-	rootChanged := currentRoot != rootPath
-	query := `UPDATE libraries SET name = ?, root_path = ?, updated_at = ? WHERE id = ?`
+	// A root change is judged on the canonical identity key, so a spelling-only
+	// edit (e.g. `/music/.` for `/music`) must not invalidate folders or scan
+	// state, while `C:/Music` -> `c:/music` is genuinely unchanged on Windows.
+	rootChanged := pathnorm.RootPathKey(currentRoot) != rootPathKey
+	query := `UPDATE libraries SET name = ?, root_path = ?, root_path_key = ?, updated_at = ? WHERE id = ?`
 	if rootChanged {
 		query = `
 			UPDATE libraries
-			SET name = ?, root_path = ?, updated_at = ?,
+			SET name = ?, root_path = ?, root_path_key = ?, updated_at = ?,
 			    last_scan_at = NULL, last_scan_status = '', last_scan_error = ''
 			WHERE id = ?
 		`
 	}
-	if _, err := tx.Exec(query, name, rootPath, now, id); err != nil {
+	if _, err := tx.Exec(query, name, candidateRoot, rootPathKey, now, id); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, ErrLibraryExists
 		}
@@ -267,7 +266,7 @@ func (r *Repository) ReplaceLibraryFolders(libraryID, rootPath string) (int, err
 		SELECT d.path, d.name,
 		       (SELECT COUNT(*) FROM entries f
 		         WHERE f.is_dir = 0
-		           AND f.path LIKE `+escapedPathPrefixSQL+` ESCAPE '\'
+		           AND `+subtreeFilePredicateSQL+`
 		           AND `+audioExtCond+`) AS audio_count
 		FROM entries d
 		WHERE d.is_dir = 1
@@ -275,7 +274,7 @@ func (r *Repository) ReplaceLibraryFolders(libraryID, rootPath string) (int, err
 		  AND EXISTS (
 		    SELECT 1 FROM entries f
 		    WHERE f.is_dir = 0
-		      AND f.path LIKE `+escapedPathPrefixSQL+` ESCAPE '\'
+		      AND `+subtreeFilePredicateSQL+`
 		      AND `+audioExtCond+`
 		  )
 		ORDER BY d.path
@@ -386,17 +385,17 @@ func scanLibraryFolder(row interface{ Scan(...interface{}) error }) (*LibraryFol
 }
 
 // ListEntriesUnderPath returns entries under a path prefix (including the
-// prefix itself) for tree building. Wildcard characters in the prefix are
-// escaped so folder names like "100%_hits" match only their own subtree.
+// prefix itself) for tree building. Path identity is binary and slash-boundary
+// exact, so folder names like "100%_hits" match only their own subtree and
+// case-distinct siblings stay distinct.
 func (r *Repository) ListEntriesUnderPath(pathPrefix string) ([]EntryRow, error) {
 	pathPrefix = pathnorm.NormalizeToPOSIX(pathPrefix)
-	pattern := escapeLikeLiteral(pathPrefix) + "/%"
 	rows, err := r.db.Query(`
 		SELECT path, parent_path, name, is_dir, size, mtime, bitrate, format
 		FROM entries
-		WHERE path = ? OR path LIKE ? ESCAPE '\'
+		WHERE path = ? OR substr(path, 1, length(?) + 1) = ? || '/'
 		ORDER BY path
-	`, pathPrefix, pattern)
+	`, pathPrefix, pathPrefix, pathPrefix)
 	if err != nil {
 		return nil, err
 	}
