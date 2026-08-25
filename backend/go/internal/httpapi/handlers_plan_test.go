@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
@@ -139,6 +140,12 @@ func writeTestAudioFile(t *testing.T, root, relative string) string {
 // =============================================================================
 
 func TestCreatePlanWithFolderIDs(t *testing.T) {
+	// The fixture seeds POSIX-style paths (/music/...) that are not absolute
+	// on Windows, so the plan usecase rejects them. Folder-scoped plan
+	// creation is covered cross-platform by TestCreatePlanWithSourceFiles.
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX /music paths; skip on Windows")
+	}
 	engine, repo := newPlanTestServer(t)
 	libID, folder := seedFolderLibrary(t, engine, repo)
 
@@ -240,12 +247,14 @@ func TestCreatePlanWithSourceFiles(t *testing.T) {
 	if len(out.Operations) != 2 {
 		t.Fatalf("len(operations) = %d, want 2 (body=%s)", len(out.Operations), w.Body.String())
 	}
+	// The handler normalizes source files to POSIX form before the usecase,
+	// so operation paths compare in that form on every platform.
 	bySource := make(map[string]planOperationDTO, len(out.Operations))
 	for _, op := range out.Operations {
 		bySource[op.SourcePath] = op
 	}
 	for _, src := range sources {
-		op, ok := bySource[src]
+		op, ok := bySource[pathnorm.NormalizeToPOSIX(src)]
 		if !ok {
 			t.Errorf("missing operation for source %q (ops=%+v)", src, out.Operations)
 			continue
@@ -254,8 +263,8 @@ func TestCreatePlanWithSourceFiles(t *testing.T) {
 			t.Errorf("op %q type = %q, want delete", src, op.Type)
 		}
 		// The usecase stages deletes under rootPath/Delete/; assert the exact
-		// staged target for this delete operation.
-		want := filepath.Join(libraryRoot, "albumA", "Delete", path.Base(src))
+		// staged target for this delete operation (also in POSIX form).
+		want := pathnorm.NormalizeToPOSIX(filepath.Join(libraryRoot, "albumA", "Delete", filepath.Base(src)))
 		if op.TargetPath != want {
 			t.Errorf("op %q target_path = %q, want %q", src, op.TargetPath, want)
 		}
@@ -605,10 +614,12 @@ func TestListPlans(t *testing.T) {
 	// Insert the second plan directly: plan IDs are second-resolution
 	// timestamps, so two POSTs within the same second would collide (a
 	// pre-existing usecase property, not an HTTP concern). Give it a later
-	// CreatedAt so the newest-first order is deterministic.
+	// CreatedAt so the newest-first order is deterministic. Persist the root
+	// in the same POSIX-normalized form the API layer uses, since the listing
+	// matches roots with exact string equality.
 	if err := repo.CreatePlan(&sqlite.Plan{
 		PlanID:    "plan-list-test-b",
-		RootPath:  libraryRootB,
+		RootPath:  pathnorm.NormalizeToPOSIX(libraryRootB),
 		PlanType:  "single_delete",
 		Status:    "ready",
 		CreatedAt: time.Now().Add(time.Second),
@@ -635,9 +646,10 @@ func TestListPlans(t *testing.T) {
 		if p.PlanID != planA {
 			t.Errorf("plan_id = %q, want %q", p.PlanID, planA)
 		}
-		// The plan root must be under (or equal to) the selected library root.
-		if p.RootPath != libraryRootA {
-			t.Errorf("root_path = %q, want %q", p.RootPath, libraryRootA)
+		// The plan root must be under (or equal to) the selected library root,
+		// persisted in the API's POSIX-normalized form.
+		if p.RootPath != pathnorm.NormalizeToPOSIX(libraryRootA) {
+			t.Errorf("root_path = %q, want %q", p.RootPath, pathnorm.NormalizeToPOSIX(libraryRootA))
 		}
 		if p.PlanType != "single_delete" {
 			t.Errorf("plan_type = %q, want single_delete", p.PlanType)
