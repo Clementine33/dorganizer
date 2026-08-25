@@ -236,3 +236,66 @@ func TestScanSSEUnknownLibrary(t *testing.T) {
 		t.Fatalf("code = %q, want LIBRARY_NOT_FOUND", code)
 	}
 }
+
+// TestScanAcceptsEmptyBody verifies the body-less scan request contract: with
+// no payload, the library root is scanned instead of failing with 400.
+func TestScanAcceptsEmptyBody(t *testing.T) {
+	root := seedScanTree(t)
+	var repo *sqlite.Repository
+	engine := newTestServer(t, func(d *Dependencies) {
+		repo = d.Repo
+		d.ScanService = scanusecase.NewService(d.Repo)
+	})
+	libID := createLibraryViaAPI(t, engine, "Music", root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/libraries/"+libID+"/scans", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{"event: started", "event: completed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	lib, err := repo.GetLibrary(libID)
+	if err != nil {
+		t.Fatalf("GetLibrary failed: %v", err)
+	}
+	if lib.LastScanStatus != "completed" {
+		t.Errorf("last_scan_status = %q, want completed", lib.LastScanStatus)
+	}
+}
+
+// TestScanRejectsUnknownBodyFields verifies malformed/non-optional scan bodies
+// are rejected while the endpoint stays strict about payloads.
+func TestScanRejectsInvalidPayloads(t *testing.T) {
+	root := seedScanTree(t)
+	engine := newTestServer(t, func(d *Dependencies) {
+		d.ScanService = scanusecase.NewService(d.Repo)
+	})
+	libID := createLibraryViaAPI(t, engine, "Music", root)
+
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "unknown field", body: `{"rootpath":"/x"}`, want: http.StatusBadRequest},
+		{name: "trailing content", body: `{} {}`, want: http.StatusBadRequest},
+		{name: "malformed", body: `{`, want: http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/libraries/"+libID+"/scans", strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+			engine.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}

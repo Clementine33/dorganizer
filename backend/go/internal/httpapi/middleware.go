@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"strings"
@@ -17,7 +18,12 @@ func authMiddleware(token string) func(http.Handler) http.Handler {
 			}
 			const prefix = "Bearer "
 			header := r.Header.Get("Authorization")
-			if !strings.HasPrefix(header, prefix) || strings.TrimPrefix(header, prefix) != token {
+			if !strings.HasPrefix(header, prefix) {
+				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing or invalid bearer token")
+				return
+			}
+			got := strings.TrimPrefix(header, prefix)
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing or invalid bearer token")
 				return
 			}

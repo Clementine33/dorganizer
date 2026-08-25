@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -31,13 +32,18 @@ func TestSSEWriterSendsAndFlushesEvent(t *testing.T) {
 	}
 }
 
+func decodeJSONError(r *http.Request, dst any) error {
+	w := httptest.NewRecorder()
+	return decodeJSON(w, r, dst)
+}
+
 func TestDecodeJSON(t *testing.T) {
 	t.Run("valid object", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Music"}`))
 		var got struct {
 			Name string `json:"name"`
 		}
-		if err := decodeJSON(req, &got); err != nil {
+		if err := decodeJSONError(req, &got); err != nil {
 			t.Fatalf("decodeJSON: %v", err)
 		}
 		if got.Name != "Music" {
@@ -47,21 +53,94 @@ func TestDecodeJSON(t *testing.T) {
 
 	t.Run("empty body", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		if err := decodeJSON(req, &struct{}{}); err == nil {
+		if err := decodeJSONError(req, &struct{}{}); err == nil {
 			t.Fatal("empty body should fail")
 		}
 	})
 
-	t.Run("unknown and trailing input stay permissive", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Music","future":true}{"ignored":true}`))
+	t.Run("unknown field rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Music","future":true}`))
 		var got struct {
 			Name string `json:"name"`
 		}
-		if err := decodeJSON(req, &got); err != nil {
-			t.Fatalf("decodeJSON: %v", err)
+		err := decodeJSONError(req, &got)
+		var pe *payloadError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected payloadError, got %T: %v", err, err)
 		}
-		if got.Name != "Music" {
-			t.Fatalf("name = %q, want Music", got.Name)
+		if pe.status != http.StatusBadRequest || pe.code != "INVALID_ARGUMENT" {
+			t.Fatalf("expected 400 INVALID_ARGUMENT, got %d %s", pe.status, pe.code)
+		}
+	})
+
+	t.Run("trailing content rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Music"}{"ignored":true}`))
+		if err := decodeJSONError(req, &struct {
+			Name string `json:"name"`
+		}{}); err == nil {
+			t.Fatal("trailing JSON should fail")
+		}
+	})
+
+	t.Run("malformed JSON rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name": `))
+		if err := decodeJSONError(req, &struct {
+			Name string `json:"name"`
+		}{}); err == nil {
+			t.Fatal("malformed JSON should fail")
+		}
+	})
+
+	t.Run("oversized body rejected with 413", func(t *testing.T) {
+		body := `{"name":"` + strings.Repeat("x", maxRequestBodyBytes) + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		err := decodeJSONError(req, &struct {
+			Name string `json:"name"`
+		}{})
+		var pe *payloadError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected payloadError, got %T: %v", err, err)
+		}
+		if pe.status != http.StatusRequestEntityTooLarge || pe.code != "PAYLOAD_TOO_LARGE" {
+			t.Fatalf("expected 413 PAYLOAD_TOO_LARGE, got %d %s", pe.status, pe.code)
+		}
+	})
+}
+
+func TestDecodeJSONAllowEmpty(t *testing.T) {
+	t.Run("empty body decodes to zero value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		var got struct {
+			RootPath *string `json:"root_path"`
+		}
+		w := httptest.NewRecorder()
+		if err := decodeJSONAllowEmpty(w, req, &got); err != nil {
+			t.Fatalf("decodeJSONAllowEmpty: %v", err)
+		}
+		if got.RootPath != nil {
+			t.Fatalf("expected nil root_path for empty body, got %q", *got.RootPath)
+		}
+	})
+
+	t.Run("valid object still decodes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"root_path":"/music"}`))
+		var got struct {
+			RootPath *string `json:"root_path"`
+		}
+		w := httptest.NewRecorder()
+		if err := decodeJSONAllowEmpty(w, req, &got); err != nil {
+			t.Fatalf("decodeJSONAllowEmpty: %v", err)
+		}
+		if got.RootPath == nil || *got.RootPath != "/music" {
+			t.Fatalf("root_path = %v, want /music", got.RootPath)
+		}
+	})
+
+	t.Run("malformed non-empty body rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{not json`))
+		w := httptest.NewRecorder()
+		if err := decodeJSONAllowEmpty(w, req, &struct{}{}); err == nil {
+			t.Fatal("malformed body should fail even for allow-empty decode")
 		}
 	})
 }

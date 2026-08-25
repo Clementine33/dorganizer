@@ -44,8 +44,8 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req scanRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid scan payload")
+	if err := decodeJSONAllowEmpty(w, r, &req); err != nil {
+		writeDecodeError(w, err, "invalid scan payload")
 		return
 	}
 	rootPath := lib.RootPath

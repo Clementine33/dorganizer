@@ -24,8 +24,8 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 	var req libraryCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid library payload")
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "invalid library payload")
 		return
 	}
 	lib, err := s.deps.Repo.CreateLibrary(req.Name, req.RootPath)
@@ -55,8 +55,8 @@ func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 	var req libraryPatchRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid library payload")
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "invalid library payload")
 		return
 	}
 	id := r.PathValue("id")
