@@ -2,12 +2,14 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"github.com/onsei/organizer/backend/internal/services/scanner"
+	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,25 +21,31 @@ func (s *OnseiServer) Scan(req *pb.ScanRequest, stream grpc.ServerStreamingServe
 		return status.Errorf(codes.InvalidArgument, "folder_path is required")
 	}
 
-	_ = stream.Send(&pb.JobEvent{EventType: "started", Message: fmt.Sprintf("Scanning %s", req.FolderPath)})
-
-	svc := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(s.repo))
-	scanID, err := svc.ScanRoot(req.FolderPath)
+	service := scanusecase.NewService(s.repo)
+	_, err := service.Scan(stream.Context(), scanusecase.Request{RootPath: req.FolderPath}, func(ev scanusecase.Event) {
+		jobEvent := &pb.JobEvent{EventType: ev.Type, Message: ev.Message}
+		switch ev.Type {
+		case "completed":
+			jobEvent.ProgressPercent = 100
+		}
+		_ = stream.Send(jobEvent)
+	})
 	if err != nil {
-		_ = stream.Send(&pb.JobEvent{EventType: "error", Message: fmt.Sprintf("Scan failed: %v", err)})
+		if errors.Is(err, context.Canceled) {
+			return status.Errorf(codes.Canceled, "scan canceled")
+		}
+		if scanErr, ok := scanusecase.AsError(err); ok && scanErr.Kind == scanusecase.ErrKindInvalidArgument {
+			return status.Error(codes.InvalidArgument, scanErr.Message)
+		}
+		// The error event was already streamed by the usecase; keep the
+		// stream open (compatibility with previous behavior).
 		return nil
 	}
-
-	_ = stream.Send(&pb.JobEvent{
-		EventType:       "completed",
-		Message:         fmt.Sprintf("Scan completed (scan ID: %s)", scanID),
-		ProgressPercent: 100,
-	})
 	return nil
 }
 
 // RefreshFolders performs folder-scoped scans for the given folder_paths under root_path.
-func (s *OnseiServer) RefreshFolders(_ context.Context, req *pb.RefreshFoldersRequest) (*pb.RefreshFoldersResponse, error) {
+func (s *OnseiServer) RefreshFolders(ctx context.Context, req *pb.RefreshFoldersRequest) (*pb.RefreshFoldersResponse, error) {
 	if req.GetRootPath() == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "root_path is required")
 	}
@@ -55,7 +63,7 @@ func (s *OnseiServer) RefreshFolders(_ context.Context, req *pb.RefreshFoldersRe
 
 	for _, folderPath := range folderPaths {
 		folderPathNorm := filepath.ToSlash(filepath.Clean(folderPath))
-		_, err := svc.ScanFolder(folderPath, rootPath)
+		_, err := svc.ScanFolderCtx(ctx, folderPath, rootPath)
 		if err != nil {
 			errors = append(errors, &pb.FolderError{
 				Stage:      "refresh",

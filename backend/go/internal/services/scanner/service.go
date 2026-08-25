@@ -16,7 +16,74 @@ const (
 	pipelineBatchSize      = 1000
 	taskQueueSize          = 100 // Buffered channel for backpressure
 	defaultRootConcurrency = 4
+	progressEntryThreshold = 500                    // emit progress at most every 500 entries
+	progressTimeInterval   = 100 * time.Millisecond // emit progress at most every 100ms
 )
+
+// Progress reports scan progress.
+type Progress struct {
+	FilesScanned int
+	DirsScanned  int
+}
+
+type scanOptions struct {
+	progress func(Progress)
+}
+
+// ScanOption configures a scan operation.
+type ScanOption func(*scanOptions)
+
+// WithProgress registers a progress callback. The callback receives throttled
+// progress (at most every 500 entries or 100ms) followed by a final report
+// with the complete counts when the pipeline finishes.
+func WithProgress(cb func(Progress)) ScanOption {
+	return func(o *scanOptions) { o.progress = cb }
+}
+
+// progressTracker counts scanned entries and emits throttled progress.
+// The first report is emitted immediately (zero-value lastReportedAt makes
+// the time check true), later reports at most every progressEntryThreshold
+// entries or progressTimeInterval, and finish() always emits a final report
+// with the complete counts.
+type progressTracker struct {
+	cb             func(Progress)
+	files, dirs    int
+	last           Progress
+	lastReportedAt time.Time
+}
+
+func newProgressTracker(cb func(Progress)) *progressTracker {
+	return &progressTracker{cb: cb}
+}
+
+// record counts one scanned entry and emits throttled progress.
+func (t *progressTracker) record(entry StagingEntry) {
+	if t.cb == nil {
+		return
+	}
+	if entry.IsDir {
+		t.dirs++
+	} else {
+		t.files++
+	}
+	if t.files-t.last.FilesScanned >= progressEntryThreshold || time.Since(t.lastReportedAt) >= progressTimeInterval {
+		t.emit()
+	}
+}
+
+// finish emits a final progress report with the complete counts.
+func (t *progressTracker) finish() {
+	if t.cb == nil {
+		return
+	}
+	t.emit()
+}
+
+func (t *progressTracker) emit() {
+	t.last = Progress{FilesScanned: t.files, DirsScanned: t.dirs}
+	t.lastReportedAt = time.Now()
+	t.cb(t.last)
+}
 
 // Repository interface for scanner
 type Repository interface {
@@ -104,6 +171,22 @@ func NewScannerService(repo Repository) *ScannerService {
 //
 // Invariant: Root = parallel directory descent + inline metadata + pipeline
 func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
+	return s.ScanRootCtx(context.Background(), rootPath)
+}
+
+// ScanRootCtx performs a full scan of the given root path using
+// parallel directory descent + inline metadata + staging pipeline.
+// It is context-aware: on ctx cancellation the merge is skipped, the scan
+// session is marked canceled (error_code SCAN_CANCELLED), and staging rows
+// are cleaned up best-effort.
+//
+// Invariant: Root = parallel directory descent + inline metadata + pipeline
+func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts ...ScanOption) (string, error) {
+	var o scanOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	sessionID := uuid.New().String()
 
 	// Normalize root_path to POSIX for consistent storage and matching
@@ -133,7 +216,9 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 	// - consumer exits on entryCh close or ctx cancellation
 	// - first error from either triggers ctx.cancel and stops both
 	// - after waiting both, if any error, cleanup staging and mark failed
-	ctx, cancel := context.WithCancel(context.Background())
+	// - on caller ctx cancellation: skip merge, mark canceled, cleanup staging best-effort
+	baseCtx := ctx
+	ctx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
 
 	entryCh := make(chan StagingEntry, taskQueueSize)
@@ -172,8 +257,11 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 		defer wg.Done()
 
 		batch := make([]StagingEntry, 0, pipelineBatchSize)
+		progress := newProgressTracker(o.progress)
 
 		for entry := range entryCh {
+			progress.record(entry)
+
 			batch = append(batch, entry)
 
 			if len(batch) >= pipelineBatchSize {
@@ -203,10 +291,24 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 				}
 			}
 		}
+
+		// Final progress report with complete counts
+		progress.finish()
 	}()
 
 	// Wait for both producer and consumer to finish
 	wg.Wait()
+
+	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
+	if err := baseCtx.Err(); err != nil {
+		if s.repo != nil {
+			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+		}
+		if cleanupFn != nil {
+			_ = cleanupFn(sessionID) // Best-effort cleanup
+		}
+		return "", err
+	}
 
 	// Check for errors from either
 	if producerErr != nil || consumerErr != nil {
@@ -261,6 +363,22 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 //
 // Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline
 func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error) {
+	return s.ScanFolderCtx(context.Background(), folderPath, rootPath)
+}
+
+// ScanFolderCtx performs a scoped scan of a single folder using
+// single-enumerator directory discovery + inline metadata + staging pipeline.
+// It is context-aware: on ctx cancellation the merge is skipped, the scan
+// session is marked canceled (error_code SCAN_CANCELLED), and staging rows
+// are cleaned up best-effort.
+//
+// Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline
+func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath string, opts ...ScanOption) (string, error) {
+	var o scanOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	sessionID := uuid.New().String()
 
 	// Normalize paths to POSIX for consistent storage and matching
@@ -290,7 +408,8 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 	// - writer triggers cancel() on first error
 	// - producer respects ctx.Done() and stops emitting
 	// - main waits for both before merge decision
-	ctx, cancel := context.WithCancel(context.Background())
+	baseCtx := ctx
+	ctx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
 
 	entryCh := make(chan StagingEntry, taskQueueSize)
@@ -329,8 +448,11 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 		defer wg.Done()
 
 		batch := make([]StagingEntry, 0, pipelineBatchSize)
+		progress := newProgressTracker(o.progress)
 
 		for entry := range entryCh {
+			progress.record(entry)
+
 			batch = append(batch, entry)
 
 			if len(batch) >= pipelineBatchSize {
@@ -359,10 +481,24 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 				}
 			}
 		}
+
+		// Final progress report with complete counts
+		progress.finish()
 	}()
 
 	// Wait for both producer and consumer
 	wg.Wait()
+
+	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
+	if err := baseCtx.Err(); err != nil {
+		if s.repo != nil {
+			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+		}
+		if cleanupFn != nil {
+			_ = cleanupFn(sessionID) // Best-effort cleanup
+		}
+		return "", err
+	}
 
 	// Check for errors
 	if producerErr != nil || consumerErr != nil {
