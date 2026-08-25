@@ -3,6 +3,7 @@ package pathnorm
 import (
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -74,7 +75,18 @@ func IsResolvedWithinRoot(root, candidate string) (bool, error) {
 		return false, err
 	}
 
-	relative, err := filepath.Rel(resolvedRoot, resolvedCandidate)
+	// filepath.Rel compares path elements case-sensitively and
+	// filepath.EvalSymlinks does not canonicalize letter case, so on Windows a
+	// drive-letter or component case mismatch (C:/Music vs C:/MUSIC/album)
+	// would produce a ..-prefixed result and falsely report the candidate as
+	// outside the root. Fold case for the containment comparison only, so this
+	// check agrees with IsWithinRoot (which already folds Windows case).
+	relRoot, relCandidate := resolvedRoot, resolvedCandidate
+	if runtime.GOOS == "windows" {
+		relRoot = strings.ToLower(resolvedRoot)
+		relCandidate = strings.ToLower(resolvedCandidate)
+	}
+	relative, err := filepath.Rel(relRoot, relCandidate)
 	if err != nil {
 		return false, err
 	}

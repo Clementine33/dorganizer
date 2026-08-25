@@ -3,6 +3,7 @@ package pathnorm
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -92,6 +93,20 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 	}
 	if !within {
 		t.Fatal("inside file should resolve within root")
+	}
+
+	// On Windows the filesystem is case-insensitive but filepath.EvalSymlinks
+	// does not canonicalize letter case, so a case-swapped inside path must
+	// still resolve within the root (mirrors IsWithinRoot's case folding).
+	if runtime.GOOS == "windows" {
+		caseSwapped := filepath.Join(filepath.Dir(insideDir), strings.ToUpper(filepath.Base(insideDir)), filepath.Base(insideFile))
+		within, err = IsResolvedWithinRoot(root, caseSwapped)
+		if err != nil {
+			t.Fatalf("IsResolvedWithinRoot case-swapped inside file: %v", err)
+		}
+		if !within {
+			t.Fatal("case-swapped inside file should resolve within root on Windows")
+		}
 	}
 
 	linkPath := filepath.Join(root, "linked")
