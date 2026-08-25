@@ -173,6 +173,33 @@ describe('libraries store root update invalidation', () => {
     expect(store.activeLibraryId).toBe('lib-a')
   })
 
+  it('keeps folders and selection for a case-equivalent drive-root update', async () => {
+    const api = apiStub()
+    const store = useLibrariesStore()
+    await store.loadLibraries(api)
+    store.setActiveLibrary('lib-a')
+    await store.loadFolders('lib-a', api)
+    store.toggleFolder('folder-a')
+
+    // Backend RootPathKey folds Windows case, so `C:\Audio\Archive` ->
+    // `C:\Audio\archive` is the same root: the backend keeps folders, and so
+    // must the store.
+    await store.updateLibrary(
+      'lib-a',
+      { root_path: 'C:\\Audio\\archive' },
+      apiStub({
+        updateLibrary: vi.fn().mockImplementation(async (id, input) => ({
+          ...libraryA,
+          ...input,
+          id,
+          root_path: 'C:\\Audio\\archive',
+        })),
+      }),
+    )
+    expect(store.folders).toHaveLength(2)
+    expect(store.selectedFolderIds).toEqual(['folder-a'])
+  })
+
   it('keeps folders and selection for a name-only update', async () => {
     const api = apiStub()
     const store = useLibrariesStore()

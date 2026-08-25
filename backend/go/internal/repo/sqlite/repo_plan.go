@@ -61,17 +61,15 @@ func (r *Repository) GetPlan(planID string) (*Plan, error) {
 	return &p, nil
 }
 
-// ListPlansByRoot returns all plans for a root
-func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
-	rows, err := r.db.Query(`
-		SELECT `+planColumns+`
-		FROM plans WHERE root_path = ? ORDER BY created_at DESC
-	`, rootPath)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// planOrderSQL orders by the absolute time of created_at. created_at is stored
+// as RFC3339Nano with the writer's local offset, so a lexicographic string
+// sort would misorder rows written under different UTC offsets; julianday()
+// parses the ISO-8601 timestamps into a comparable instant.
+const planOrderSQL = ` ORDER BY julianday(created_at) DESC, plan_id DESC`
 
+// scanPlanRows scans one plan-rows result set into plans.
+func scanPlanRows(rows *sql.Rows) ([]*Plan, error) {
+	defer rows.Close()
 	var plans []*Plan
 	for rows.Next() {
 		var p Plan
@@ -89,6 +87,17 @@ func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
 	return plans, nil
 }
 
+// ListPlansByRoot returns all plans for a root
+func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
+	rows, err := r.db.Query(`
+		SELECT `+planColumns+`
+		FROM plans WHERE root_path = ?`+planOrderSQL, rootPath)
+	if err != nil {
+		return nil, err
+	}
+	return scanPlanRows(rows)
+}
+
 // ListPlans returns plans newest-first in a single SQL query. When libraryID
 // is non-nil only plans owned by that library are returned; otherwise all
 // plans (including legacy plans without ownership) are listed. Ordering and
@@ -103,30 +112,14 @@ func (r *Repository) ListPlans(libraryID *string, limit int) ([]*Plan, error) {
 		query += ` WHERE library_id = ?`
 		args = append(args, *libraryID)
 	}
-	query += ` ORDER BY created_at DESC, plan_id DESC LIMIT ?`
+	query += planOrderSQL + ` LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var plans []*Plan
-	for rows.Next() {
-		var p Plan
-		var createdAtStr string
-		var slimMode, libID sql.NullString
-		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr); err != nil {
-			return nil, err
-		}
-		scanPlan(&p, createdAtStr, libID, slimMode)
-		plans = append(plans, &p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return plans, nil
+	return scanPlanRows(rows)
 }
 
 // PlanDetail is a plan plus everything needed to rebuild the review page

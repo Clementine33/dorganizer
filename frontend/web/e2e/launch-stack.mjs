@@ -182,8 +182,16 @@ function teardown(exitCode = 0) {
       kill.on('error', stopBackend)
       kill.on('exit', stopBackend)
     } else {
+      // Wait for Vite to actually exit before removing the fixture/data dirs,
+      // so file watchers and in-flight writes are gone first. The timer is a
+      // fallback for a Vite that does not terminate on SIGTERM.
+      const viteGone = new Promise((resolve) => {
+        vite.once('exit', resolve)
+        vite.once('error', resolve)
+        setTimeout(resolve, 1000)
+      })
       vite.kill()
-      stopBackend()
+      void viteGone.then(stopBackend)
     }
   } else {
     stopBackend()

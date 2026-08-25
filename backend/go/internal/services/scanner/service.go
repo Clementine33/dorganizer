@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"path/filepath"
@@ -38,6 +39,22 @@ type ScanOption func(*scanOptions)
 // with the complete counts when the pipeline finishes.
 func WithProgress(cb func(Progress)) ScanOption {
 	return func(o *scanOptions) { o.progress = cb }
+}
+
+// resolvePipelineError applies the pipeline failure precedence shared by the
+// root and folder scans:
+//   - an independent walk error (not caused by our own cancellation) is
+//     primary and reported as SCAN_WALK_FAILED, even if staging also failed;
+//   - otherwise a staging-write failure beats the walker's context.Canceled,
+//     which is the symptom of the consumer cancelling the walk, not a cause.
+func resolvePipelineError(producerErr, consumerErr error) (primary error, code string) {
+	if producerErr != nil && !errors.Is(producerErr, context.Canceled) {
+		return producerErr, "SCAN_WALK_FAILED"
+	}
+	if consumerErr != nil {
+		return consumerErr, "STAGING_WRITE_FAILED"
+	}
+	return producerErr, "SCAN_WALK_FAILED"
 }
 
 // progressTracker counts scanned entries and emits throttled progress.
@@ -320,20 +337,19 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		}
 
 		// Update session status to failed
+		primaryErr, code := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			if consumerErr != nil {
-				s.repo.UpdateScanSessionStatus(sessionID, "failed", "STAGING_WRITE_FAILED", consumerErr.Error())
-			} else {
-				s.repo.UpdateScanSessionStatus(sessionID, "failed", "SCAN_WALK_FAILED", producerErr.Error())
-			}
+			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		// Return primary error (not cleanup failure). A staging-write failure
 		// wins over a concurrently observed walker cancellation: the consumer
 		// cancels the derived context to stop the walk, so the producer
 		// commonly records context.Canceled that is a symptom, not the cause.
+		// An independent walk error (not caused by our cancellation) stays
+		// primary even when staging also failed.
 		_ = cleanupFailure // We could log this, but primary error is what's expected
-		if consumerErr != nil {
+		if primaryErr == consumerErr {
 			return "", fmt.Errorf("write staging: %w", consumerErr)
 		}
 		return "", fmt.Errorf("walk directory: %w", producerErr)
@@ -512,19 +528,16 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 		}
 
 		// Update session status
+		primaryErr, code := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			if producerErr != nil {
-				s.repo.UpdateScanSessionStatus(sessionID, "failed", "SCAN_WALK_FAILED", producerErr.Error())
-			} else {
-				s.repo.UpdateScanSessionStatus(sessionID, "failed", "STAGING_WRITE_FAILED", consumerErr.Error())
-			}
+			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		_ = cleanupFailure // Best effort cleanup
-		if producerErr != nil {
-			return "", producerErr
+		if primaryErr == consumerErr {
+			return "", consumerErr
 		}
-		return "", consumerErr
+		return "", producerErr
 	}
 
 	// Both succeeded - merge

@@ -226,6 +226,40 @@ func TestScanRootStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
 	}
 }
 
+// TestScanFolderStagingWriteFailureIsNotReportedAsCancellation covers the
+// folder-scoped scan path (used by gRPC RefreshFolders), which shares the
+// pipeline error arbitration with ScanRootCtx.
+func TestScanFolderStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
+	tmp := t.TempDir()
+	album := filepath.Join(tmp, "album")
+	if err := os.MkdirAll(album, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", album, err)
+	}
+	for j := 0; j < 1500; j++ {
+		if err := os.WriteFile(filepath.Join(album, fmt.Sprintf("song-%04d.wav", j)), []byte("dummy"), 0644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+
+	injected := errors.New("simulated folder staging write failure")
+	mock := &failingBatchRepo{MockRepository: &MockRepository{}, batchErr: injected}
+	svc := NewScannerService(mock)
+
+	_, err := svc.ScanFolder(album, tmp)
+	if err == nil {
+		t.Fatal("expected ScanFolder to fail")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("expected returned error to wrap the staging write failure, got: %v", err)
+	}
+	if mock.mergeCalls != 0 {
+		t.Errorf("expected merge to be skipped after staging failure, got %d merge calls", mock.mergeCalls)
+	}
+	if len(mock.Sessions) != 1 || mock.Sessions[0].Status != "failed" || mock.Sessions[0].ErrorCode != "STAGING_WRITE_FAILED" {
+		t.Errorf("expected session failed/STAGING_WRITE_FAILED, got %+v", mock.Sessions)
+	}
+}
+
 func TestScannerService_ScanRoot_UpdatesSessionOnFailure(t *testing.T) {
 	tmp := t.TempDir()
 

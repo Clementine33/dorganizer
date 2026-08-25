@@ -13,6 +13,18 @@ import type {
 // requests can be discarded instead of overwriting the current state.
 let foldersRequestSeq = 0
 
+// rootPathIdentityKey mirrors the backend's pathnorm.RootPathKey: cleaned
+// forward-slash form, with letter case folded only for syntactically
+// Windows-style paths. The backend judges root changes by this key, so the
+// frontend must too — otherwise a spelling/case-equivalent edit would clear
+// folders the backend deliberately retained.
+function rootPathIdentityKey(path: string): string {
+  let p = path.replace(/\\/g, '/')
+  const isWindowsPath = /^[a-zA-Z]:\//.test(p) || /^\/\/\?/.test(p) || p.startsWith('//')
+  if (isWindowsPath && p.length >= 3 && p[1] === ':') p = p.toLowerCase()
+  return p
+}
+
 function errorDetails(error: unknown): { code: string | null; message: string } {
   return {
     code: error instanceof ApiError ? error.code : null,
@@ -83,8 +95,12 @@ export const useLibrariesStore = defineStore('libraries', {
         // The backend deletes all materialized folders and resets scan state
         // when the canonical root changes; mirror that invalidation locally so
         // stale folders/selection are not sent back for now-deleted rows.
+        // Compare canonical identity (see rootPathIdentityKey) so spelling-only
+        // edits do not over-invalidate state the backend kept.
         const rootChanged =
-          previous !== undefined && input.root_path !== undefined && previous.root_path !== updated.root_path
+          previous !== undefined &&
+          input.root_path !== undefined &&
+          rootPathIdentityKey(previous.root_path) !== rootPathIdentityKey(updated.root_path)
         if (rootChanged && this.activeLibraryId === id) {
           foldersRequestSeq++ // invalidate any in-flight folder load
           this.folders = []

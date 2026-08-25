@@ -774,6 +774,40 @@ func TestListPlansIncludesFolderScopedPlans(t *testing.T) {
 	}
 }
 
+// TestGetPlanDetailRootMatchesCreate verifies the create/detail payload
+// agreement: the usecase reports the scan root (library root) as root_path in
+// both responses, never the scope folder the plan row is persisted under.
+func TestGetPlanDetailRootMatchesCreate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX /music paths; skip on Windows")
+	}
+	engine, repo := newPlanTestServer(t)
+	libID, folder := seedFolderLibrary(t, engine, repo)
+
+	createW := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id":    libID,
+		"folder_ids":    []string{folder.ID},
+		"plan_type":     "slim",
+		"target_format": "slim:mode2",
+	}, nil)
+	if createW.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want 200 (body=%s)", createW.Code, createW.Body.String())
+	}
+	created := decodePlanResponse(t, createW)
+	if created.RootPath != "/music" {
+		t.Fatalf("create root_path = %q, want /music (library scan root)", created.RootPath)
+	}
+
+	detailW := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+url.PathEscape(created.PlanID), nil, nil)
+	if detailW.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want 200 (body=%s)", detailW.Code, detailW.Body.String())
+	}
+	detail := decodePlanResponse(t, detailW)
+	if detail.RootPath != created.RootPath {
+		t.Errorf("detail root_path = %q, want %q (must agree with create)", detail.RootPath, created.RootPath)
+	}
+}
+
 // TestFolderScopedPlanSurvivesRescan is the core ownership regression: a plan
 // scoped to a folder must remain listed for its library even after a rescan
 // removes that folder from the materialized index (ownership is stored on the

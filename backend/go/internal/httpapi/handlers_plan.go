@@ -298,10 +298,18 @@ func (s *Server) getPlanDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Mirror the create response: the usecase reports the scan root (library
+	// root for folder/file plans) as root_path, while the persisted plan row
+	// stores the scope root (the folder) in RootPath.
+	rootPath := detail.Plan.RootPath
+	if detail.Plan.ScanRootPath != "" {
+		rootPath = detail.Plan.ScanRootPath
+	}
+
 	writeJSON(w, http.StatusOK, planResponse{
 		PlanID:        detail.Plan.PlanID,
 		SnapshotToken: detail.Plan.SnapshotToken,
-		RootPath:      detail.Plan.RootPath,
+		RootPath:      rootPath,
 		Summary: planSummaryResponse{
 			OperationCount:  len(ops),
 			ErrorCount:      len(errs),
