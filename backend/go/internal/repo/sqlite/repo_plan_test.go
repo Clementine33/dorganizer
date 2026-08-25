@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -787,5 +788,132 @@ func TestRepository_ListPlanItems_DeleteTargetPathRoundTrip(t *testing.T) {
 
 	if itemsOut[2].TargetPath != nil {
 		t.Errorf("delete null item: expected target_path nil, got %q", *itemsOut[2].TargetPath)
+	}
+}
+
+func TestRepository_ListPlansFilterOrderLimit(t *testing.T) {
+	repo := newTestRepository(t)
+	libA, err := repo.CreateLibrary("A", "/music")
+	if err != nil {
+		t.Fatalf("CreateLibrary(A) failed: %v", err)
+	}
+	libB, err := repo.CreateLibrary("B", "/movies")
+	if err != nil {
+		t.Fatalf("CreateLibrary(B) failed: %v", err)
+	}
+
+	mk := func(id, libID, created string) *Plan {
+		ts, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			t.Fatalf("parse created %q: %v", created, err)
+		}
+		return &Plan{PlanID: id, RootPath: "/x", ScanRootPath: "/x", LibraryID: libID, PlanType: "slim", SnapshotToken: "s", Status: "ready", CreatedAt: ts}
+	}
+	for _, p := range []*Plan{
+		mk("p1", libA.ID, "2026-01-01T00:00:00Z"),
+		mk("p2", libA.ID, "2026-01-02T00:00:00Z"),
+		mk("p3", libB.ID, "2026-01-03T00:00:00Z"),
+		mk("p4", "", "2026-01-04T00:00:00Z"), // legacy/unattributed
+	} {
+		if err := repo.CreatePlan(p); err != nil {
+			t.Fatalf("CreatePlan(%s) failed: %v", p.PlanID, err)
+		}
+	}
+
+	ids := func(plans []*Plan) []string {
+		out := make([]string, len(plans))
+		for i, p := range plans {
+			out[i] = p.PlanID
+		}
+		return out
+	}
+
+	all, err := repo.ListPlans(nil, 100)
+	if err != nil {
+		t.Fatalf("ListPlans(all) failed: %v", err)
+	}
+	if got := strings.Join(ids(all), ","); got != "p4,p3,p2,p1" {
+		t.Errorf("ListPlans(all) order = %q, want p4,p3,p2,p1", got)
+	}
+
+	aID := libA.ID
+	onlyA, err := repo.ListPlans(&aID, 100)
+	if err != nil {
+		t.Fatalf("ListPlans(libA) failed: %v", err)
+	}
+	if got := strings.Join(ids(onlyA), ","); got != "p2,p1" {
+		t.Errorf("ListPlans(libA) = %q, want p2,p1", got)
+	}
+
+	limited, err := repo.ListPlans(nil, 2)
+	if err != nil {
+		t.Fatalf("ListPlans(limit 2) failed: %v", err)
+	}
+	if got := strings.Join(ids(limited), ","); got != "p4,p3" {
+		t.Errorf("ListPlans(limit 2) = %q, want p4,p3", got)
+	}
+}
+
+func TestRepository_GetPlanDetailRoundTrip(t *testing.T) {
+	repo := newTestRepository(t)
+	lib, err := repo.CreateLibrary("A", "/music")
+	if err != nil {
+		t.Fatalf("CreateLibrary failed: %v", err)
+	}
+
+	plan := &Plan{
+		PlanID:        "plan-det",
+		RootPath:      "/music/Album",
+		ScanRootPath:  "/music",
+		LibraryID:     lib.ID,
+		PlanType:      "slim",
+		SnapshotToken: "snap",
+		Status:        "ready",
+		CreatedAt:     time.Now(),
+	}
+	if err := repo.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan failed: %v", err)
+	}
+
+	tx, err := repo.DB().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePlanItemsBatchTx(tx, "plan-det", []PlanItem{
+		{PlanID: "plan-det", ItemIndex: 0, OpType: "delete", SourcePath: "/music/Album/a.flac", ReasonCode: "lossy_dup", PreconditionPath: "/music/Album/a.flac", PreconditionContentRev: 1, PreconditionSize: 1, PreconditionMtime: 1},
+	}); err != nil {
+		t.Fatalf("CreatePlanItemsBatchTx: %v", err)
+	}
+	if err := CreatePlanFolderErrorsBatchTx(tx, "plan-det", []PlanFolderError{
+		{PlanID: "plan-det", ErrorIndex: 0, FolderPath: "/music/Album", Code: "SOME_ERR", Message: "boom", Retryable: true},
+	}); err != nil {
+		t.Fatalf("CreatePlanFolderErrorsBatchTx: %v", err)
+	}
+	if err := CreatePlanSuccessfulFoldersBatchTx(tx, "plan-det", []string{"/music/Album", "/music/Second"}); err != nil {
+		t.Fatalf("CreatePlanSuccessfulFoldersBatchTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := repo.GetPlanDetail("plan-det")
+	if err != nil {
+		t.Fatalf("GetPlanDetail failed: %v", err)
+	}
+	if detail.Plan.PlanID != "plan-det" || detail.Plan.LibraryID != lib.ID {
+		t.Errorf("detail plan mismatch: %+v", detail.Plan)
+	}
+	if len(detail.Items) != 1 || detail.Items[0].OpType != "delete" {
+		t.Errorf("expected 1 delete item, got %+v", detail.Items)
+	}
+	if len(detail.FolderErrors) != 1 || detail.FolderErrors[0].Code != "SOME_ERR" || !detail.FolderErrors[0].Retryable {
+		t.Errorf("folder errors mismatch: %+v", detail.FolderErrors)
+	}
+	if len(detail.SuccessfulFolders) != 2 || detail.SuccessfulFolders[1] != "/music/Second" {
+		t.Errorf("successful folders mismatch: %+v", detail.SuccessfulFolders)
+	}
+
+	if _, err := repo.GetPlanDetail("no-such-plan"); !errors.Is(err, ErrPlanNotFound) {
+		t.Errorf("expected ErrPlanNotFound for unknown plan, got %v", err)
 	}
 }

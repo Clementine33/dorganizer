@@ -278,7 +278,7 @@ func (s *serviceImpl) Plan(_ context.Context, req Request) (Response, error) {
 	plan.PlanID = planID
 
 	planDBQueryCount++ // persistPlan performs DB writes/reads in a transaction.
-	if err := persistPlan(s.repo, planID, req, plan, planType, planCfg.RootResolve.Batch); err != nil {
+	if err := persistPlan(s.repo, planID, req, plan, planType, planErrors, successfulFolders, planCfg.RootResolve.Batch); err != nil {
 		recordSQLiteBusyLocked(err)
 		if planErr, ok := err.(*Error); ok {
 			return Response{}, planErr

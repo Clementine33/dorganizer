@@ -11,7 +11,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 )
 
-func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *analyze.Plan, planType string, useBatchRootResolve bool) error {
+func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *analyze.Plan, planType string, planErrors []*FolderError, successfulFolders []string, useBatchRootResolve bool) error {
 	resolveRootFromEntries := func(tx *sql.Tx, path string) (string, error) {
 		pathPosix := filepath.ToSlash(path)
 		if pathPosix == "" {
@@ -113,7 +113,7 @@ func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *anal
 		effectivePlanType = "slim"
 	}
 
-	planRow := &sqlite.Plan{PlanID: planID, RootPath: filepath.ToSlash(scopeRootPath), ScanRootPath: filepath.ToSlash(rootPath), PlanType: effectivePlanType, SnapshotToken: plan.SnapshotToken, Status: "ready", CreatedAt: time.Now()}
+	planRow := &sqlite.Plan{PlanID: planID, RootPath: filepath.ToSlash(scopeRootPath), ScanRootPath: filepath.ToSlash(rootPath), LibraryID: req.LibraryID, PlanType: effectivePlanType, SnapshotToken: plan.SnapshotToken, Status: "ready", CreatedAt: time.Now()}
 	if err := sqlite.CreatePlanTx(tx, planRow); err != nil {
 		if sqlite.IsPlanIDConflictError(err) {
 			return NewError(ErrKindAlreadyExists, "PLAN_ID_CONFLICT", fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID), err)
@@ -171,6 +171,33 @@ func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *anal
 	if len(items) > 0 {
 		if err := sqlite.CreatePlanItemsBatchTx(tx, planID, items); err != nil {
 			return fmt.Errorf("batch insert plan items: %w", err)
+		}
+	}
+
+	// Persist folder outcomes with the plan so the review page can be
+	// reconstructed from the plan detail; error_events are retention-managed
+	// and not plan-scoped, so they cannot serve as the durable source.
+	folderErrs := make([]sqlite.PlanFolderError, 0, len(planErrors))
+	for i, pe := range planErrors {
+		if pe.Code == "" {
+			continue
+		}
+		folderErrs = append(folderErrs, sqlite.PlanFolderError{
+			ErrorIndex: i,
+			FolderPath: pe.FolderPath,
+			Code:       pe.Code,
+			Message:    pe.Message,
+			Retryable:  pe.Retryable,
+		})
+	}
+	if len(folderErrs) > 0 {
+		if err := sqlite.CreatePlanFolderErrorsBatchTx(tx, planID, folderErrs); err != nil {
+			return fmt.Errorf("batch insert plan folder errors: %w", err)
+		}
+	}
+	if len(successfulFolders) > 0 {
+		if err := sqlite.CreatePlanSuccessfulFoldersBatchTx(tx, planID, successfulFolders); err != nil {
+			return fmt.Errorf("batch insert plan successful folders: %w", err)
 		}
 	}
 

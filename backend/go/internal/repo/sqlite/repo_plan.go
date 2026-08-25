@@ -2,11 +2,28 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 // ==================== Plan CRUD Methods ====================
+
+// ErrPlanNotFound is returned when a plan cannot be found.
+var ErrPlanNotFound = errors.New("plan not found")
+
+const planColumns = `plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, created_at`
+
+// scanPlan scans one plan row (ordered per planColumns) into p.
+func scanPlan(p *Plan, createdAtStr string, libraryID sql.NullString, slimMode sql.NullString) {
+	if libraryID.Valid {
+		p.LibraryID = libraryID.String
+	}
+	if slimMode.Valid {
+		p.SlimMode = &slimMode.String
+	}
+	p.CreatedAt = parseTimestamp(createdAtStr)
+}
 
 // CreatePlan inserts a new plan
 func (r *Repository) CreatePlan(p *Plan) error {
@@ -14,10 +31,14 @@ func (r *Repository) CreatePlan(p *Plan) error {
 	if p.SlimMode != nil {
 		slimMode = *p.SlimMode
 	}
+	var libraryID interface{}
+	if p.LibraryID != "" {
+		libraryID = p.LibraryID
+	}
 	_, err := r.db.Exec(`
-		INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.PlanID, p.RootPath, p.ScanRootPath, p.PlanType, slimMode, p.SnapshotToken, p.Status, p.CreatedAt.Format(timeFormat))
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.PlanID, p.RootPath, p.ScanRootPath, libraryID, p.PlanType, slimMode, p.SnapshotToken, p.Status, p.CreatedAt.Format(timeFormat))
 	return err
 }
 
@@ -25,25 +46,25 @@ func (r *Repository) CreatePlan(p *Plan) error {
 func (r *Repository) GetPlan(planID string) (*Plan, error) {
 	var p Plan
 	var createdAtStr string
-	var slimMode sql.NullString
+	var slimMode, libraryID sql.NullString
 	err := r.db.QueryRow(`
-		SELECT plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at
+		SELECT `+planColumns+`
 		FROM plans WHERE plan_id = ?
-	`, planID).Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr)
+	`, planID).Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrPlanNotFound
+		}
 		return nil, err
 	}
-	if slimMode.Valid {
-		p.SlimMode = &slimMode.String
-	}
-	p.CreatedAt = parseTimestamp(createdAtStr)
+	scanPlan(&p, createdAtStr, libraryID, slimMode)
 	return &p, nil
 }
 
 // ListPlansByRoot returns all plans for a root
 func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
 	rows, err := r.db.Query(`
-		SELECT plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at
+		SELECT `+planColumns+`
 		FROM plans WHERE root_path = ? ORDER BY created_at DESC
 	`, rootPath)
 	if err != nil {
@@ -55,20 +76,144 @@ func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
 	for rows.Next() {
 		var p Plan
 		var createdAtStr string
-		var slimMode sql.NullString
-		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr); err != nil {
+		var slimMode, libraryID sql.NullString
+		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr); err != nil {
 			return nil, err
 		}
-		if slimMode.Valid {
-			p.SlimMode = &slimMode.String
-		}
-		p.CreatedAt = parseTimestamp(createdAtStr)
+		scanPlan(&p, createdAtStr, libraryID, slimMode)
 		plans = append(plans, &p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return plans, nil
+}
+
+// ListPlans returns plans newest-first in a single SQL query. When libraryID
+// is non-nil only plans owned by that library are returned; otherwise all
+// plans (including legacy plans without ownership) are listed. Ordering and
+// limiting happen in SQL.
+func (r *Repository) ListPlans(libraryID *string, limit int) ([]*Plan, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT ` + planColumns + ` FROM plans`
+	var args []any
+	if libraryID != nil {
+		query += ` WHERE library_id = ?`
+		args = append(args, *libraryID)
+	}
+	query += ` ORDER BY created_at DESC, plan_id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var plans []*Plan
+	for rows.Next() {
+		var p Plan
+		var createdAtStr string
+		var slimMode, libID sql.NullString
+		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr); err != nil {
+			return nil, err
+		}
+		scanPlan(&p, createdAtStr, libID, slimMode)
+		plans = append(plans, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return plans, nil
+}
+
+// PlanDetail is a plan plus everything needed to rebuild the review page
+// without touching retention-managed error_events.
+type PlanDetail struct {
+	Plan              Plan
+	Items             []PlanItem
+	FolderErrors      []PlanFolderError
+	SuccessfulFolders []string
+}
+
+// GetPlanDetail returns a plan with its items, folder errors, and successful
+// folders, each ordered deterministically.
+func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
+	plan, err := r.GetPlan(planID)
+	if err != nil {
+		return nil, err
+	}
+
+	detail := &PlanDetail{Plan: *plan}
+
+	itemRows, err := r.db.Query(`
+		SELECT plan_id, item_index, op_type, source_path, target_path, reason_code, precondition_path, precondition_content_rev, precondition_size, precondition_mtime
+		FROM plan_items WHERE plan_id = ? ORDER BY item_index
+	`, planID)
+	if err != nil {
+		return nil, err
+	}
+	for itemRows.Next() {
+		var pi PlanItem
+		var targetPath sql.NullString
+		if err := itemRows.Scan(&pi.PlanID, &pi.ItemIndex, &pi.OpType, &pi.SourcePath, &targetPath, &pi.ReasonCode, &pi.PreconditionPath, &pi.PreconditionContentRev, &pi.PreconditionSize, &pi.PreconditionMtime); err != nil {
+			itemRows.Close()
+			return nil, err
+		}
+		if targetPath.Valid {
+			pi.TargetPath = &targetPath.String
+		}
+		detail.Items = append(detail.Items, pi)
+	}
+	itemRows.Close()
+	if err := itemRows.Err(); err != nil {
+		return nil, err
+	}
+
+	errRows, err := r.db.Query(`
+		SELECT plan_id, error_index, folder_path, code, message, retryable
+		FROM plan_errors WHERE plan_id = ? ORDER BY error_index
+	`, planID)
+	if err != nil {
+		return nil, err
+	}
+	for errRows.Next() {
+		var pe PlanFolderError
+		var retryable int
+		if err := errRows.Scan(&pe.PlanID, &pe.ErrorIndex, &pe.FolderPath, &pe.Code, &pe.Message, &retryable); err != nil {
+			errRows.Close()
+			return nil, err
+		}
+		pe.Retryable = retryable == 1
+		detail.FolderErrors = append(detail.FolderErrors, pe)
+	}
+	errRows.Close()
+	if err := errRows.Err(); err != nil {
+		return nil, err
+	}
+
+	folderRows, err := r.db.Query(`
+		SELECT folder_path FROM plan_successful_folders WHERE plan_id = ? ORDER BY folder_index
+	`, planID)
+	if err != nil {
+		return nil, err
+	}
+	for folderRows.Next() {
+		var p string
+		if err := folderRows.Scan(&p); err != nil {
+			folderRows.Close()
+			return nil, err
+		}
+		detail.SuccessfulFolders = append(detail.SuccessfulFolders, p)
+	}
+	folderRows.Close()
+	if err := folderRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return detail, nil
 }
 
 // UpdatePlanStatus updates a plan's status
@@ -165,11 +310,63 @@ func CreatePlanTx(tx *sql.Tx, p *Plan) error {
 	if p.SlimMode != nil {
 		slimMode = *p.SlimMode
 	}
+	var libraryID interface{}
+	if p.LibraryID != "" {
+		libraryID = p.LibraryID
+	}
 	_, err := tx.Exec(`
-		INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.PlanID, p.RootPath, p.ScanRootPath, p.PlanType, slimMode, p.SnapshotToken, p.Status, p.CreatedAt.Format(timeFormat))
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.PlanID, p.RootPath, p.ScanRootPath, libraryID, p.PlanType, slimMode, p.SnapshotToken, p.Status, p.CreatedAt.Format(timeFormat))
 	return err
+}
+
+// CreatePlanFolderErrorsBatchTx persists folder-scoped plan errors atomically
+// with the rest of the plan.
+func CreatePlanFolderErrorsBatchTx(tx *sql.Tx, planID string, errs []PlanFolderError) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO plan_errors (plan_id, error_index, folder_path, code, message, retryable)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare plan error insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range errs {
+		retryable := 0
+		if e.Retryable {
+			retryable = 1
+		}
+		if _, err := stmt.Exec(planID, e.ErrorIndex, e.FolderPath, e.Code, e.Message, retryable); err != nil {
+			return fmt.Errorf("insert plan error %q: %w", e.FolderPath, err)
+		}
+	}
+	return nil
+}
+
+// CreatePlanSuccessfulFoldersBatchTx persists the folders that analyzed
+// cleanly for a plan.
+func CreatePlanSuccessfulFoldersBatchTx(tx *sql.Tx, planID string, folders []string) error {
+	if len(folders) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO plan_successful_folders (plan_id, folder_index, folder_path)
+		VALUES (?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare successful folder insert: %w", err)
+	}
+	defer stmt.Close()
+	for i, f := range folders {
+		if _, err := stmt.Exec(planID, i, f); err != nil {
+			return fmt.Errorf("insert successful folder %q: %w", f, err)
+		}
+	}
+	return nil
 }
 
 // IsPlanIDConflictError checks if an error is a plan ID conflict error

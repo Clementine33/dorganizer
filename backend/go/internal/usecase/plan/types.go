@@ -51,6 +51,9 @@ type Request struct {
 	FolderPath           string
 	FolderPaths          []string
 	PruneMatchedExcluded bool
+	// LibraryID is the owning library for web-created plans; gRPC/internal
+	// callers may leave it empty, in which case the plan stays unattributed.
+	LibraryID string
 }
 
 // Response is the output from the Plan operation.

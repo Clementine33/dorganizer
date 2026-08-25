@@ -1,7 +1,7 @@
 package execute
 
 import (
-	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -55,7 +55,7 @@ func loadPlan(repo *sqlite.Repository, planID string, softDelete bool) (*exesvc.
 
 // mapLoadError maps plan-loading errors to usecase errors and emits events through the sink.
 func (s *serviceImpl) mapLoadError(planID string, err error, sink EventSink) *Error {
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sqlite.ErrPlanNotFound) {
 		_ = sink.Emit(newEvent("error", "execute", "PLAN_NOT_FOUND",
 			fmt.Sprintf("Plan not found: %s", planID)))
 		s.persistExecuteErrorGlobal("PLAN_NOT_FOUND", fmt.Sprintf("Plan not found: %s", planID))
