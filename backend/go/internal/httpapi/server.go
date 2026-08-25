@@ -41,6 +41,7 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/folders/{folderId}/tree", protect(http.HandlerFunc(s.getFolderTree)))
 	mux.Handle("POST /api/v1/plans", protect(http.HandlerFunc(s.createPlan)))
 	mux.Handle("GET /api/v1/plans", protect(http.HandlerFunc(s.listPlans)))
+	mux.Handle("GET /api/v1/plans/{id}", protect(http.HandlerFunc(s.getPlanDetail)))
 	return recoveryMiddleware(corsMiddleware(deps.CORSOrigins)(routingCompatibilityMiddleware(mux)))
 }
 

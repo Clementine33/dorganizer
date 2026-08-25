@@ -59,6 +59,7 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
     ),
     listFolders: vi.fn().mockResolvedValue(folders),
     getFolderTree: vi.fn(),
+    getPlan: vi.fn(),
     createPlan: vi.fn().mockResolvedValue(plan),
     listPlans: vi.fn(),
     ...overrides,

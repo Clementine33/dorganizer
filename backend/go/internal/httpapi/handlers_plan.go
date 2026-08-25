@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
@@ -102,8 +101,8 @@ func toPlanResponse(resp planusecase.Response) planResponse {
 // normalized or re-based in HTTP.
 func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 	var req planCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid plan payload")
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "invalid plan payload")
 		return
 	}
 
@@ -166,6 +165,7 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 		SourceFiles:          sourceFiles,
 		FolderPaths:          folderPaths,
 		PruneMatchedExcluded: req.PruneMatchedExcluded,
+		LibraryID:            req.LibraryID,
 	})
 	if err != nil {
 		if planErr, ok := planusecase.AsError(err); ok {
@@ -198,11 +198,10 @@ type planInfoResponse struct {
 }
 
 // listPlans returns plans for a library (when library_id is given) or across
-// all libraries, newest first. It reuses the repository's ListPlansByRoot
-// method; no plan-specific SQL is introduced here. For a library, plans are
-// listed for the library root and for every library folder path, because a
-// folder-scoped plan is persisted with its scope folder as root (e.g.
-// /music/albumA) and must still appear under the owning library (/music).
+// all libraries, newest first. Ownership is stored on the plan (not derived
+// from the current folder index), so folder-scoped plans stay listed after
+// rescans and the unfiltered list includes every plan. Filtering, ordering,
+// and limiting happen in one SQL query.
 func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -214,10 +213,9 @@ func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 
-	var roots []string
-	if libraryID := r.URL.Query().Get("library_id"); libraryID != "" {
-		lib, err := s.deps.Repo.GetLibrary(libraryID)
-		if err != nil {
+	var libraryID *string
+	if raw := r.URL.Query().Get("library_id"); raw != "" {
+		if _, err := s.deps.Repo.GetLibrary(raw); err != nil {
 			if errors.Is(err, sqlite.ErrLibraryNotFound) {
 				writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
 				return
@@ -225,49 +223,13 @@ func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
 			return
 		}
-		roots = []string{lib.RootPath}
-		folders, err := s.deps.Repo.ListLibraryFolders(lib.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list folders")
-			return
-		}
-		for _, f := range folders {
-			roots = append(roots, f.Path)
-		}
-	} else {
-		libs, err := s.deps.Repo.ListLibraries()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list libraries")
-			return
-		}
-		for _, l := range libs {
-			roots = append(roots, l.RootPath)
-		}
+		libraryID = &raw
 	}
 
-	// Merge per-root plans, deduping by plan ID (libraries can share roots).
-	seen := make(map[string]bool)
-	plans := make([]*sqlite.Plan, 0)
-	for _, root := range roots {
-		rootPlans, err := s.deps.Repo.ListPlansByRoot(root)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list plans")
-			return
-		}
-		for _, p := range rootPlans {
-			if seen[p.PlanID] {
-				continue
-			}
-			seen[p.PlanID] = true
-			plans = append(plans, p)
-		}
-	}
-
-	sort.SliceStable(plans, func(i, j int) bool {
-		return plans[i].CreatedAt.After(plans[j].CreatedAt)
-	})
-	if len(plans) > limit {
-		plans = plans[:limit]
+	plans, err := s.deps.Repo.ListPlans(libraryID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list plans")
+		return
 	}
 
 	out := make([]planInfoResponse, 0, len(plans))
@@ -283,4 +245,72 @@ func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Plans []planInfoResponse `json:"plans"`
 	}{Plans: out})
+}
+
+// getPlanDetail returns the full review payload for one plan, rebuilt from
+// persisted plan items and folder outcomes. Summary semantics mirror the
+// usecase's own reconstruction so the create and detail payloads agree.
+func (s *Server) getPlanDetail(w http.ResponseWriter, r *http.Request) {
+	detail, err := s.deps.Repo.GetPlanDetail(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, sqlite.ErrPlanNotFound) {
+			writeError(w, http.StatusNotFound, "PLAN_NOT_FOUND", "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load plan")
+		return
+	}
+
+	ops := make([]planOperationResponse, 0, len(detail.Items))
+	for _, item := range detail.Items {
+		opType := "delete"
+		if item.OpType == "convert_and_delete" {
+			opType = "convert"
+		}
+		targetPath := ""
+		if item.TargetPath != nil {
+			targetPath = *item.TargetPath
+		}
+		ops = append(ops, planOperationResponse{
+			Type:       opType,
+			SourcePath: item.SourcePath,
+			TargetPath: targetPath,
+		})
+	}
+	errs := make([]planErrorResponse, 0, len(detail.FolderErrors))
+	for _, pe := range detail.FolderErrors {
+		errs = append(errs, planErrorResponse{
+			FolderPath: pe.FolderPath,
+			Code:       pe.Code,
+			Message:    pe.Message,
+			Retryable:  pe.Retryable,
+		})
+	}
+
+	summaryReason := "NO_MATCH"
+	if len(ops) > 0 {
+		summaryReason = "ACTIONABLE"
+	}
+	for _, pe := range detail.FolderErrors {
+		if pe.Code == "GLOBAL_NO_SCOPE" {
+			summaryReason = "GLOBAL_SHORT_CIRCUIT"
+			break
+		}
+	}
+
+	writeJSON(w, http.StatusOK, planResponse{
+		PlanID:        detail.Plan.PlanID,
+		SnapshotToken: detail.Plan.SnapshotToken,
+		RootPath:      detail.Plan.RootPath,
+		Summary: planSummaryResponse{
+			OperationCount:  len(ops),
+			ErrorCount:      len(errs),
+			TotalCount:      len(ops),
+			ActionableCount: len(ops),
+			SummaryReason:   summaryReason,
+		},
+		Operations:        ops,
+		Errors:            errs,
+		SuccessfulFolders: detail.SuccessfulFolders,
+	})
 }

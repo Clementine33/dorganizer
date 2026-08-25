@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/client'
-import type { ApiClientContract, PlanResponse } from '@/lib/api/types'
+import type { ApiClientContract, PlanInfo, PlanResponse } from '@/lib/api/types'
 import { usePlansStore } from './plans'
 
 const plan: PlanResponse = {
@@ -31,6 +31,7 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
     scanLibrary: vi.fn(),
     listFolders: vi.fn(),
     getFolderTree: vi.fn(),
+    getPlan: vi.fn(),
     createPlan: vi.fn().mockResolvedValue(plan),
     listPlans: vi.fn().mockResolvedValue([
       { plan_id: 'plan-1', root_path: '/music', plan_type: 'slim', status: 'planned', created_at: '2026-08-22T00:00:00Z' },
@@ -90,5 +91,73 @@ describe('plans store', () => {
     store.clearError()
     expect(store.errorCode).toBeNull()
     expect(store.error).toBeNull()
+  })
+})
+
+describe('plans store races', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('ignores stale plan list responses when the library changes mid-load', async () => {
+    let resolveA!: (plans: PlanInfo[]) => void
+    const listPlans = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<PlanInfo[]>((resolve) => {
+            resolveA = resolve
+          }),
+      )
+      .mockResolvedValue([
+        { plan_id: 'plan-b', root_path: '/music', plan_type: 'slim', status: 'ready', created_at: '2026-08-22T00:00:00Z' },
+      ])
+    const api = apiStub({ listPlans })
+    const store = usePlansStore()
+
+    const loadA = store.loadPlans('lib-a', api)
+    const loadB = store.loadPlans('lib-b', api)
+    await loadB
+    expect(store.plans.map((item) => item.plan_id)).toEqual(['plan-b'])
+    expect(store.loading).toBe(false)
+
+    // The superseded lib-a request resolves late: it must not overwrite lib-b.
+    resolveA([{ plan_id: 'plan-a', root_path: '/music', plan_type: 'slim', status: 'ready', created_at: '2026-08-22T00:00:00Z' }])
+    await loadA
+    expect(store.plans.map((item) => item.plan_id)).toEqual(['plan-b'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('ignores stale plan detail responses when navigating quickly', async () => {
+    let resolveA!: (p: PlanResponse) => void
+    const getPlan = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<PlanResponse>((resolve) => {
+            resolveA = resolve
+          }),
+      )
+      .mockResolvedValue({ ...plan, plan_id: 'plan-b' })
+    const api = apiStub({ getPlan })
+    const store = usePlansStore()
+
+    const loadA = store.loadPlan('plan-a', api)
+    const loadB = store.loadPlan('plan-b', api)
+    await loadB
+    expect(store.currentPlan?.plan_id).toBe('plan-b')
+    expect(store.detailLoading).toBe(false)
+
+    resolveA({ ...plan, plan_id: 'plan-a' })
+    await loadA
+    expect(store.currentPlan?.plan_id).toBe('plan-b')
+    expect(store.detailLoading).toBe(false)
+  })
+
+  it('clears a stale currentPlan when navigating to a different plan', async () => {
+    const api = apiStub({ getPlan: vi.fn().mockResolvedValue({ ...plan, plan_id: 'plan-b' }) })
+    const store = usePlansStore()
+    store.currentPlan = plan // plan-a cached from a just-created plan
+
+    await store.loadPlan('plan-b', api)
+    expect(store.currentPlan?.plan_id).toBe('plan-b')
   })
 })

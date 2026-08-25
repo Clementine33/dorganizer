@@ -2,6 +2,12 @@ import { defineStore } from 'pinia'
 import { ApiError } from '@/lib/api/client'
 import type { ApiClientContract, PlanInfo, PlanResponse } from '@/lib/api/types'
 
+// Monotonic tokens for list and detail loads: bumped on every request, so
+// responses from superseded requests (fast library switching, quick plan
+// navigation) are discarded instead of overwriting current state.
+let plansRequestSeq = 0
+let planDetailSeq = 0
+
 function errorDetails(error: unknown): { code: string | null; message: string } {
   return {
     code: error instanceof ApiError ? error.code : null,
@@ -13,7 +19,12 @@ export const usePlansStore = defineStore('plans', {
   state: () => ({
     plans: [] as PlanInfo[],
     currentPlan: null as PlanResponse | null,
+    // loading covers plan creation and listing; detailLoading tracks the
+    // review-page fetch separately so one cannot clear the other early.
     loading: false,
+    detailLoading: false,
+    detailErrorCode: null as string | null,
+    detailError: null as string | null,
     errorCode: null as string | null,
     error: null as string | null,
   }),
@@ -56,15 +67,42 @@ export const usePlansStore = defineStore('plans', {
       }
     },
     async loadPlans(libraryId: string | undefined, client: ApiClientContract) {
+      const seq = ++plansRequestSeq
       this.loading = true
       this.clearError()
       try {
-        this.plans = await client.listPlans(libraryId)
+        const plans = await client.listPlans(libraryId)
+        if (seq !== plansRequestSeq) return
+        this.plans = plans
       } catch (error) {
+        if (seq !== plansRequestSeq) return
         this.setError(error)
         throw error
       } finally {
-        this.loading = false
+        if (seq === plansRequestSeq) this.loading = false
+      }
+    },
+    // loadPlan fetches one plan for the review page. Any in-memory currentPlan
+    // for a different plan is cleared immediately so the page never renders
+    // another plan's details while the fetch is in flight.
+    async loadPlan(planID: string, client: ApiClientContract) {
+      const seq = ++planDetailSeq
+      this.detailLoading = true
+      this.detailErrorCode = null
+      this.detailError = null
+      if (this.currentPlan && this.currentPlan.plan_id !== planID) this.currentPlan = null
+      try {
+        const plan = await client.getPlan(planID)
+        if (seq !== planDetailSeq) return
+        this.currentPlan = plan
+      } catch (error) {
+        if (seq !== planDetailSeq) return
+        const details = errorDetails(error)
+        this.detailErrorCode = details.code
+        this.detailError = details.message
+        throw error
+      } finally {
+        if (seq === planDetailSeq) this.detailLoading = false
       }
     },
     setError(error: unknown) {

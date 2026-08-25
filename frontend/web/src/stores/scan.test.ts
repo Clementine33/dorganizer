@@ -18,6 +18,7 @@ function apiWithScan(scanLibrary: ApiClientContract['scanLibrary']): ApiClientCo
     scanLibrary,
     listFolders: vi.fn(),
     getFolderTree: vi.fn(),
+    getPlan: vi.fn(),
     createPlan: vi.fn(),
     listPlans: vi.fn(),
   }

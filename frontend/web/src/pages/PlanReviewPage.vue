@@ -1,24 +1,50 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, FileSearch } from '@lucide/vue'
+import { ArrowLeft, FileSearch, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import FolderErrorsPanel from '@/features/plans/FolderErrorsPanel.vue'
 import OperationsTable from '@/features/plans/OperationsTable.vue'
 import PlanSummaryCards from '@/features/plans/PlanSummaryCards.vue'
 import { planStatusLabel } from '@/features/plans/plan-status'
+import { useApiClient } from '@/lib/api/client'
 import { usePlansStore } from '@/stores/plans'
 
 const route = useRoute()
 const router = useRouter()
+const api = useApiClient()
 const plans = usePlansStore()
 
 const planId = computed(() => route.params.id as string)
+
+// A freshly created plan is in memory and renders immediately; the detail load
+// below still runs so refresh, history, and deep links reconstruct the same
+// review from the backend.
 const currentPlan = computed(() =>
   plans.currentPlan && plans.currentPlan.plan_id === planId.value ? plans.currentPlan : null,
 )
 const planInfo = computed(() => plans.plans.find((item) => item.plan_id === planId.value) ?? null)
 const status = computed(() => planInfo.value?.status ?? (currentPlan.value ? 'ready' : ''))
+const detailLoading = computed(() => plans.detailLoading)
+const detailError = computed(() => plans.detailError)
+const detailErrorCode = computed(() => plans.detailErrorCode)
+
+async function loadDetail(): Promise<void> {
+  try {
+    await plans.loadPlan(planId.value, api)
+  } catch {
+    // Store exposes the envelope code/message in the banner below.
+  }
+}
+
+watch(
+  planId,
+  (id, previous) => {
+    if (!id || id === previous) return
+    void loadDetail()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -65,12 +91,42 @@ const status = computed(() => planInfo.value?.status ?? (currentPlan.value ? 're
       </div>
     </template>
 
+    <div
+      v-else-if="detailLoading"
+      data-testid="plan-detail-loading"
+      class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground"
+    >
+      <div class="flex items-center gap-2">
+        <LoaderCircle class="size-4 animate-spin" />
+        正在读取计划详情…
+      </div>
+    </div>
+
+    <div v-else-if="detailError" data-testid="plan-detail-error" class="grid min-h-0 flex-1 place-items-center px-6 text-center">
+      <div class="max-w-sm">
+        <FileSearch class="mx-auto size-7 text-muted-foreground" />
+        <h2 class="mt-3 font-heading text-base font-semibold">
+          {{ detailErrorCode === 'PLAN_NOT_FOUND' ? '计划不存在' : '计划详情读取失败' }}
+        </h2>
+        <p class="mt-1 text-xs leading-5 text-muted-foreground">
+          <span v-if="detailErrorCode" class="mr-1 font-mono">{{ detailErrorCode }}</span>{{ detailError }}。
+          当前计划状态：{{ planInfo ? planStatusLabel(planInfo.status) : '未知' }}。
+        </p>
+        <div class="mt-4 flex justify-center gap-2">
+          <Button data-testid="retry-plan-detail" size="sm" @click="loadDetail">
+            <RefreshCw class="size-3.5" />
+            重试
+          </Button>
+          <Button variant="outline" size="sm" @click="router.push('/plans')">返回计划列表</Button>
+        </div>
+      </div>
+    </div>
+
     <div v-else class="grid min-h-0 flex-1 place-items-center px-6 text-center">
       <div class="max-w-sm">
         <FileSearch class="mx-auto size-7 text-muted-foreground" />
         <h2 class="mt-3 font-heading text-base font-semibold">计划详情不可用</h2>
         <p class="mt-1 text-xs leading-5 text-muted-foreground">
-          后端不提供单计划详情接口；重新生成计划后即可在这里审阅操作与错误。
           当前计划状态：{{ planInfo ? planStatusLabel(planInfo.status) : '未知' }}。
         </p>
         <Button class="mt-4" size="sm" @click="router.push('/plans')">返回计划列表</Button>

@@ -124,4 +124,5 @@ export interface ApiClientContract {
   getFolderTree(libraryId: string, folderId: string): Promise<TreeNode>
   createPlan(input: CreatePlanInput): Promise<PlanResponse>
   listPlans(libraryId?: string, limit?: number): Promise<PlanInfo[]>
+  getPlan(id: string): Promise<PlanResponse>
 }

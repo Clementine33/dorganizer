@@ -105,6 +105,10 @@ export class ApiClient implements ApiClientContract {
     return (await this.request<{ plans: PlanInfo[] }>(`/plans?${query.toString()}`)).plans
   }
 
+  getPlan(id: string): Promise<PlanResponse> {
+    return this.request(`/plans/${encodeURIComponent(id)}`)
+  }
+
   private url(path: string): string {
     return `${this.baseUrl}${path}`
   }

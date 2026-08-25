@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -719,9 +720,9 @@ func TestListPlans(t *testing.T) {
 }
 
 // TestListPlansIncludesFolderScopedPlans verifies that a folder-scoped plan
-// (persisted with its scope folder as root, e.g. /music/albumA) still appears
-// in the library-filtered listing, whose roots are the library root plus every
-// library folder path (root under/equal to the library root).
+// (persisted with its scope folder as root, e.g. /music/albumA) appears in the
+// library-filtered listing via its stored ownership, and that the unfiltered
+// listing includes every plan (folder-scoped and unattributed legacy plans).
 func TestListPlansIncludesFolderScopedPlans(t *testing.T) {
 	engine, repo := newPlanTestServer(t)
 	libID, folder := seedFolderLibrary(t, engine, repo)
@@ -730,6 +731,7 @@ func TestListPlansIncludesFolderScopedPlans(t *testing.T) {
 	if err := repo.CreatePlan(&sqlite.Plan{
 		PlanID:    rootPlan,
 		RootPath:  "/music",
+		LibraryID: libID,
 		PlanType:  "single_delete",
 		Status:    "ready",
 		CreatedAt: time.Now(),
@@ -769,5 +771,117 @@ func TestListPlansIncludesFolderScopedPlans(t *testing.T) {
 		if root != "/music" && !strings.HasPrefix(root, "/music/") {
 			t.Errorf("plan root %q is not under the library root /music", root)
 		}
+	}
+}
+
+// TestFolderScopedPlanSurvivesRescan is the core ownership regression: a plan
+// scoped to a folder must remain listed for its library even after a rescan
+// removes that folder from the materialized index (ownership is stored on the
+// plan, not derived from the folder index).
+func TestFolderScopedPlanSurvivesRescan(t *testing.T) {
+	engine, repo := newPlanTestServer(t)
+	libID, folder := seedFolderLibrary(t, engine, repo)
+	planID := createFolderPlan(t, engine, libID, folder.ID)
+
+	// Simulate a rescan where albumA disappears from the entries table; the
+	// materialized folder index no longer contains it.
+	if _, err := repo.DB().Exec(`
+		DELETE FROM entries WHERE path = '/music/albumA' OR path LIKE '/music/albumA/%'
+	`); err != nil {
+		t.Fatalf("delete albumA entries: %v", err)
+	}
+	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {
+		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
+	}
+	folders, err := repo.ListLibraryFolders(libID)
+	if err != nil {
+		t.Fatalf("ListLibraryFolders failed: %v", err)
+	}
+	if len(folders) != 0 {
+		t.Fatalf("expected folder index to be empty after rescan, got %d folders", len(folders))
+	}
+
+	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id="+libID, nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var out struct {
+		Plans []planInfoDTO `json:"plans"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
+	}
+	found := false
+	for _, p := range out.Plans {
+		if p.PlanID == planID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("folder-scoped plan %q disappeared from library listing after rescan (body=%s)", planID, w.Body.String())
+	}
+
+	// The unfiltered listing must also include folder-scoped plans.
+	w2 := doRequest(t, engine, http.MethodGet, "/api/v1/plans", nil, nil)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("global status = %d, want 200 (body=%s)", w2.Code, w2.Body.String())
+	}
+	var out2 struct {
+		Plans []planInfoDTO `json:"plans"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &out2); err != nil {
+		t.Fatalf("decode global plans: %v (body=%s)", err, w2.Body.String())
+	}
+	found = false
+	for _, p := range out2.Plans {
+		if p.PlanID == planID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("folder-scoped plan %q missing from unfiltered listing (body=%s)", planID, w2.Body.String())
+	}
+}
+
+// TestGetPlanDetail verifies the durable plan detail endpoint: a plan created
+// via the API can be fetched by ID and reconstructed with its operations, and
+// unknown IDs yield PLAN_NOT_FOUND.
+func TestGetPlanDetail(t *testing.T) {
+	engine, _ := newPlanTestServer(t)
+	libraryRoot := t.TempDir()
+	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
+	source := writeTestAudioFile(t, libraryRoot, "01.flac")
+	planID := createSingleDeletePlan(t, engine, libID, []string{source})
+
+	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+url.PathEscape(planID), nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	out := decodePlanResponse(t, w)
+	if out.PlanID != planID {
+		t.Errorf("plan_id = %q, want %q", out.PlanID, planID)
+	}
+	if len(out.Operations) != 1 {
+		t.Fatalf("expected 1 operation, got %+v", out.Operations)
+	}
+	if out.Operations[0].Type != "delete" {
+		t.Errorf("operation type = %q, want delete", out.Operations[0].Type)
+	}
+	if out.Operations[0].SourcePath != pathnorm.NormalizeToPOSIX(source) {
+		t.Errorf("operation source = %q, want %q", out.Operations[0].SourcePath, pathnorm.NormalizeToPOSIX(source))
+	}
+	if out.Summary.OperationCount != 1 || out.Summary.SummaryReason != "ACTIONABLE" {
+		t.Errorf("summary = %+v, want operation_count 1 / ACTIONABLE", out.Summary)
+	}
+
+	w2 := doRequest(t, engine, http.MethodGet, "/api/v1/plans/does-not-exist", nil, nil)
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("unknown plan status = %d, want 404 (body=%s)", w2.Code, w2.Body.String())
+	}
+	code, _ := errorEnvelope(t, w2)
+	if code != "PLAN_NOT_FOUND" {
+		t.Fatalf("code = %q, want PLAN_NOT_FOUND", code)
 	}
 }

@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
-import { apiClientKey } from '@/lib/api/client'
+import { ApiError, apiClientKey } from '@/lib/api/client'
 import type { ApiClientContract, PlanInfo, PlanResponse } from '@/lib/api/types'
 import { usePlansStore } from '@/stores/plans'
 import PlanReviewPage from './PlanReviewPage.vue'
@@ -57,6 +57,7 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
     scanLibrary: vi.fn(),
     listFolders: vi.fn(),
     getFolderTree: vi.fn(),
+    getPlan: vi.fn().mockResolvedValue(plan),
     createPlan: vi.fn(),
     listPlans: vi.fn().mockResolvedValue([]),
     ...overrides,
@@ -145,8 +146,9 @@ describe('PlanReviewPage', () => {
     expect(wrapper.text()).not.toContain('执行')
   })
 
-  it('explains a deep link without a loaded plan response', async () => {
-    const { wrapper, router } = await mountPage(apiStub(), {
+  it('loads plan detail for a deep link without a cached plan response', async () => {
+    const api = apiStub({ getPlan: vi.fn().mockResolvedValue(plan) })
+    const { wrapper, router } = await mountPage(api, {
       currentPlan: null,
       plans: [
         {
@@ -159,10 +161,36 @@ describe('PlanReviewPage', () => {
       ],
     })
 
-    expect(wrapper.text()).toContain('plan-1')
-    expect(wrapper.text()).toContain('已规划')
+    expect(api.getPlan).toHaveBeenCalledWith('plan-1')
+    expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
+    expect(wrapper.get('[data-testid="review-status-pill"]').text()).toContain('已规划')
     await wrapper.get('[data-testid="back-to-plans"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/plans')
+  })
+
+  it('shows a not-found state when the plan detail 404s', async () => {
+    const api = apiStub({
+      getPlan: vi.fn().mockRejectedValue(new ApiError(404, 'PLAN_NOT_FOUND', 'plan not found')),
+    })
+    const { wrapper } = await mountPage(api, { currentPlan: null, plans: [] })
+
+    expect(wrapper.get('[data-testid="plan-detail-error"]').text()).toContain('计划不存在')
+    expect(wrapper.text()).toContain('PLAN_NOT_FOUND')
+  })
+
+  it('shows a retry state when the plan detail fetch fails', async () => {
+    const getPlan = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('backend unavailable'))
+      .mockResolvedValueOnce(plan)
+    const api = apiStub({ getPlan })
+    const { wrapper } = await mountPage(api, { currentPlan: null, plans: [] })
+
+    expect(wrapper.get('[data-testid="plan-detail-error"]').text()).toContain('计划详情读取失败')
+    await wrapper.get('[data-testid="retry-plan-detail"]').trigger('click')
+    await flushPromises()
+    expect(getPlan).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
   })
 })
