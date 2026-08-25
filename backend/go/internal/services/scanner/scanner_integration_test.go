@@ -126,15 +126,17 @@ func TestScannerService_ScanRoot_CreatesSessionAndMerges(t *testing.T) {
 		t.Error("expected staging entries to be written")
 	}
 
-	// Verify scan enriches format using stdlib extension detection
+	// Verify scan enriches format using stdlib extension detection. The exact
+	// MIME string for .wav depends on the host's mime database (audio/wav vs
+	// audio/vnd.wave), so accept both.
 	var sawWav bool
 	for _, e := range mock.StagingEntries {
 		if e.Name != "song.wav" {
 			continue
 		}
 		sawWav = true
-		if e.Format != "audio/wav" {
-			t.Fatalf("expected WAV staging format audio/wav, got %q", e.Format)
+		if e.Format != "audio/wav" && e.Format != "audio/vnd.wave" {
+			t.Fatalf("expected WAV staging format audio/wav or audio/vnd.wave, got %q", e.Format)
 		}
 	}
 	if !sawWav {
