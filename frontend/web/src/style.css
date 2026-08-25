@@ -1,0 +1,181 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-vue/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Utility classes referenced by generated shadcn-vue components. The CLI
+  normally writes these during `shadcn-vue add`; they must be kept here after
+  any manual pruning of style.css.
+*/
+@utility cn-menu-translucent {
+  --cn-menu-background: color-mix(in oklab, var(--popover) 80%, transparent);
+  background-color: var(--cn-menu-background);
+  backdrop-filter: blur(8px);
+}
+
+@utility cn-font-heading {
+  font-family: var(--font-heading);
+}
+
+@utility cn-rtl-flip {
+  &[dir='rtl'] {
+    transform: scaleX(-1);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-heading: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+/*
+  Onsei Organizer design tokens — music-library workbench.
+  Subject: a local lossless music-library organizer (scan folders, manage
+  stems/encodes). Audience: power users with large collections. The workbench
+  is dense and keyboard-driven; light theme here is a low-contrast studio
+  paper for dialogs/forms, the library surface itself is dark.
+
+  Palette (6 tokens per axis):
+    bg      #0E1116  workspace ground (mixing-desk shadow, cool black)
+    surface #161B22  panels / tracklist background
+    line    #262C37  hairline dividers
+    ink     #E6EAF0  primary text (silver haze)
+    mute    #8B93A1  secondary text
+    tape    #D9A45B  analog-tape amber — reserved for encode-state data and
+                     focus underlines, never full-button fills.
+
+  Type roles:
+    heading  Space Grotesk 600/700, tight tracking — library & artist names
+    body     system-ui 13px — chrome, densities below
+    data     ui-monospace — paths, counts, durations, queue numbers
+
+  Signature (later tasks): the "encode bicell" — each track row carries a
+  48px two-segment bar (source vs. derived format state).
+*/
+
+:root {
+  --background: #F7F5F2;
+  --foreground: #1C1917;
+  --card: #FFFFFF;
+  --card-foreground: #1C1917;
+  --popover: #FFFFFF;
+  --popover-foreground: #1C1917;
+  --primary: #1C1917;
+  --primary-foreground: #F7F5F2;
+  --secondary: #F0ECE6;
+  --secondary-foreground: #1C1917;
+  --muted: #F0ECE6;
+  --muted-foreground: #78716C;
+  --accent: #F0ECE6;
+  --accent-foreground: #1C1917;
+  --destructive: #B91C1C;
+  --destructive-foreground: #F7F5F2;
+  --border: #E2DDD4;
+  --input: #E2DDD4;
+  --ring: #B45309;
+  --brand: #7E5BEF;
+  --chart-1: #B45309;
+  --chart-2: #8A6D3B;
+  --chart-3: #5C7A6A;
+  --chart-4: #6E7A8A;
+  --chart-5: #A05E4A;
+  --radius: 0.5rem;
+  --sidebar: #F0ECE6;
+  --sidebar-foreground: #1C1917;
+  --sidebar-primary: #1C1917;
+  --sidebar-primary-foreground: #F7F5F2;
+  --sidebar-accent: #E5E0D8;
+  --sidebar-accent-foreground: #1C1917;
+  --sidebar-border: #E2DDD4;
+  --sidebar-ring: #B45309;
+}
+
+.dark {
+  --background: #0E1116;
+  --foreground: #E6EAF0;
+  --card: #16181D;
+  --card-foreground: #E6EAF0;
+  --popover: #161B22;
+  --popover-foreground: #E6EAF0;
+  --primary: #E6EAF0;
+  --primary-foreground: #0E1116;
+  --secondary: #1A1F27;
+  --secondary-foreground: #E6EAF0;
+  --muted: #161B22;
+  --muted-foreground: #8B93A1;
+  --accent: #1A1F27;
+  --accent-foreground: #E6EAF0;
+  --destructive: #E05D5D;
+  --destructive-foreground: #0E1116;
+  --border: #262C37;
+  --input: #262C37;
+  --ring: #D9A45B;
+  --brand: #7E5BEF;
+  --chart-1: #D9A45B;
+  --chart-2: #8A93A6;
+  --chart-3: #6FBF8F;
+  --chart-4: #7A9DB8;
+  --chart-5: #C08A6A;
+  --radius: 0.5rem;
+  --sidebar: #12151A;
+  --sidebar-foreground: #E6EAF0;
+  --sidebar-primary: #E6EAF0;
+  --sidebar-primary-foreground: #0E1116;
+  --sidebar-accent: #1A1F27;
+  --sidebar-accent-foreground: #E6EAF0;
+  --sidebar-border: #262C37;
+  --sidebar-ring: #D9A45B;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 13px;
+    line-height: 1.45;
+    font-feature-settings: "cv11", "ss01";
+  }
+}

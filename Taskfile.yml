@@ -31,12 +31,52 @@ tasks:
     cmds:
       - flutter analyze
 
+  dev:web:
+    desc: Run Go backend + Vite web app together (VITE_API_BASE wired from backend handshake)
+    cmds:
+      - node scripts/dev-web.mjs
+
+  typecheck:web:
+    desc: Typecheck the web app (vue-tsc)
+    dir: frontend/web
+    cmds:
+      - pnpm typecheck
+
+  test:web:
+    desc: Run web app unit tests (Vitest)
+    dir: frontend/web
+    cmds:
+      - pnpm test
+
+  build:web:
+    desc: Build the web app for production
+    dir: frontend/web
+    cmds:
+      - pnpm build
+
+  e2e:web:
+    desc: Run web e2e smoke (Playwright; boots backend + Vite). Requires `pnpm exec playwright install chromium` once.
+    dir: frontend/web
+    env:
+      ONSEI_E2E: '1'
+    cmds:
+      - pnpm exec playwright test
+
+  e2e:web:install:
+    desc: Install the Playwright Chromium browser for the web e2e smoke
+    dir: frontend/web
+    cmds:
+      - pnpm exec playwright install chromium
+
   ci:quality:
-    desc: Run quality checks (Go + Flutter)
+    desc: Run quality checks (Go + Flutter + Web)
     cmds:
       - task test:go
       - task test:flutter
       - task analyze:flutter
+      - task typecheck:web
+      - task test:web
+      - task build:web
 
   build:go:windows-x64:
     desc: Build Windows backend binary (x64)
