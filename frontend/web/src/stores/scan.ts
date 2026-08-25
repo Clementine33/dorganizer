@@ -1,0 +1,94 @@
+import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
+import { ApiError } from '@/lib/api/client'
+import type { ApiClientContract, ScanEvent } from '@/lib/api/types'
+
+export type ScanStatus = 'idle' | 'scanning' | 'completed' | 'cancelled' | 'error'
+
+export const useScanStore = defineStore('scan', {
+  state: () => ({
+    status: 'idle' as ScanStatus,
+    libraryId: null as string | null,
+    filesScanned: 0,
+    dirsScanned: 0,
+    scanId: null as string | null,
+    rootPath: null as string | null,
+    message: '',
+    errorCode: null as string | null,
+    errorMessage: null as string | null,
+    foldersRefreshNeeded: false,
+    controller: null as AbortController | null,
+  }),
+  actions: {
+    async start(libraryId: string, client: ApiClientContract) {
+      if (this.status === 'scanning') return
+      const controller = markRaw(new AbortController())
+      this.controller = controller
+      this.status = 'scanning'
+      this.libraryId = libraryId
+      this.filesScanned = 0
+      this.dirsScanned = 0
+      this.scanId = null
+      this.rootPath = null
+      this.message = ''
+      this.errorCode = null
+      this.errorMessage = null
+      this.foldersRefreshNeeded = false
+
+      try {
+        for await (const event of client.scanLibrary(libraryId, controller.signal)) {
+          this.applyEvent(event)
+        }
+        if (this.status === 'scanning') {
+          this.status = 'error'
+          this.errorCode = 'STREAM_ENDED'
+          this.errorMessage = '扫描连接提前结束，请重试。'
+        }
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          this.status = 'cancelled'
+          this.message = '扫描已取消'
+        } else {
+          this.status = 'error'
+          this.errorCode = error instanceof ApiError ? error.code : 'STREAM_ERROR'
+          this.errorMessage = error instanceof Error ? error.message : '扫描连接失败，请重试。'
+        }
+      } finally {
+        if (this.controller === controller) this.controller = null
+      }
+    },
+    applyEvent(event: ScanEvent) {
+      const data = event.data
+      if (event.type === 'started') {
+        this.status = 'scanning'
+        this.message = data.message ?? ''
+      } else if (event.type === 'progress') {
+        this.filesScanned = data.files_scanned ?? this.filesScanned
+        this.dirsScanned = data.dirs_scanned ?? this.dirsScanned
+      } else if (event.type === 'completed') {
+        this.status = 'completed'
+        this.filesScanned = data.files_scanned ?? this.filesScanned
+        this.scanId = data.scan_id ?? null
+        this.rootPath = data.root_path ?? null
+        this.foldersRefreshNeeded = true
+      } else if (event.type === 'cancelled') {
+        this.status = 'cancelled'
+        this.message = data.message ?? '扫描已取消'
+      } else if (event.type === 'error') {
+        this.status = 'error'
+        this.errorCode = data.code ?? 'SCAN_ERROR'
+        this.errorMessage = data.message ?? '扫描失败，请重试。'
+      }
+    },
+    cancel() {
+      this.controller?.abort()
+    },
+    acknowledgeFoldersRefresh() {
+      this.foldersRefreshNeeded = false
+    },
+    reset() {
+      this.controller?.abort()
+      this.$reset()
+    },
+  },
+})

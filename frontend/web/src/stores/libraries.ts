@@ -1,0 +1,145 @@
+import { defineStore } from 'pinia'
+import { ApiError } from '@/lib/api/client'
+import type {
+  ApiClientContract,
+  CreateLibraryInput,
+  Folder,
+  Library,
+  UpdateLibraryInput,
+} from '@/lib/api/types'
+
+function errorDetails(error: unknown): { code: string | null; message: string } {
+  return {
+    code: error instanceof ApiError ? error.code : null,
+    message: error instanceof Error ? error.message : '发生未知错误',
+  }
+}
+
+export const useLibrariesStore = defineStore('libraries', {
+  state: () => ({
+    libraries: [] as Library[],
+    folders: [] as Folder[],
+    activeLibraryId: null as string | null,
+    selectedFolderIds: [] as string[],
+    loading: false,
+    foldersLoading: false,
+    errorCode: null as string | null,
+    error: null as string | null,
+  }),
+  getters: {
+    activeLibrary(state): Library | null {
+      return state.libraries.find((library) => library.id === state.activeLibraryId) ?? null
+    },
+    allFoldersSelected(state): boolean {
+      return state.folders.length > 0 && state.selectedFolderIds.length === state.folders.length
+    },
+  },
+  actions: {
+    async loadLibraries(client: ApiClientContract) {
+      this.loading = true
+      this.clearError()
+      try {
+        const libraries = await client.listLibraries()
+        this.libraries = libraries
+        if (!libraries.some((library) => library.id === this.activeLibraryId)) {
+          this.activeLibraryId = libraries[0]?.id ?? null
+          this.folders = []
+          this.clearSelection()
+        }
+      } catch (error) {
+        this.setError(error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    async createLibrary(input: CreateLibraryInput, client: ApiClientContract) {
+      this.clearError()
+      try {
+        const library = await client.createLibrary(input)
+        this.libraries.push(library)
+        this.activeLibraryId = library.id
+        this.folders = []
+        this.clearSelection()
+        return library
+      } catch (error) {
+        this.setError(error)
+        throw error
+      }
+    },
+    async updateLibrary(id: string, input: UpdateLibraryInput, client: ApiClientContract) {
+      this.clearError()
+      try {
+        const updated = await client.updateLibrary(id, input)
+        const index = this.libraries.findIndex((library) => library.id === id)
+        if (index !== -1) this.libraries[index] = updated
+        return updated
+      } catch (error) {
+        this.setError(error)
+        throw error
+      }
+    },
+    async removeLibrary(id: string, client: ApiClientContract) {
+      this.clearError()
+      try {
+        await client.deleteLibrary(id)
+        this.libraries = this.libraries.filter((library) => library.id !== id)
+        if (this.activeLibraryId === id) {
+          this.activeLibraryId = this.libraries[0]?.id ?? null
+          this.folders = []
+          this.clearSelection()
+        }
+      } catch (error) {
+        this.setError(error)
+        throw error
+      }
+    },
+    setActiveLibrary(id: string) {
+      if (id === this.activeLibraryId) return
+      this.activeLibraryId = id
+      this.folders = []
+      this.clearSelection()
+    },
+    async loadFolders(libraryId: string, client: ApiClientContract) {
+      this.foldersLoading = true
+      this.clearError()
+      try {
+        this.folders = await client.listFolders(libraryId)
+        this.selectedFolderIds = this.selectedFolderIds.filter((id) =>
+          this.folders.some((folder) => folder.id === id),
+        )
+      } catch (error) {
+        this.setError(error)
+        throw error
+      } finally {
+        this.foldersLoading = false
+      }
+    },
+    toggleFolder(id: string) {
+      if (this.selectedFolderIds.includes(id)) {
+        this.selectedFolderIds = this.selectedFolderIds.filter((selected) => selected !== id)
+      } else if (this.folders.some((folder) => folder.id === id)) {
+        this.selectedFolderIds.push(id)
+      }
+    },
+    setFolderSelected(id: string, selected: boolean) {
+      const currentlySelected = this.selectedFolderIds.includes(id)
+      if (selected !== currentlySelected) this.toggleFolder(id)
+    },
+    selectAllFolders() {
+      this.selectedFolderIds = this.folders.map((folder) => folder.id)
+    },
+    clearSelection() {
+      this.selectedFolderIds = []
+    },
+    setError(error: unknown) {
+      const details = errorDetails(error)
+      this.errorCode = details.code
+      this.error = details.message
+    },
+    clearError() {
+      this.errorCode = null
+      this.error = null
+    },
+  },
+})
