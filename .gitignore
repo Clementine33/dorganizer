@@ -15,6 +15,7 @@
 test/
 !frontend/flutter_app/test/
 !frontend/flutter_app/test/**
+!frontend/web/src/test/
 
 # Test config
 frontend/flutter_app/.dev_data
@@ -31,6 +32,22 @@ frontend/flutter_app/.dev_data
 **/nul
 docs/
 .claude/
+.superpowers/
+
+# node
+node_modules/
+frontend/web/dist/
+
+# dev runtime data (dev-web.mjs backend data dir)
+.dev_data/
+
+# Playwright e2e runtime state (launch-stack.mjs → spec handoff)
+frontend/web/e2e/.stack-state.json
+
+# Playwright artifacts
+frontend/web/test-results/
+frontend/web/playwright-report/
+frontend/web/blob-report/
 
 #release
 dist
