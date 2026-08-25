@@ -33,6 +33,7 @@ frontend/flutter_app/.dev_data
 docs/
 .claude/
 .superpowers/
+.codegraph/
 
 # node
 node_modules/

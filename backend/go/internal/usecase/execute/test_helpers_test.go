@@ -3,7 +3,9 @@ package execute
 import (
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -58,17 +60,59 @@ func (e sentinelError) Error() string { return e.msg }
 
 var _ = exesvc.PlanItem{} // ensure import used
 
-// createFakeEncoder creates a deterministic fake encoder batch file for tests (Windows-friendly).
-// The fake encoder copies src to dst and exits 0, ensuring convert success path is guaranteed.
+// fakeEncoderSource is a tiny native encoder: it copies the source argument to
+// the output argument and exits 0, matching the lame encoder argument layout
+// (-b 320 <src> <out>). It is compiled at test time so no shell script or
+// platform-specific batch file is needed.
+const fakeEncoderSource = `package main
+
+import (
+	"io"
+	"os"
+)
+
+func main() {
+	args := os.Args[1:]
+	if len(args) < 2 {
+		os.Exit(1)
+	}
+	src, dst := args[len(args)-2], args[len(args)-1]
+	in, err := os.Open(src)
+	if err != nil {
+		os.Exit(1)
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		os.Exit(1)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		os.Exit(1)
+	}
+	if err := out.Close(); err != nil {
+		os.Exit(1)
+	}
+}
+`
+
+// createFakeEncoder builds a deterministic fake encoder executable for tests.
+// It copies src to dst and exits 0, ensuring the convert success path works on
+// both Windows and Linux without relying on a batch interpreter.
 func createFakeEncoder(t *testing.T, tmpDir string) string {
 	t.Helper()
-	batchContent := `@echo off
-copy /Y %3 %4 >nul 2>&1
-exit /b 0
-`
-	encoderPath := filepath.Join(tmpDir, "fake_lame.bat")
-	if err := os.WriteFile(encoderPath, []byte(batchContent), 0755); err != nil {
-		t.Fatalf("failed to create fake encoder: %v", err)
+	srcFile := filepath.Join(tmpDir, "fake_encoder_main.go")
+	if err := os.WriteFile(srcFile, []byte(fakeEncoderSource), 0o600); err != nil {
+		t.Fatalf("failed to write fake encoder source: %v", err)
+	}
+	encoderPath := filepath.Join(tmpDir, "fake_lame")
+	if runtime.GOOS == "windows" {
+		encoderPath += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", encoderPath, srcFile)
+	cmd.Dir = tmpDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build fake encoder: %v\n%s", err, out)
 	}
 	return encoderPath
 }

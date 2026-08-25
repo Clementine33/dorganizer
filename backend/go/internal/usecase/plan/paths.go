@@ -38,7 +38,7 @@ func normalizeUniquePaths(paths []string) []string {
 	normalized := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
-		pathPosix := filepath.ToSlash(path)
+		pathPosix := pathnorm.NormalizeToPOSIX(path)
 		if pathPosix == "" {
 			continue
 		}
@@ -214,7 +214,7 @@ func computeDeleteTargetPaths(plan *analyze.Plan, rootPath string) {
 		return
 	}
 
-	isUNCRoot := pathnorm.IsWindowsUNCPath(rootNative)
+	isUNCRoot := pathnorm.IsWindowsUNCPath(rootPath)
 	deleteDir := filepath.ToSlash(filepath.Clean(filepath.Join(rootNative, "Delete")))
 
 	validateBaseName := func(pathValue, src string) bool {
@@ -291,14 +291,20 @@ func normalizePathForAttribution(root, candidate string) (rootNorm, candidateNor
 		return "", "", nil
 	}
 
-	rootNative := filepath.FromSlash(root)
+	rootNormalized := pathnorm.NormalizeToPOSIX(root)
+	if strings.ContainsRune(candidate, '\x00') {
+		return "", "", nil
+	}
+	candidateNormalized := pathnorm.NormalizeToPOSIX(candidate)
+
+	rootNative := filepath.FromSlash(rootNormalized)
 	rootAbs, err := filepath.Abs(rootNative)
 	if err != nil {
 		return "", "", err
 	}
 	rootNorm = filepath.ToSlash(filepath.Clean(rootAbs))
 
-	candidateNative := filepath.FromSlash(candidate)
+	candidateNative := filepath.FromSlash(candidateNormalized)
 	candidateAbs, err := filepath.Abs(candidateNative)
 	if err != nil {
 		return "", "", err

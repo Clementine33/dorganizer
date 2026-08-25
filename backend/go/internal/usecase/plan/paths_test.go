@@ -10,9 +10,22 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 )
+
+// wantAttributeFolder mirrors normalizePathForAttribution's canonicalization so
+// path-assertion expectations stay platform-independent.
+func wantAttributeFolder(t *testing.T, want string) string {
+	t.Helper()
+	wantPOSIX := pathnorm.NormalizeToPOSIX(want)
+	abs, err := filepath.Abs(filepath.FromSlash(wantPOSIX))
+	if err != nil {
+		t.Fatalf("canonicalize want %q: %v", want, err)
+	}
+	return filepath.ToSlash(filepath.Clean(abs))
+}
 
 // =============================================================================
 // chunkRootResolvePaths tests (ported from grpc/plan_rpc_helpers_test.go)
@@ -141,7 +154,7 @@ func TestAttributeFolderPath_ValidPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := attributeFolderPath(tt.rootPath, tt.candidate)
-			if got != tt.wantFolder {
+			if got != wantAttributeFolder(t, tt.wantFolder) {
 				t.Errorf("attributeFolderPath(%q, %q) = %q, want %q", tt.rootPath, tt.candidate, got, tt.wantFolder)
 			}
 		})
@@ -222,7 +235,7 @@ func TestAttributeFolderPath_Normalization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := attributeFolderPath(tt.rootPath, tt.candidate)
 			// Normalize expected for comparison (handles platform differences)
-			wantNorm := filepath.ToSlash(filepath.Clean(tt.wantFolder))
+			wantNorm := wantAttributeFolder(t, tt.wantFolder)
 			if got != wantNorm {
 				t.Errorf("attributeFolderPath(%q, %q) = %q, want %q", tt.rootPath, tt.candidate, got, wantNorm)
 			}
@@ -258,7 +271,7 @@ func TestAttributeFolderPath_WindowsCaseInsensitive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := attributeFolderPath(tt.rootPath, tt.candidate)
-			wantNorm := filepath.ToSlash(filepath.Clean(tt.wantFolder))
+			wantNorm := wantAttributeFolder(t, tt.wantFolder)
 			if got != wantNorm {
 				t.Errorf("attributeFolderPath(%q, %q) = %q, want %q", tt.rootPath, tt.candidate, got, wantNorm)
 			}
