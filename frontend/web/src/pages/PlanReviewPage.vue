@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, FileSearch, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -8,43 +9,37 @@ import OperationsTable from '@/features/plans/OperationsTable.vue'
 import PlanSummaryCards from '@/features/plans/PlanSummaryCards.vue'
 import { planStatusLabel } from '@/features/plans/plan-status'
 import { useApiClient } from '@/lib/api/client'
-import { usePlansStore } from '@/stores/plans'
+import { errorDetails } from '@/lib/api/error'
+import { findCachedPlanInfo, planDetailQueryOptions } from '@/queries/plans'
 
+const api = useApiClient()
 const route = useRoute()
 const router = useRouter()
-const api = useApiClient()
-const plans = usePlansStore()
+const queryClient = useQueryClient()
 
 const planId = computed(() => route.params.id as string)
 
-// A freshly created plan is in memory and renders immediately; the detail load
-// below still runs so refresh, history, and deep links reconstruct the same
-// review from the backend.
-const currentPlan = computed(() =>
-  plans.currentPlan && plans.currentPlan.plan_id === planId.value ? plans.currentPlan : null,
-)
-const planInfo = computed(() => plans.plans.find((item) => item.plan_id === planId.value) ?? null)
-const status = computed(() => planInfo.value?.status ?? (currentPlan.value ? 'ready' : ''))
-const detailLoading = computed(() => plans.detailLoading)
-const detailError = computed(() => plans.detailError)
-const detailErrorCode = computed(() => plans.detailErrorCode)
+// Durable plan detail: a freshly created plan was seeded into this key before
+// navigation (so the review renders immediately), and a cold deep link or
+// reload fetches GET /plans/:id normally.
+const detailQuery = useQuery(() => planDetailQueryOptions(api, planId.value))
+const detail = computed(() => detailQuery.data.value ?? null)
+const detailPending = computed(() => detailQuery.isPending.value)
+const detailError = computed(() => {
+  const error = detailQuery.error.value
+  return error ? errorDetails(error) : null
+})
 
-async function loadDetail(): Promise<void> {
-  try {
-    await plans.loadPlan(planId.value, api)
-  } catch {
-    // Store exposes the envelope code/message in the banner below.
-  }
-}
+// A background refetch failure must not hide the cached content: keep the
+// detail visible and surface a non-blocking warning instead.
+const refreshWarning = computed(() => (detail.value && detailError.value ? detailError.value : null))
 
-watch(
-  planId,
-  (id, previous) => {
-    if (!id || id === previous) return
-    void loadDetail()
-  },
-  { immediate: true },
-)
+// Status pill comes from cached plan-list metadata when available; a freshly
+// created (cached) detail has no status field on the durable snapshot, so it
+// falls back to `ready` — the same behavior the pre-migration page had when a
+// plan response was in memory (review accepted this fallback).
+const planInfo = computed(() => findCachedPlanInfo(queryClient, planId.value))
+const status = computed(() => planInfo.value?.status ?? (detail.value ? 'ready' : ''))
 </script>
 
 <template>
@@ -66,7 +61,7 @@ watch(
           <span class="truncate font-mono">{{ planId }}</span>
         </nav>
         <p class="truncate font-mono text-[10px] text-muted-foreground/70">
-          {{ currentPlan?.root_path ?? planInfo?.root_path ?? '' }}
+          {{ detail?.root_path ?? planInfo?.root_path ?? '' }}
         </p>
       </div>
       <div class="ml-auto">
@@ -80,19 +75,27 @@ watch(
       </div>
     </header>
 
-    <template v-if="currentPlan">
+    <template v-if="detail">
+      <div
+        v-if="refreshWarning"
+        data-testid="plan-detail-refresh-warning"
+        class="flex items-center gap-3 border-b border-amber-300/40 bg-amber-500/10 px-5 py-2 text-xs text-amber-600"
+      >
+        <span v-if="refreshWarning.code" class="shrink-0 font-mono font-semibold">{{ refreshWarning.code }}</span>
+        <span class="min-w-0 flex-1">刷新详情失败，显示的是上次内容。{{ refreshWarning.message }}</span>
+      </div>
       <div class="grid min-h-0 flex-1 auto-rows-min gap-4 overflow-auto p-4">
-        <PlanSummaryCards :summary="currentPlan.summary" />
+        <PlanSummaryCards :summary="detail.summary" />
         <OperationsTable
-          :operations="currentPlan.operations"
-          :successful-folders="currentPlan.successful_folders"
+          :operations="detail.operations"
+          :successful-folders="detail.successful_folders"
         />
-        <FolderErrorsPanel :errors="currentPlan.errors" />
+        <FolderErrorsPanel :errors="detail.errors" />
       </div>
     </template>
 
     <div
-      v-else-if="detailLoading"
+      v-else-if="detailPending"
       data-testid="plan-detail-loading"
       class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground"
     >
@@ -106,14 +109,14 @@ watch(
       <div class="max-w-sm">
         <FileSearch class="mx-auto size-7 text-muted-foreground" />
         <h2 class="mt-3 font-heading text-base font-semibold">
-          {{ detailErrorCode === 'PLAN_NOT_FOUND' ? '计划不存在' : '计划详情读取失败' }}
+          {{ detailError.code === 'PLAN_NOT_FOUND' ? '计划不存在' : '计划详情读取失败' }}
         </h2>
         <p class="mt-1 text-xs leading-5 text-muted-foreground">
-          <span v-if="detailErrorCode" class="mr-1 font-mono">{{ detailErrorCode }}</span>{{ detailError }}。
+          <span v-if="detailError.code" class="mr-1 font-mono">{{ detailError.code }}</span>{{ detailError.message }}。
           当前计划状态：{{ planInfo ? planStatusLabel(planInfo.status) : '未知' }}。
         </p>
         <div class="mt-4 flex justify-center gap-2">
-          <Button data-testid="retry-plan-detail" size="sm" @click="loadDetail">
+          <Button data-testid="retry-plan-detail" size="sm" @click="detailQuery.refetch">
             <RefreshCw class="size-3.5" />
             重试
           </Button>

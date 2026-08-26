@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url'
  *   1. create a library pointing at a generated fixture tree,
  *   2. run the scan to completion (SSE),
  *   3. verify the flat folder list populates,
+ *   3b. open a folder tree and return: the list comes back from the Vue Query
+ *       cache without a reload ("正在读取文件夹…" never flashes, and no extra
+ *       folders request is issued),
  *   4. select a folder,
  *   5. generate one unified plan,
  *   6. verify the review page shows operations.
@@ -41,6 +44,10 @@ test.describe('library scan → plan smoke', () => {
 
   test('create library, scan to completion, select folder, generate and review plan', async ({ page }) => {
     const { fixtureRoot } = readStackState()
+    const foldersRequests: string[] = []
+    page.on('request', (request) => {
+      if (/\/folders$/.test(new URL(request.url()).pathname)) foldersRequests.push(request.url())
+    })
 
     // Empty data dir → libraries empty state.
     await page.goto('/')
@@ -64,6 +71,17 @@ test.describe('library scan → plan smoke', () => {
     await expect(page.getByRole('checkbox', { name: '选择 albumB' })).toBeVisible()
     await expect(page.getByText('4 个音频文件')).toBeVisible()
     await expect(page.getByText('2 个音频文件')).toBeVisible()
+
+    // 3b. Open a folder tree and return: the flat list must come back from the
+    //     cache — no loading flash and no additional folders request.
+    await page.getByRole('button', { name: '打开 albumA' }).click()
+    await expect(page.getByTestId('folder-tree-card')).toBeVisible()
+    await expect(page.getByText('正在读取文件夹树…')).toHaveCount(0)
+    await page.getByTestId('back-to-libraries').click()
+    await expect(page.getByRole('checkbox', { name: '选择 albumA' })).toBeVisible()
+    await expect(page.getByText('正在读取文件夹…')).toHaveCount(0)
+    await page.waitForTimeout(300)
+    expect(foldersRequests).toHaveLength(2)
 
     // 4. Select the albumA folder (lossy+lossless stems → slim deletes).
     await page.getByRole('checkbox', { name: '选择 albumA' }).check()

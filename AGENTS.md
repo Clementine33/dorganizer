@@ -2,7 +2,7 @@
 
 ## Architecture
 - Go backend (`backend/go`, entry `cmd/onsei-organizer-backend/main.go`): gRPC on `127.0.0.1:0` + net/http API on an ephemeral port; startup prints an `ONSEI_BACKEND_READY port=… token=… http_port=…` handshake that web dev consumes via `VITE_API_BASE`.
-- Vue 3 + TS web frontend (`frontend/web`, pnpm workspace), entry `src/main.ts`; API client in `frontend/web/src/lib/api/`, state in `frontend/web/src/stores/`.
+- Vue 3 + TS web frontend (`frontend/web`, pnpm workspace), entry `src/main.ts`; API client in `frontend/web/src/lib/api/`, server/cache state in `frontend/web/src/queries/` (Vue Query), UI/selection state in `frontend/web/src/stores/` (Pinia) — with one documented exception: the transient scan SSE lifecycle stays in `frontend/web/src/stores/scan.ts` (streaming process state, not a cacheable resource).
 - `scripts/dev-web.mjs` boots backend + Vite together (`ONSEI_DATA_DIR` → `<repo>/.dev_data`).
 - Flutter app (`frontend/flutter_app`) is legacy, planned for removal — don't invest.
 

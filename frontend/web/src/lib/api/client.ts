@@ -42,16 +42,16 @@ export class ApiClient implements ApiClientContract {
     this.token = config.token
   }
 
-  getHealth(): Promise<HealthResponse> {
-    return this.request('/health')
+  getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+    return this.request('/health', { signal })
   }
 
-  async listLibraries(): Promise<Library[]> {
-    return (await this.request<{ libraries: Library[] }>('/libraries')).libraries
+  async listLibraries(signal?: AbortSignal): Promise<Library[]> {
+    return (await this.request<{ libraries: Library[] }>('/libraries', { signal })).libraries
   }
 
-  getLibrary(id: string): Promise<Library> {
-    return this.request(`/libraries/${encodeURIComponent(id)}`)
+  getLibrary(id: string, signal?: AbortSignal): Promise<Library> {
+    return this.request(`/libraries/${encodeURIComponent(id)}`, { signal })
   }
 
   createLibrary(input: CreateLibraryInput): Promise<Library> {
@@ -81,16 +81,22 @@ export class ApiClient implements ApiClientContract {
     yield* parseSSEStream<ScanEvent>(response.body)
   }
 
-  async listFolders(libraryId: string): Promise<Folder[]> {
+  async listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]> {
     const result = await this.request<{ folders: Folder[] }>(
       `/libraries/${encodeURIComponent(libraryId)}/folders`,
+      { signal },
     )
     return result.folders
   }
 
-  async getFolderTree(libraryId: string, folderId: string): Promise<TreeNode> {
+  async getFolderTree(
+    libraryId: string,
+    folderId: string,
+    signal?: AbortSignal,
+  ): Promise<TreeNode> {
     const result = await this.request<{ tree: TreeNode }>(
       `/libraries/${encodeURIComponent(libraryId)}/folders/${encodeURIComponent(folderId)}/tree`,
+      { signal },
     )
     return result.tree
   }
@@ -99,14 +105,14 @@ export class ApiClient implements ApiClientContract {
     return this.request('/plans', { method: 'POST', body: input })
   }
 
-  async listPlans(libraryId?: string, limit = 100): Promise<PlanInfo[]> {
+  async listPlans(libraryId?: string, limit = 100, signal?: AbortSignal): Promise<PlanInfo[]> {
     const query = new URLSearchParams({ limit: String(limit) })
     if (libraryId) query.set('library_id', libraryId)
-    return (await this.request<{ plans: PlanInfo[] }>(`/plans?${query.toString()}`)).plans
+    return (await this.request<{ plans: PlanInfo[] }>(`/plans?${query.toString()}`, { signal })).plans
   }
 
-  getPlan(id: string): Promise<PlanResponse> {
-    return this.request(`/plans/${encodeURIComponent(id)}`)
+  getPlan(id: string, signal?: AbortSignal): Promise<PlanResponse> {
+    return this.request(`/plans/${encodeURIComponent(id)}`, { signal })
   }
 
   private url(path: string): string {
@@ -122,12 +128,13 @@ export class ApiClient implements ApiClientContract {
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown } = {},
+    options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
   ): Promise<T> {
     const response = await fetch(this.url(path), {
       method: options.method ?? 'GET',
       headers: this.headers(options.body !== undefined),
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
     })
     if (!response.ok) throw await this.toApiError(response)
     if (response.status === 204) return undefined as T

@@ -1,8 +1,10 @@
 import { createPinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { VueQueryPlugin, type QueryClient } from '@tanstack/vue-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
+import { desktopAdapterKey, type DesktopAdapter } from '@/lib/desktop/desktop-adapter'
 import type {
   ApiClientContract,
   Folder,
@@ -10,6 +12,7 @@ import type {
   PlanResponse,
   ScanEvent,
 } from '@/lib/api/types'
+import { createTestQueryClient } from '@/test/query-client'
 import LibrariesPage from './LibrariesPage.vue'
 
 const library: Library = {
@@ -67,6 +70,13 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
 }
 
 async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper; router: Router }> {
+  return mountPageWithClient(api, createTestQueryClient())
+}
+
+async function mountPageWithClient(
+  api: ApiClientContract,
+  queryClient: QueryClient,
+): Promise<{ wrapper: VueWrapper; router: Router }> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -79,8 +89,13 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
   await router.isReady()
   const wrapper = mount(LibrariesPage, {
     global: {
-      plugins: [createPinia(), router],
-      provide: { [apiClientKey as symbol]: api },
+      plugins: [createPinia(), router, [VueQueryPlugin, { queryClient }]],
+      provide: {
+        [apiClientKey as symbol]: api,
+        [desktopAdapterKey as symbol]: {
+          pickFolder: vi.fn().mockResolvedValue(null),
+        } as unknown as DesktopAdapter,
+      },
     },
   })
   await flushPromises()
@@ -209,5 +224,83 @@ describe('LibrariesPage', () => {
     await wrapper.get('[data-testid="folder-link-folder-b"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/libraries/lib-a/folders/folder-b')
+  })
+
+  it('fetches folders exactly once on a cold mount', async () => {
+    const api = apiStub()
+    await mountPage(api)
+
+    expect(api.listLibraries).toHaveBeenCalledTimes(1)
+    expect(api.listFolders).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides scan progress on other libraries without cancelling the running scan', async () => {
+    let release!: () => void
+    const scanLibrary = vi.fn((_id: string, signal: AbortSignal) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'started', data: { stage: 'scan', message: 'Scanning' } } as ScanEvent
+        await new Promise<void>((resolve) => {
+          release = resolve
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        if (signal.aborted) yield { type: 'cancelled', data: { stage: 'scan', message: 'scan canceled' } } as ScanEvent
+      },
+    }))
+    const secondLibrary: Library = { ...library, id: 'lib-b', name: 'Other library' }
+    const { wrapper } = await mountPage(apiStub({ scanLibrary, listLibraries: vi.fn().mockResolvedValue([library, secondLibrary]) }))
+
+    await wrapper.get('[data-testid="scan-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(true)
+
+    // Switch to another library: progress hides, the backend scan keeps running.
+    await wrapper.get('[aria-label="切换媒体库"]').setValue('lib-b')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('扫描中…')
+    expect(scanLibrary.mock.calls[0]?.[1].aborted).toBe(false)
+
+    // Switching back reveals the still-running scan.
+    await wrapper.get('[aria-label="切换媒体库"]').setValue('lib-a')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('扫描中…')
+    await wrapper.get('[data-testid="cancel-scan"]').trigger('click')
+    await flushPromises()
+    release()
+  })
+
+  it('clears folder selection when the active library root genuinely changes', async () => {
+    const api = apiStub({
+      updateLibrary: vi.fn().mockResolvedValue({ ...library, root_path: 'E:\\NewRoot' }),
+    })
+    const { wrapper } = await mountPage(api)
+
+    await wrapper.get('[data-testid="folder-checkbox-folder-a"]').setValue(true)
+    const planButton = wrapper.get('[data-testid="generate-plan"]')
+    expect(planButton.attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[aria-label="编辑媒体库"]').trigger('click')
+    await wrapper.get('#library-root').setValue('E:\\NewRoot')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateLibrary).toHaveBeenCalledWith('lib-a', { name: 'Lossless archive', root_path: 'E:\\NewRoot' })
+    expect(wrapper.get('[data-testid="generate-plan"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('remounts from the cached folder list without issuing new GETs', async () => {
+    const api = apiStub()
+    const queryClient = createTestQueryClient()
+
+    const first = await mountPageWithClient(api, queryClient)
+    expect(first.wrapper.text()).toContain('Blue Train')
+    first.wrapper.unmount()
+    await flushPromises()
+
+    const second = await mountPageWithClient(api, queryClient)
+    expect(second.wrapper.text()).toContain('Blue Train')
+    expect(api.listLibraries).toHaveBeenCalledTimes(1)
+    expect(api.listFolders).toHaveBeenCalledTimes(1)
   })
 })

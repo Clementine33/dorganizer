@@ -1,10 +1,12 @@
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { VueQueryPlugin, type QueryClient } from '@tanstack/vue-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
 import type { ApiClientContract, PlanInfo, PlanResponse } from '@/lib/api/types'
-import { usePlansStore } from '@/stores/plans'
+import { queryKeys } from '@/queries/query-keys'
+import { createTestQueryClient } from '@/test/query-client'
 import PlanReviewPage from './PlanReviewPage.vue'
 
 const plan: PlanResponse = {
@@ -46,6 +48,14 @@ const plan: PlanResponse = {
   successful_folders: ['D:\\Music\\Blue Train', 'D:\\Music\\Kind of Blue'],
 }
 
+const planInfo: PlanInfo = {
+  plan_id: 'plan-1',
+  root_path: 'D:\\Music',
+  plan_type: 'slim',
+  status: 'planned',
+  created_at: '2026-08-22T00:00:00Z',
+}
+
 function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract {
   return {
     getHealth: vi.fn(),
@@ -66,15 +76,8 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
 
 async function mountPage(
   api: ApiClientContract,
-  storeState?: { currentPlan: PlanResponse | null; plans: PlanInfo[] },
-): Promise<{ wrapper: VueWrapper; router: Router }> {
-  const pinia = createPinia()
-  setActivePinia(pinia)
-  const plans = usePlansStore()
-  if (storeState) {
-    plans.currentPlan = storeState.currentPlan
-    plans.plans = storeState.plans
-  }
+  queryClient: QueryClient = createTestQueryClient(),
+): Promise<{ wrapper: VueWrapper; router: Router; queryClient: QueryClient }> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -86,23 +89,25 @@ async function mountPage(
   await router.isReady()
   const wrapper = mount(PlanReviewPage, {
     global: {
-      plugins: [pinia, router],
+      plugins: [createPinia(), router, [VueQueryPlugin, { queryClient }]],
       provide: { [apiClientKey as symbol]: api },
     },
   })
   await flushPromises()
-  return { wrapper, router }
+  return { wrapper, router, queryClient }
 }
 
 describe('PlanReviewPage', () => {
   beforeEach(() => vi.restoreAllMocks())
 
-  it('renders summary cards for actionable, error and reason and a status pill', async () => {
-    const { wrapper } = await mountPage(apiStub(), {
-      currentPlan: plan,
-      plans: [{ ...plan, plan_id: 'plan-1', status: 'running' } as unknown as PlanInfo],
-    })
+  it('renders a seeded detail with summary cards and a status pill from list metadata', async () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+    queryClient.setQueryData(queryKeys.plans.list('lib-a', 100), [{ ...planInfo, status: 'running' }])
+    const api = apiStub()
+    const { wrapper } = await mountPage(api, queryClient)
 
+    expect(api.getPlan).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
     expect(wrapper.get('[data-testid="summary-errors"]').text()).toContain('1')
     expect(wrapper.get('[data-testid="summary-operations"]').text()).toContain('2')
@@ -111,7 +116,9 @@ describe('PlanReviewPage', () => {
   })
 
   it('groups operations by source folder with delete/convert badges', async () => {
-    const { wrapper } = await mountPage(apiStub(), { currentPlan: plan, plans: [] })
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+    const { wrapper } = await mountPage(apiStub(), queryClient)
 
     const groups = wrapper.findAll('[data-testid="operation-group"]')
     expect(groups).toHaveLength(2)
@@ -124,7 +131,9 @@ describe('PlanReviewPage', () => {
   })
 
   it('keeps the folder errors panel collapsed by default and expands on toggle', async () => {
-    const { wrapper } = await mountPage(apiStub(), { currentPlan: plan, plans: [] })
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+    const { wrapper } = await mountPage(apiStub(), queryClient)
 
     expect(wrapper.find('[data-testid="folder-errors-content"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="folder-errors-panel"]').text()).toContain('1')
@@ -140,28 +149,21 @@ describe('PlanReviewPage', () => {
   })
 
   it('never renders an Execute control', async () => {
-    const { wrapper } = await mountPage(apiStub(), { currentPlan: plan, plans: [] })
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+    const { wrapper } = await mountPage(apiStub(), queryClient)
 
     expect(wrapper.findAll('[data-testid^="execute"], [data-testid*="execute"]')).toHaveLength(0)
     expect(wrapper.text()).not.toContain('执行')
   })
 
-  it('loads plan detail for a deep link without a cached plan response', async () => {
+  it('loads durable detail for a cold deep link and uses list metadata for the status pill', async () => {
     const api = apiStub({ getPlan: vi.fn().mockResolvedValue(plan) })
-    const { wrapper, router } = await mountPage(api, {
-      currentPlan: null,
-      plans: [
-        {
-          plan_id: 'plan-1',
-          root_path: 'D:\\Music',
-          plan_type: 'slim',
-          status: 'planned',
-          created_at: '2026-08-22T00:00:00Z',
-        },
-      ],
-    })
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.list('lib-a', 100), [planInfo])
+    const { wrapper, router } = await mountPage(api, queryClient)
 
-    expect(api.getPlan).toHaveBeenCalledWith('plan-1')
+    expect(api.getPlan).toHaveBeenCalledWith('plan-1', expect.any(AbortSignal))
     expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
     expect(wrapper.get('[data-testid="review-status-pill"]').text()).toContain('已规划')
     await wrapper.get('[data-testid="back-to-plans"]').trigger('click')
@@ -173,7 +175,7 @@ describe('PlanReviewPage', () => {
     const api = apiStub({
       getPlan: vi.fn().mockRejectedValue(new ApiError(404, 'PLAN_NOT_FOUND', 'plan not found')),
     })
-    const { wrapper } = await mountPage(api, { currentPlan: null, plans: [] })
+    const { wrapper } = await mountPage(api)
 
     expect(wrapper.get('[data-testid="plan-detail-error"]').text()).toContain('计划不存在')
     expect(wrapper.text()).toContain('PLAN_NOT_FOUND')
@@ -185,12 +187,30 @@ describe('PlanReviewPage', () => {
       .mockRejectedValueOnce(new Error('backend unavailable'))
       .mockResolvedValueOnce(plan)
     const api = apiStub({ getPlan })
-    const { wrapper } = await mountPage(api, { currentPlan: null, plans: [] })
+    const { wrapper } = await mountPage(api)
 
     expect(wrapper.get('[data-testid="plan-detail-error"]').text()).toContain('计划详情读取失败')
     await wrapper.get('[data-testid="retry-plan-detail"]').trigger('click')
     await flushPromises()
     expect(getPlan).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
+  })
+
+  it('keeps cached detail and shows a non-blocking warning on background refetch failure', async () => {
+    const getPlan = vi.fn().mockResolvedValue(plan)
+    const api = apiStub({ getPlan })
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+    const { wrapper } = await mountPage(api, queryClient)
+    expect(api.getPlan).not.toHaveBeenCalled()
+
+    getPlan.mockRejectedValueOnce(new ApiError(500, 'INTERNAL', 'backend blew up'))
+    await queryClient.invalidateQueries({ queryKey: queryKeys.plans.detail(plan.plan_id) })
+    await flushPromises()
+
+    const warning = wrapper.get('[data-testid="plan-detail-refresh-warning"]')
+    expect(warning.text()).toContain('INTERNAL')
+    expect(warning.text()).toContain('backend blew up')
     expect(wrapper.get('[data-testid="summary-actionable"]').text()).toContain('2')
   })
 })

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
 import type { ApiClientContract, Library, PlanResponse, TreeNode } from '@/lib/api/types'
+import { installTestQueryPlugin } from '@/test/query-client'
 import FolderDetailPage from './FolderDetailPage.vue'
 
 const library: Library = {
@@ -102,7 +103,7 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
   await router.isReady()
   const wrapper = mount(FolderDetailPage, {
     global: {
-      plugins: [createPinia(), router],
+      plugins: [createPinia(), router, installTestQueryPlugin()],
       provide: { [apiClientKey as symbol]: api },
     },
   })
@@ -117,7 +118,7 @@ describe('FolderDetailPage', () => {
     const api = apiStub()
     const { wrapper } = await mountPage(api)
 
-    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a')
+    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a', expect.any(AbortSignal))
     expect(wrapper.findAll('[data-testid="folder-tree-card"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('Lossless archive')
     expect(wrapper.text()).toContain('Blue Train')
@@ -201,6 +202,17 @@ describe('FolderDetailPage', () => {
       source_files: ['D:\\Music\\Blue Train\\Bonus\\bonus track.flac'],
     })
     expect(router.currentRoute.value.fullPath).toBe('/plans/plan-1')
+  })
+
+  it('loads the tree even when the library list fails (direct-link fallback)', async () => {
+    const api = apiStub({
+      listLibraries: vi.fn().mockRejectedValue(new ApiError(500, 'INTERNAL', 'failed to list libraries')),
+    })
+    const { wrapper } = await mountPage(api)
+
+    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a', expect.any(AbortSignal))
+    expect(wrapper.find('[data-testid="folder-tree-card"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('01 - Blue Train.flac')
   })
 
   it('echoes a plan creation failure with the envelope code', async () => {

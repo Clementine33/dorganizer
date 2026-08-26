@@ -1,104 +1,126 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
+import { computed, ref, watchEffect } from 'vue'
 import { AlertTriangle, Pencil, Plus, RefreshCw, ScanLine, Square } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
+import { useLibraryScan } from '@/composables/use-library-scan'
 import BatchPlanBar from '@/features/libraries/BatchPlanBar.vue'
 import FolderFlatList from '@/features/libraries/FolderFlatList.vue'
 import LibraryManager from '@/features/libraries/LibraryManager.vue'
 import ScanProgressBar from '@/features/libraries/ScanProgressBar.vue'
 import { useApiClient } from '@/lib/api/client'
-import type { CreateLibraryInput } from '@/lib/api/types'
-import { useLibrariesStore } from '@/stores/libraries'
-import { usePlansStore } from '@/stores/plans'
+import { errorDetails } from '@/lib/api/error'
+import { rootPathIdentityKey } from '@/lib/root-path-identity'
+import type { CreateLibraryInput, Library } from '@/lib/api/types'
+import {
+  createLibraryMutationOptions,
+  deleteLibraryMutationOptions,
+  folderListQueryOptions,
+  updateLibraryMutationOptions,
+  useLibraryList,
+  useRootIdentity,
+} from '@/queries/libraries'
+import { createPlanMutationOptions } from '@/queries/plans'
+import { queryKeys } from '@/queries/query-keys'
+import { useLibraryUiStore } from '@/stores/library-ui'
 import { useScanStore } from '@/stores/scan'
 
 const api = useApiClient()
 const router = useRouter()
-const libraries = useLibrariesStore()
+const queryClient = useQueryClient()
+const ui = useLibraryUiStore()
 const scan = useScanStore()
-const plans = usePlansStore()
+const libraryScan = useLibraryScan()
 const managerOpen = ref(false)
 const editing = ref(false)
 const savingLibrary = ref(false)
 
-const activeLibrary = computed(() => libraries.activeLibrary)
-const pageError = computed(() => {
-  if (libraries.error) return { code: libraries.errorCode, message: libraries.error, source: 'library' as const }
-  if (plans.error) return { code: plans.errorCode, message: plans.error, source: 'plan' as const }
-  return null
-})
-
-onMounted(async () => {
-  try {
-    await libraries.loadLibraries(api)
-    if (libraries.activeLibraryId) await libraries.loadFolders(libraries.activeLibraryId, api)
-  } catch {
-    // Stores own the recovery message shown in the page.
-  }
-})
-
-watch(
-  () => libraries.activeLibraryId,
-  async (id, previous) => {
-    if (!id || id === previous) return
-    try {
-      await libraries.loadFolders(id, api)
-    } catch {
-      // Store error is rendered below.
-    }
-  },
+const { query: librariesQuery, librariesData, activeLibrary } = useLibraryList()
+// Query result flags are refs; expose them as plain top-level computeds so
+// template expressions (v-if/v-else-if) see booleans instead of ref objects.
+const librariesPending = computed(() => librariesQuery.isPending.value)
+const librariesSuccess = computed(() => librariesQuery.isSuccess.value)
+const rootIdentity = useRootIdentity(activeLibrary)
+const foldersQuery = useQuery(() => folderListQueryOptions(api, ui.activeLibraryId, rootIdentity.value))
+const foldersPending = computed(() => foldersQuery.isPending.value)
+const foldersSuccess = computed(() => foldersQuery.isSuccess.value)
+const folders = computed(() => foldersQuery.data.value ?? [])
+const allFoldersSelected = computed(
+  () => folders.value.length > 0 && ui.selectedFolderIds.length === folders.value.length,
 )
 
-function switchLibrary(event: Event) {
-  libraries.setActiveLibrary((event.target as HTMLSelectElement).value)
-  scan.reset()
-}
+// Selection reconciliation: whenever the active library's folder result
+// changes, drop IDs that no longer exist. Old-library results are ignored
+// inside the store (guarded by the active ID).
+watchEffect(() => {
+  if (foldersQuery.data.value) ui.reconcileFolders(ui.activeLibraryId ?? '', foldersQuery.data.value)
+})
 
-async function retryLoad() {
-  try {
-    if (libraries.libraries.length === 0) await libraries.loadLibraries(api)
-    if (libraries.activeLibraryId) await libraries.loadFolders(libraries.activeLibraryId, api)
-  } catch {
-    // Store error is rendered below.
+const createMutation = useMutation(createLibraryMutationOptions(api, queryClient))
+const updateMutation = useMutation(updateLibraryMutationOptions(api, queryClient))
+const deleteMutation = useMutation(deleteLibraryMutationOptions(api, queryClient))
+const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClient))
+const planPending = computed(() => createPlanMutation.isPending.value)
+
+const pageError = computed(() => {
+  if (createPlanMutation.error.value) {
+    return { ...errorDetails(createPlanMutation.error.value), source: 'plan' as const }
   }
-}
+  const libraryError = librariesQuery.error.value
+  if (libraryError) return { ...errorDetails(libraryError), source: 'library' as const }
+  const folderError = foldersQuery.error.value
+  if (folderError) return { ...errorDetails(folderError), source: 'library' as const }
+  for (const mutation of [createMutation, updateMutation, deleteMutation]) {
+    if (mutation.error.value) return { ...errorDetails(mutation.error.value), source: 'library' as const }
+  }
+  return null
+})
 
 async function retryPage() {
   if (pageError.value?.source === 'plan') {
     await generatePlan()
     return
   }
-  await retryLoad()
+  await Promise.all([librariesQuery.refetch(), foldersQuery.refetch()])
 }
 
+function switchLibrary(event: Event) {
+  ui.setActiveLibrary((event.target as HTMLSelectElement).value)
+}
+
+// Scan UI is scoped to the library the scan belongs to. Switching libraries
+// does not cancel the backend scan — it keeps running in the background and
+// its progress is hidden until the user switches back.
+const scanningActiveLibrary = computed(
+  () => scan.status === 'scanning' && scan.libraryId === ui.activeLibraryId,
+)
+
 async function runScan() {
-  const libraryId = libraries.activeLibraryId
+  const libraryId = ui.activeLibraryId
   if (!libraryId) return
-  await scan.start(libraryId, api)
-  if (scan.foldersRefreshNeeded) {
-    try {
-      await Promise.all([libraries.loadFolders(libraryId, api), libraries.loadLibraries(api)])
-      scan.acknowledgeFoldersRefresh()
-    } catch {
-      // Keep the refresh flag so the recovery action can try again.
-    }
-  }
+  await libraryScan.start(libraryId)
 }
 
 function setAllFolders(selected: boolean) {
-  if (selected) libraries.selectAllFolders()
-  else libraries.clearSelection()
+  if (selected) ui.selectAllFolders(folders.value)
+  else ui.clearSelection()
 }
 
 async function generatePlan() {
-  const libraryId = libraries.activeLibraryId
-  if (!libraryId || libraries.selectedFolderIds.length === 0) return
+  const libraryId = ui.activeLibraryId
+  if (!libraryId || ui.selectedFolderIds.length === 0) return
   try {
-    const plan = await plans.createForFolders(libraryId, libraries.selectedFolderIds, api)
+    const plan = await createPlanMutation.mutateAsync({
+      library_id: libraryId,
+      folder_ids: [...ui.selectedFolderIds],
+      plan_type: 'slim',
+      target_format: 'slim:mode1',
+      prune_matched_excluded: false,
+    })
     await router.push(`/plans/${encodeURIComponent(plan.plan_id)}`)
   } catch {
-    // Plans store exposes the request failure with a retryable action.
+    // The mutation error surfaces in the page banner via pageError.
   }
 }
 
@@ -116,13 +138,20 @@ async function saveLibrary(input: CreateLibraryInput) {
   savingLibrary.value = true
   try {
     if (editing.value && activeLibrary.value) {
-      await libraries.updateLibrary(activeLibrary.value.id, input, api)
+      const previousRoot = activeLibrary.value.root_path
+      const updated = await updateMutation.mutateAsync({ id: activeLibrary.value.id, input })
+      if (rootPathIdentityKey(previousRoot) !== rootPathIdentityKey(updated.root_path)) {
+        // Genuine root change: the backend discarded materialized folders, so
+        // any selection now points at rows that no longer exist.
+        ui.clearSelection()
+      }
     } else {
-      await libraries.createLibrary(input, api)
+      const created = await createMutation.mutateAsync(input)
+      ui.setActiveLibrary(created.id)
     }
     managerOpen.value = false
   } catch {
-    // Keep the dialog open so the user can correct the values and retry.
+    // Mutation errors surface in the page banner via pageError.
   } finally {
     savingLibrary.value = false
   }
@@ -132,10 +161,13 @@ async function removeLibrary(id: string) {
   if (!window.confirm('删除这个媒体库条目？磁盘上的音频文件不会被删除。')) return
   savingLibrary.value = true
   try {
-    await libraries.removeLibrary(id, api)
+    await deleteMutation.mutateAsync(id)
+    // Fall back deterministically to a remaining library or null.
+    const remaining = queryClient.getQueryData<Library[]>(queryKeys.libraries.list()) ?? []
+    ui.reconcileLibraries(remaining)
     managerOpen.value = false
   } catch {
-    // Keep the dialog open and expose the store error.
+    // Keep the dialog open and expose the mutation error in the banner.
   } finally {
     savingLibrary.value = false
   }
@@ -151,13 +183,13 @@ async function removeLibrary(id: string) {
       </div>
 
       <select
-        v-if="libraries.libraries.length"
-        :value="libraries.activeLibraryId ?? ''"
+        v-if="librariesData.length"
+        :value="ui.activeLibraryId ?? ''"
         aria-label="切换媒体库"
         class="ml-auto h-8 max-w-52 rounded-md border border-input bg-background px-2.5 font-heading text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @change="switchLibrary"
       >
-        <option v-for="library in libraries.libraries" :key="library.id" :value="library.id">
+        <option v-for="library in librariesData" :key="library.id" :value="library.id">
           {{ library.name }}
         </option>
       </select>
@@ -199,14 +231,14 @@ async function removeLibrary(id: string) {
             @click="runScan"
           >
             <ScanLine class="size-3.5" />
-            {{ scan.status === 'scanning' ? '扫描中…' : '扫描' }}
+            {{ scanningActiveLibrary ? '扫描中…' : '扫描' }}
           </Button>
           <Button
-            v-if="scan.status === 'scanning'"
+            v-if="scanningActiveLibrary"
             data-testid="cancel-scan"
             variant="ghost"
             size="sm"
-            @click="scan.cancel"
+            @click="libraryScan.cancel"
           >
             <Square class="size-3" />
             取消
@@ -215,6 +247,7 @@ async function removeLibrary(id: string) {
       </div>
 
       <ScanProgressBar
+        v-if="scan.libraryId === ui.activeLibraryId"
         :status="scan.status"
         :files-scanned="scan.filesScanned"
         :dirs-scanned="scan.dirsScanned"
@@ -223,20 +256,20 @@ async function removeLibrary(id: string) {
       />
 
       <div class="min-h-0 flex-1 overflow-auto">
-        <div v-if="libraries.foldersLoading" class="grid h-full place-items-center text-xs text-muted-foreground">
+        <div v-if="foldersPending" class="grid h-full place-items-center text-xs text-muted-foreground">
           正在读取文件夹…
         </div>
         <FolderFlatList
-          v-else-if="libraries.folders.length"
-          :folders="libraries.folders"
-          :selected-ids="libraries.selectedFolderIds"
-          :all-selected="libraries.allFoldersSelected"
+          v-else-if="folders.length"
+          :folders="folders"
+          :selected-ids="ui.selectedFolderIds"
+          :all-selected="allFoldersSelected"
           :scan-status="activeLibrary.last_scan_status"
-          @select="libraries.setFolderSelected"
+          @select="ui.setFolderSelected"
           @select-all="setAllFolders"
           @open="router.push(`/libraries/${encodeURIComponent(activeLibrary.id)}/folders/${encodeURIComponent($event)}`)"
         />
-        <div v-else class="grid h-full min-h-64 place-items-center px-6 text-center">
+        <div v-else-if="foldersSuccess" class="grid h-full min-h-64 place-items-center px-6 text-center">
           <div class="max-w-sm">
             <ScanLine class="mx-auto size-7 text-muted-foreground" />
             <h2 class="mt-3 font-heading text-base font-semibold">还没有音频文件夹</h2>
@@ -249,14 +282,17 @@ async function removeLibrary(id: string) {
       </div>
 
       <BatchPlanBar
-        :selected-count="libraries.selectedFolderIds.length"
-        :loading="plans.loading"
-        @clear="libraries.clearSelection"
+        :selected-count="ui.selectedFolderIds.length"
+        :loading="planPending"
+        @clear="ui.clearSelection"
         @generate="generatePlan"
       />
     </template>
 
-    <div v-else-if="!libraries.loading && !libraries.error" class="grid min-h-0 flex-1 place-items-center px-6 text-center">
+    <div
+      v-else-if="librariesSuccess && librariesData.length === 0"
+      class="grid min-h-0 flex-1 place-items-center px-6 text-center"
+    >
       <div class="max-w-md rounded-lg border border-dashed border-border bg-card/35 px-8 py-10">
         <div class="mx-auto grid size-10 place-items-center rounded-full border border-border bg-muted">
           <Plus class="size-4 text-muted-foreground" />
@@ -268,7 +304,7 @@ async function removeLibrary(id: string) {
         <Button data-testid="empty-add-library" class="mt-5" size="sm" @click="openAdd">添加媒体库</Button>
       </div>
     </div>
-    <div v-else-if="libraries.loading" class="grid flex-1 place-items-center text-xs text-muted-foreground">正在连接媒体库…</div>
+    <div v-else-if="librariesPending" class="grid flex-1 place-items-center text-xs text-muted-foreground">正在连接媒体库…</div>
 
     <LibraryManager
       v-if="managerOpen"

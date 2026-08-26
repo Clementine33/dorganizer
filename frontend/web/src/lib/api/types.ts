@@ -113,16 +113,16 @@ export interface PlanInfo {
 }
 
 export interface ApiClientContract {
-  getHealth(): Promise<HealthResponse>
-  listLibraries(): Promise<Library[]>
-  getLibrary(id: string): Promise<Library>
+  getHealth(signal?: AbortSignal): Promise<HealthResponse>
+  listLibraries(signal?: AbortSignal): Promise<Library[]>
+  getLibrary(id: string, signal?: AbortSignal): Promise<Library>
   createLibrary(input: CreateLibraryInput): Promise<Library>
   updateLibrary(id: string, input: UpdateLibraryInput): Promise<Library>
   deleteLibrary(id: string): Promise<void>
   scanLibrary(id: string, signal: AbortSignal, rootPath?: string): AsyncIterable<ScanEvent>
-  listFolders(libraryId: string): Promise<Folder[]>
-  getFolderTree(libraryId: string, folderId: string): Promise<TreeNode>
+  listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]>
+  getFolderTree(libraryId: string, folderId: string, signal?: AbortSignal): Promise<TreeNode>
   createPlan(input: CreatePlanInput): Promise<PlanResponse>
-  listPlans(libraryId?: string, limit?: number): Promise<PlanInfo[]>
-  getPlan(id: string): Promise<PlanResponse>
+  listPlans(libraryId?: string, limit?: number, signal?: AbortSignal): Promise<PlanInfo[]>
+  getPlan(id: string, signal?: AbortSignal): Promise<PlanResponse>
 }

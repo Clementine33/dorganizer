@@ -9,10 +9,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useTheme, type Theme } from '@/composables/use-theme'
-import { useLibrariesStore } from '@/stores/libraries'
+import { useLibraryList } from '@/queries/libraries'
+import { useLibraryUiStore } from '@/stores/library-ui'
 
 const router = useRouter()
-const libraries = useLibrariesStore()
+const ui = useLibraryUiStore()
+// The shell is mounted for the whole application lifetime, so this is the
+// long-lived observer of the library list; pages share the same cache entry.
+const { librariesData: libraries } = useLibraryList()
 const { theme } = useTheme()
 const options: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: 'light', label: '浅色', icon: Sun },
@@ -21,7 +25,7 @@ const options: { value: Theme; label: string; icon: typeof Sun }[] = [
 ]
 
 function openLibrary(id: string) {
-  libraries.setActiveLibrary(id)
+  ui.setActiveLibrary(id)
   void router.push('/libraries')
 }
 </script>
@@ -75,14 +79,14 @@ function openLibrary(id: string) {
         <div class="min-h-0 flex-1 overflow-auto p-2">
           <div class="flex h-7 items-center px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             媒体库条目
-            <span class="ml-auto font-mono">{{ libraries.libraries.length }}</span>
+            <span class="ml-auto font-mono">{{ libraries.length }}</span>
           </div>
           <button
-            v-for="library in libraries.libraries"
+            v-for="library in libraries"
             :key="library.id"
             type="button"
             class="mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            :class="library.id === libraries.activeLibraryId ? 'bg-sidebar-accent' : ''"
+            :class="library.id === ui.activeLibraryId ? 'bg-sidebar-accent' : ''"
             @click="openLibrary(library.id)"
           >
             <span
@@ -94,7 +98,7 @@ function openLibrary(id: string) {
               <span class="block truncate font-mono text-[9px] text-muted-foreground">{{ library.root_path }}</span>
             </span>
           </button>
-          <p v-if="libraries.libraries.length === 0" class="px-2 py-3 text-[11px] leading-4 text-muted-foreground">
+          <p v-if="libraries.length === 0" class="px-2 py-3 text-[11px] leading-4 text-muted-foreground">
             添加媒体库后会显示在这里。
           </p>
         </div>

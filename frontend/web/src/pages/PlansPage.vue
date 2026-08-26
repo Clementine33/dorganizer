@@ -1,69 +1,45 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { AlertTriangle, ChevronRight, ListMusic, RefreshCw, WandSparkles } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { useApiClient } from '@/lib/api/client'
+import { errorDetails } from '@/lib/api/error'
 import { formatPlanCreatedAt, planStatusLabel } from '@/features/plans/plan-status'
-import { useLibrariesStore } from '@/stores/libraries'
-import { usePlansStore } from '@/stores/plans'
+import { useLibraryList } from '@/queries/libraries'
+import { planListQueryOptions } from '@/queries/plans'
+import { useLibraryUiStore } from '@/stores/library-ui'
 
 const api = useApiClient()
 const router = useRouter()
-const libraries = useLibrariesStore()
-const plans = usePlansStore()
+const ui = useLibraryUiStore()
 
-const libraryId = computed(() => libraries.activeLibraryId)
-const activeLibrary = computed(() => libraries.activeLibrary)
+const { query: librariesQuery, librariesData, activeLibrary } = useLibraryList()
+// Query flags are refs; expose top-level booleans for template expressions.
+const librariesPending = computed(() => librariesQuery.isPending.value)
+const libraryId = computed(() => ui.activeLibraryId)
+
+const plansQuery = useQuery(() => planListQueryOptions(api, libraryId.value))
+const plansPending = computed(() => plansQuery.isPending.value)
+const plansData = computed(() => plansQuery.data.value ?? [])
 const pageError = computed(() => {
-  if (libraries.error) return { code: libraries.errorCode, message: libraries.error }
-  if (plans.error) return { code: plans.errorCode, message: plans.error }
+  const libraryError = librariesQuery.error.value
+  if (libraryError) return errorDetails(libraryError)
+  const plansError = plansQuery.error.value
+  if (plansError) return errorDetails(plansError)
   return null
 })
-const loading = computed(() => libraries.loading || plans.loading)
-
-async function loadForLibrary(): Promise<void> {
-  if (libraries.libraries.length === 0) await libraries.loadLibraries(api)
-  if (libraryId.value) await plans.loadPlans(libraryId.value, api)
-}
-
-// Guards against double-loading: loadLibraries sets activeLibraryId, which
-// would also fire the watcher below during initial mount.
-const initializing = ref(true)
-
-onMounted(async () => {
-  try {
-    await loadForLibrary()
-  } catch {
-    // The plans store exposes the envelope code in the page banner.
-  } finally {
-    initializing.value = false
-  }
-})
-
-watch(
-  () => libraries.activeLibraryId,
-  async (id, previous) => {
-    if (!id || id === previous || initializing.value) return
-    try {
-      await plans.loadPlans(id, api)
-    } catch {
-      // Store error is rendered below.
-    }
-  },
-)
+// A disabled plan query (no active library) is pending but must not be shown
+// as loading: without a library there is simply nothing to list.
+const loading = computed(() => librariesPending.value || (libraryId.value !== null && plansPending.value))
 
 function switchLibrary(event: Event): void {
-  libraries.setActiveLibrary((event.target as HTMLSelectElement).value)
+  ui.setActiveLibrary((event.target as HTMLSelectElement).value)
 }
 
 async function retryLoad(): Promise<void> {
-  try {
-    if (libraries.libraries.length === 0) await libraries.loadLibraries(api)
-    if (libraryId.value) await plans.loadPlans(libraryId.value, api)
-  } catch {
-    // Store error is rendered below.
-  }
+  await Promise.all([librariesQuery.refetch(), plansQuery.refetch()])
 }
 
 function statusClass(status: string): string {
@@ -82,13 +58,13 @@ function statusClass(status: string): string {
         <p class="text-[11px] text-muted-foreground">点击一行进入计划审阅</p>
       </div>
       <select
-        v-if="libraries.libraries.length"
+        v-if="librariesData.length"
         :value="libraryId ?? ''"
         aria-label="切换媒体库"
         class="ml-auto h-8 max-w-52 rounded-md border border-input bg-background px-2.5 font-heading text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @change="switchLibrary"
       >
-        <option v-for="library in libraries.libraries" :key="library.id" :value="library.id">
+        <option v-for="library in librariesData" :key="library.id" :value="library.id">
           {{ library.name }}
         </option>
       </select>
@@ -111,9 +87,9 @@ function statusClass(status: string): string {
     <div v-if="loading" class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground">
       正在读取计划…
     </div>
-    <div v-else-if="plans.plans.length" class="min-h-0 flex-1 overflow-auto">
+    <div v-else-if="plansData.length" class="min-h-0 flex-1 overflow-auto">
       <button
-        v-for="plan in plans.plans"
+        v-for="plan in plansData"
         :key="plan.plan_id"
         :data-testid="`plan-link-${plan.plan_id}`"
         type="button"

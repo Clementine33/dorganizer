@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
 import type { ApiClientContract, Library, PlanInfo } from '@/lib/api/types'
+import { installTestQueryPlugin } from '@/test/query-client'
 import PlansPage from './PlansPage.vue'
 
 const library: Library = {
@@ -64,7 +65,7 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
   await router.isReady()
   const wrapper = mount(PlansPage, {
     global: {
-      plugins: [createPinia(), router],
+      plugins: [createPinia(), router, installTestQueryPlugin()],
       provide: { [apiClientKey as symbol]: api },
     },
   })
@@ -79,7 +80,7 @@ describe('PlansPage', () => {
     const api = apiStub()
     const { wrapper, router } = await mountPage(api)
 
-    expect(api.listPlans).toHaveBeenCalledWith('lib-a')
+    expect(api.listPlans).toHaveBeenCalledWith('lib-a', 100, expect.any(AbortSignal))
     expect(wrapper.text()).toContain('Blue Train')
     expect(wrapper.text()).toContain('2026-08-22 00:00')
     expect(wrapper.text()).toContain('2026-08-21 10:30')
@@ -153,5 +154,14 @@ describe('PlansPage', () => {
   it('invites generating the first plan when none exist', async () => {
     const { wrapper } = await mountPage(apiStub({ listPlans: vi.fn().mockResolvedValue([]) }))
     expect(wrapper.text()).toContain('还没有计划')
+  })
+
+  it('shows the empty state instead of a permanent loader when no library exists', async () => {
+    const api = apiStub({ listLibraries: vi.fn().mockResolvedValue([]) })
+    const { wrapper } = await mountPage(api)
+
+    expect(api.listPlans).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('还没有计划')
+    expect(wrapper.text()).not.toContain('正在读取计划…')
   })
 })
