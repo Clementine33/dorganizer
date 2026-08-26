@@ -64,9 +64,10 @@ const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClien
 const planPending = computed(() => createPlanMutation.isPending.value)
 
 const pageError = computed(() => {
-  if (createPlanMutation.error.value) {
-    return { ...errorDetails(createPlanMutation.error.value), source: 'plan' as const }
-  }
+  // Current query failures take precedence over mutation errors: a mutation
+  // error (e.g. a failed createPlan) lingers on its observer until the next
+  // mutation, so it must not mask a fresh query failure. Without this, a
+  // stale plan error would pin the banner (and its retry) in a dead state.
   const libraryError = librariesQuery.error.value
   if (libraryError) return { ...errorDetails(libraryError), source: 'library' as const }
   const folderError = foldersQuery.error.value
@@ -74,11 +75,21 @@ const pageError = computed(() => {
   for (const mutation of [createMutation, updateMutation, deleteMutation]) {
     if (mutation.error.value) return { ...errorDetails(mutation.error.value), source: 'library' as const }
   }
+  if (createPlanMutation.error.value) {
+    return { ...errorDetails(createPlanMutation.error.value), source: 'plan' as const }
+  }
   return null
 })
 
 async function retryPage() {
   if (pageError.value?.source === 'plan') {
+    // A plan error can only be fixed by generating another plan. With no
+    // folders selected the retry can never succeed, so clear the stale error
+    // instead of leaving a permanently dead banner.
+    if (ui.selectedFolderIds.length === 0) {
+      createPlanMutation.reset()
+      return
+    }
     await generatePlan()
     return
   }
@@ -86,7 +97,16 @@ async function retryPage() {
 }
 
 function switchLibrary(event: Event) {
-  ui.setActiveLibrary((event.target as HTMLSelectElement).value)
+  const next = (event.target as HTMLSelectElement).value
+  // A terminal scan result belongs to the library it ran on. Clear it when
+  // the user switches to another library; otherwise the '扫描完成/扫描失败'
+  // banner of the previous library would stay pinned forever (nothing ever
+  // resets it). A *running* scan is deliberately kept alive in the background
+  // (see scanningActiveLibrary) and must not be reset here.
+  if (scan.status !== 'scanning' && scan.status !== 'idle' && scan.libraryId !== null && scan.libraryId !== next) {
+    scan.reset()
+  }
+  ui.setActiveLibrary(next)
 }
 
 // Scan UI is scoped to the library the scan belongs to. Switching libraries
@@ -231,7 +251,7 @@ async function removeLibrary(id: string) {
             @click="runScan"
           >
             <ScanLine class="size-3.5" />
-            {{ scanningActiveLibrary ? '扫描中…' : '扫描' }}
+            {{ scan.status === 'scanning' ? '扫描中…' : '扫描' }}
           </Button>
           <Button
             v-if="scanningActiveLibrary"
@@ -265,7 +285,7 @@ async function removeLibrary(id: string) {
           :selected-ids="ui.selectedFolderIds"
           :all-selected="allFoldersSelected"
           :scan-status="activeLibrary.last_scan_status"
-          @select="ui.setFolderSelected"
+          @select="(id, selected) => ui.setFolderSelected(id, selected, folders)"
           @select-all="setAllFolders"
           @open="router.push(`/libraries/${encodeURIComponent(activeLibrary.id)}/folders/${encodeURIComponent($event)}`)"
         />

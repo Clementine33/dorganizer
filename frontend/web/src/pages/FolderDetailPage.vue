@@ -84,7 +84,11 @@ const pageError = computed(() => {
 })
 
 async function retryLoad(): Promise<void> {
-  await treeQuery.refetch()
+  // The tree query key depends on the resolved root identity, which comes from
+  // the library list. If the list failed (placeholder 'unresolved-root' key)
+  // only refetching the tree can never recover — refetch the list too so the
+  // key flips to the canonical identity (or the page falls back cleanly).
+  await Promise.all([librariesQuery.refetch(), treeQuery.refetch()])
 }
 
 async function generatePlan(): Promise<void> {

@@ -126,15 +126,51 @@ export class ApiClient implements ApiClientContract {
     return headers
   }
 
+  // Safety net for a hung connection (local backend): without it a request
+  // that never resolves leaves query UI stuck on an infinite pending state
+  // (e.g. the folder-tree page waiting on a never-settling libraries list).
+  // The SSE scan stream is not routed through request() and is unaffected.
+  private static readonly REQUEST_TIMEOUT_MS = 15_000
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  ): Promise<T> {
+    const controller = new AbortController()
+    let removeAbort: (() => void) | null = null
+    if (options.signal) {
+      if (options.signal.aborted) {
+        // Caller already cancelled: still issue the fetch so it rejects
+        // immediately with the aborted reason rather than hanging.
+        controller.abort(options.signal.reason)
+      } else {
+        const forwardAbort = () => controller.abort(options.signal?.reason)
+        options.signal.addEventListener('abort', forwardAbort, { once: true })
+        removeAbort = () => options.signal?.removeEventListener('abort', forwardAbort)
+      }
+    }
+    const timer = setTimeout(
+      () => controller.abort(new DOMException('请求超时', 'TimeoutError')),
+      ApiClient.REQUEST_TIMEOUT_MS,
+    )
+    try {
+      return await this.doRequest<T>(path, options, controller.signal)
+    } finally {
+      clearTimeout(timer)
+      removeAbort?.()
+    }
+  }
+
+  private async doRequest<T>(
+    path: string,
+    options: { method?: string; body?: unknown },
+    signal: AbortSignal,
   ): Promise<T> {
     const response = await fetch(this.url(path), {
       method: options.method ?? 'GET',
       headers: this.headers(options.body !== undefined),
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: options.signal,
+      signal,
     })
     if (!response.ok) throw await this.toApiError(response)
     if (response.status === 204) return undefined as T

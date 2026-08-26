@@ -23,6 +23,10 @@ export const useScanStore = defineStore('scan', {
     message: '',
     errorCode: null as string | null,
     errorMessage: null as string | null,
+    // True once any SSE event was applied. A transport terminal without any
+    // event means the scan never started (e.g. the POST was rejected), so
+    // nothing was committed and derived caches must not be refreshed.
+    receivedEvent: false,
     controller: null as AbortController | null,
   }),
   actions: {
@@ -40,6 +44,7 @@ export const useScanStore = defineStore('scan', {
       this.errorCode = null
       this.errorMessage = null
       this.terminal = null
+      this.receivedEvent = false
 
       try {
         for await (const event of client.scanLibrary(libraryId, controller.signal)) {
@@ -71,6 +76,7 @@ export const useScanStore = defineStore('scan', {
       }
     },
     applyEvent(event: ScanEvent) {
+      this.receivedEvent = true
       const data = event.data
       if (event.type === 'started') {
         this.status = 'scanning'

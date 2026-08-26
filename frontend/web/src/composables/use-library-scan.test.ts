@@ -118,4 +118,21 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
     expect(plansUntouched(client)).toBe(true)
   })
+
+  it('transport failure before the first SSE event skips the derived refresh', async () => {
+    const client = createTestQueryClient()
+    seedLibraryDomain(client)
+    seedPlans(client)
+    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+
+    // The POST /scans request was rejected before any event arrived: the
+    // scan never started, so folders/trees cannot have changed.
+    await syncAfterScan(client, 'lib-a', 'error', 'transport', false)
+
+    expect(client.getQueryData(foldersKey)).toEqual(folders)
+    expect(client.getQueryData(treeKey)).toEqual(tree)
+    expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
+    expect(plansUntouched(client)).toBe(true)
+  })
 })

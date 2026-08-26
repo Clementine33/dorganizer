@@ -38,15 +38,20 @@ export const useLibraryUiStore = defineStore('library-ui', {
       const next = this.selectedFolderIds.filter((id) => ids.has(id))
       if (next.length !== this.selectedFolderIds.length) this.selectedFolderIds = next
     },
-    toggleFolder(id: string) {
+    // The optional `folders` argument restores the pre-migration existence
+    // guard: a click that lands after reconcileFolders dropped the folder
+    // (e.g. a scan-sync refresh removed it right before the event) must not
+    // push a stale ID into the selection — the backend would reject it.
+    toggleFolder(id: string, folders?: Folder[]) {
       if (this.selectedFolderIds.includes(id)) {
         this.selectedFolderIds = this.selectedFolderIds.filter((selected) => selected !== id)
       } else {
+        if (folders && !folders.some((folder) => folder.id === id)) return
         this.selectedFolderIds.push(id)
       }
     },
-    setFolderSelected(id: string, selected: boolean) {
-      if (selected !== this.selectedFolderIds.includes(id)) this.toggleFolder(id)
+    setFolderSelected(id: string, selected: boolean, folders?: Folder[]) {
+      if (selected !== this.selectedFolderIds.includes(id)) this.toggleFolder(id, folders)
     },
     selectAllFolders(folders: Folder[]) {
       this.selectedFolderIds = folders.map((folder) => folder.id)

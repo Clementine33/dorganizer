@@ -26,47 +26,99 @@ afterEach(() => {
 })
 
 describe('ApiClient', () => {
-  it('forwards the exact AbortSignal to fetch for query-owned GETs', async () => {
-    const fetchMock = mockFetch(async () => okJson({ libraries: [] }))
+  it('wires the query-owned AbortSignal through to fetch', async () => {
+    const captured: AbortSignal[] = []
+    const fetchMock = mockFetch((_input, init) => {
+      captured.push(init?.signal as AbortSignal)
+      // Stay pending until the internal signal aborts, so the caller-side
+      // abort reaches the fetch signal while the request is in flight.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        )
+      })
+    })
 
     const client = createClient()
-    const signal = new AbortController().signal
+    const controller = new AbortController()
 
-    await client.listLibraries(signal)
+    const promise = client.listLibraries(controller.signal)
+    controller.abort()
+
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][1]?.signal).toBe(signal)
+    expect(captured[0]).toBeInstanceOf(AbortSignal)
+    // The abort propagated to the fetch signal that was actually handed out:
+    expect(captured[0].aborted).toBe(true)
   })
 
   it('passes the signal through listFolders, getFolderTree, listPlans and getPlan', async () => {
-    const fetchMock = mockFetch(async () =>
-      okJson({
-        folders: [],
-        tree: { name: 'root', path: '/', type: 'dir', bitrate: null, format: '' },
-        plans: [],
-      }),
-    )
+    const captured: (AbortSignal | undefined)[] = []
+    const fetchMock = mockFetch((_input, init) => {
+      captured.push(init?.signal ?? undefined)
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        )
+      })
+    })
 
     const client = createClient()
-    const signal = new AbortController().signal
+    const controller = new AbortController()
 
-    await client.listFolders('lib-1', signal)
-    await client.getFolderTree('lib-1', 'folder-1', signal)
-    await client.listPlans('lib-1', 100, signal)
-    await client.getPlan('plan-1', signal)
+    const calls = [
+      client.listFolders('lib-1', controller.signal),
+      client.getFolderTree('lib-1', 'folder-1', controller.signal),
+      client.listPlans('lib-1', 100, controller.signal),
+      client.getPlan('plan-1', controller.signal),
+    ]
+    controller.abort()
 
+    for (const call of calls) {
+      await expect(call).rejects.toMatchObject({ name: 'AbortError' })
+    }
     expect(fetchMock).toHaveBeenCalledTimes(4)
-    for (const call of fetchMock.mock.calls) {
-      expect(call[1]?.signal).toBe(signal)
+    for (const signal of captured) {
+      expect(signal).toBeInstanceOf(AbortSignal)
+      expect((signal as AbortSignal).aborted).toBe(true)
     }
   })
 
-  it('does not pass a signal when none is provided', async () => {
+  it('always applies a management signal even when none is provided', async () => {
     const fetchMock = mockFetch(async () => okJson({ libraries: [] }))
 
     await createClient().listLibraries()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][1]?.signal).toBeUndefined()
+    // The request gets an internal timeout signal even without a caller one.
+    expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('times out a request that never settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = mockFetch(async (_input, init) => {
+        await new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('请求超时', 'TimeoutError')),
+          )
+        })
+        return okJson({ libraries: [] })
+      })
+
+      const promise = createClient().listLibraries()
+      // Attach the rejection handler before the timer fires so the timed-out
+      // request is never flagged as an unhandled rejection.
+      const expectation = expect(promise).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      await expectation
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('surfaces fetch aborts without wrapping them as ApiError', async () => {

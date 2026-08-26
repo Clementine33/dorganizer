@@ -87,4 +87,19 @@ describe('library-ui store', () => {
     store.reconcileFolders('lib-a', folders)
     expect(store.selectedFolderIds).toEqual(['folder-a'])
   })
+
+  it('refuses to select an ID that is no longer in the folder list', () => {
+    const store = useLibraryUiStore()
+    store.setActiveLibrary('lib-a')
+    // A late click for a folder the reconciled list no longer contains must
+    // not enter the selection (the backend would reject the plan payload).
+    store.toggleFolder('folder-a', [])
+    expect(store.selectedFolderIds).toEqual([])
+    // A folder still in the list selects normally…
+    store.toggleFolder('folder-b', folders)
+    expect(store.selectedFolderIds).toEqual(['folder-b'])
+    // …and toggling off an already-selected ID stays allowed without the list.
+    store.setFolderSelected('folder-b', false, [])
+    expect(store.selectedFolderIds).toEqual([])
+  })
 })

@@ -2,7 +2,13 @@ import { useQuery, type QueryClient } from '@tanstack/vue-query'
 import { computed, toValue, watchEffect, type ComputedRef, type MaybeRefOrGetter } from 'vue'
 import { useApiClient } from '@/lib/api/client'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
-import type { ApiClientContract, CreateLibraryInput, Library, UpdateLibraryInput } from '@/lib/api/types'
+import type {
+  ApiClientContract,
+  CreateLibraryInput,
+  Library,
+  PlanInfo,
+  UpdateLibraryInput,
+} from '@/lib/api/types'
 import { useLibraryUiStore } from '@/stores/library-ui'
 import { refreshOrRemoveQueries } from './cache-sync'
 import { TREE_GC_TIME } from './query-client'
@@ -99,6 +105,16 @@ export function deleteLibraryMutationOptions(api: ApiClientContract, queryClient
       queryClient.setQueryData<Library[]>(queryKeys.libraries.list(), (old) =>
         old ? old.filter((item) => item.id !== id) : old,
       )
+      // Drop cached plan details whose library is gone: the detail query is
+      // staleTime: Infinity and has no other invalidation path, so without
+      // this the review page would render a deleted library's plan forever.
+      for (const [, plans] of queryClient.getQueriesData<PlanInfo[]>({
+        queryKey: queryKeys.plans.libraryPrefix(id),
+      })) {
+        for (const plan of plans ?? []) {
+          queryClient.removeQueries({ queryKey: queryKeys.plans.detail(plan.plan_id) })
+        }
+      }
       void refreshOrRemoveQueries(queryClient, queryKeys.libraries.foldersPrefix(id))
       void refreshOrRemoveQueries(queryClient, queryKeys.libraries.treesPrefix(id))
       // Scoped plan list no longer has a valid library; drop it entirely.

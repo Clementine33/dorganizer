@@ -253,11 +253,14 @@ describe('LibrariesPage', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(true)
 
-    // Switch to another library: progress hides, the backend scan keeps running.
+    // Switch to another library: progress + cancel hide, the backend scan
+    // keeps running, and the disabled scan button still signals the
+    // background scan.
     await wrapper.get('[aria-label="切换媒体库"]').setValue('lib-b')
     await flushPromises()
     expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('扫描中…')
+    expect(wrapper.get('[data-testid="scan-button"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('扫描中…')
     expect(scanLibrary.mock.calls[0]?.[1].aborted).toBe(false)
 
     // Switching back reveals the still-running scan.

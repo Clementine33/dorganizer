@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, FileSearch, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -38,7 +38,26 @@ const refreshWarning = computed(() => (detail.value && detailError.value ? detai
 // created (cached) detail has no status field on the durable snapshot, so it
 // falls back to `ready` — the same behavior the pre-migration page had when a
 // plan response was in memory (review accepted this fallback).
-const planInfo = computed(() => findCachedPlanInfo(queryClient, planId.value))
+//
+// findCachedPlanInfo reads the cache imperatively (getQueriesData is not
+// reactive), so the computed would otherwise freeze at its first evaluation:
+// a list refresh, an invalidation, or the create-mutation dropping the list
+// cache would never reach the pill. Bump a ref on every query-cache write to
+// re-derive the pill from the current cache.
+const cacheEvents = ref(0)
+let unsubscribeCache: (() => void) | null = null
+onMounted(() => {
+  unsubscribeCache = queryClient.getQueryCache().subscribe(() => {
+    cacheEvents.value++
+  })
+})
+onBeforeUnmount(() => {
+  unsubscribeCache?.()
+})
+const planInfo = computed(() => {
+  void cacheEvents.value
+  return findCachedPlanInfo(queryClient, planId.value)
+})
 const status = computed(() => planInfo.value?.status ?? (detail.value ? 'ready' : ''))
 </script>
 
