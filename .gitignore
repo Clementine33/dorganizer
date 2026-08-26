@@ -44,6 +44,7 @@ frontend/web/dist/
 
 # Playwright e2e runtime state (launch-stack.mjs → spec handoff)
 frontend/web/e2e/.stack-state.json
+frontend/web/e2e/.perf-results.json
 
 # Playwright artifacts
 frontend/web/test-results/
