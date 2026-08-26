@@ -3,6 +3,24 @@ import type { ApiClientContract, CreatePlanInput, PlanInfo, PlanResponse } from 
 import { refreshOrRemoveQueries } from './cache-sync'
 import { queryKeys } from './query-keys'
 
+// plan_id -> creating library id. Detail caches are otherwise unaddressable
+// after the scoped list entry is dropped (createPlan removes inactive lists),
+// so library deletion would leave orphaned detail entries rendering a deleted
+// library's plan forever.
+const planLibraryByPlanId = new Map<string, string>()
+
+// Removes every cached plan detail owned by `libraryId` (and its mapping).
+// Called from the delete-library mutation; the scoped list itself is dropped
+// by that mutation.
+export function forgetPlansOfLibrary(queryClient: QueryClient, libraryId: string): void {
+  for (const [planId, owner] of planLibraryByPlanId) {
+    if (owner === libraryId) {
+      queryClient.removeQueries({ queryKey: queryKeys.plans.detail(planId) })
+      planLibraryByPlanId.delete(planId)
+    }
+  }
+}
+
 // Finds plan list metadata for a plan ID from any cached scoped list, without
 // issuing a request. Used by the review page for the status pill; returns
 // null when no cached list contains the plan.
@@ -51,6 +69,7 @@ export function createPlanMutationOptions(api: ApiClientContract, queryClient: Q
     mutationFn: (input: CreatePlanInput) => api.createPlan(input),
     onSuccess: (plan: PlanResponse, input: CreatePlanInput, _context: unknown) => {
       queryClient.setQueryData(queryKeys.plans.detail(plan.plan_id), plan)
+      planLibraryByPlanId.set(plan.plan_id, input.library_id)
       // Only the creating library's scoped list is affected: active observers
       // refetch, inactive cached lists are dropped (not refetched in the
       // background for every limit variant).

@@ -65,8 +65,11 @@ watch(
 )
 
 // Tree selection is page-local and resets whenever the tree context changes.
+// The plan mutation's error would otherwise linger forever (TanStack keeps it
+// until the next mutate/reset), pinning a dead banner on the next folder.
 watch([libraryId, folderId], () => {
   selectedFiles.value = []
+  createPlanMutation.reset()
 })
 
 function onSelectionChange(paths: string[]): void {
@@ -77,13 +80,16 @@ const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClien
 const planPending = computed(() => createPlanMutation.isPending.value)
 
 const pageError = computed(() => {
+  // Query failures take precedence over the lingering plan mutation error so
+  // a stale plan error cannot mask a fresh tree failure.
+  if (treeError.value) return { code: treeError.value.code, message: treeError.value.message }
   const planError = createPlanMutation.error.value
   if (planError) return errorDetails(planError)
-  if (treeError.value) return { code: treeError.value.code, message: treeError.value.message }
   return null
 })
 
 async function retryLoad(): Promise<void> {
+  createPlanMutation.reset()
   // The tree query key depends on the resolved root identity, which comes from
   // the library list. If the list failed (placeholder 'unresolved-root' key)
   // only refetching the tree can never recover — refetch the list too so the

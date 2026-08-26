@@ -12,7 +12,7 @@ import ScanProgressBar from '@/features/libraries/ScanProgressBar.vue'
 import { useApiClient } from '@/lib/api/client'
 import { errorDetails } from '@/lib/api/error'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
-import type { CreateLibraryInput, Library } from '@/lib/api/types'
+import type { CreateLibraryInput } from '@/lib/api/types'
 import {
   createLibraryMutationOptions,
   deleteLibraryMutationOptions,
@@ -22,7 +22,6 @@ import {
   useRootIdentity,
 } from '@/queries/libraries'
 import { createPlanMutationOptions } from '@/queries/plans'
-import { queryKeys } from '@/queries/query-keys'
 import { useLibraryUiStore } from '@/stores/library-ui'
 import { useScanStore } from '@/stores/scan'
 
@@ -45,6 +44,7 @@ const rootIdentity = useRootIdentity(activeLibrary)
 const foldersQuery = useQuery(() => folderListQueryOptions(api, ui.activeLibraryId, rootIdentity.value))
 const foldersPending = computed(() => foldersQuery.isPending.value)
 const foldersSuccess = computed(() => foldersQuery.isSuccess.value)
+const foldersError = computed(() => foldersQuery.isError.value)
 const folders = computed(() => foldersQuery.data.value ?? [])
 const allFoldersSelected = computed(
   () => folders.value.length > 0 && ui.selectedFolderIds.length === folders.value.length,
@@ -63,15 +63,25 @@ const deleteMutation = useMutation(deleteLibraryMutationOptions(api, queryClient
 const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClient))
 const planPending = computed(() => createPlanMutation.isPending.value)
 
+// A scan running (or just finished) for another library refreshes the shared
+// library/folder queries in the background while this page is open; a
+// transient failure of that refresh would otherwise surface an unrelated
+// error banner here. User-invoked mutation errors still show.
+const backgroundScanOnOtherLibrary = computed(
+  () => scan.libraryId !== null && scan.libraryId !== ui.activeLibraryId && scan.status !== 'idle',
+)
+
 const pageError = computed(() => {
   // Current query failures take precedence over mutation errors: a mutation
   // error (e.g. a failed createPlan) lingers on its observer until the next
   // mutation, so it must not mask a fresh query failure. Without this, a
   // stale plan error would pin the banner (and its retry) in a dead state.
-  const libraryError = librariesQuery.error.value
-  if (libraryError) return { ...errorDetails(libraryError), source: 'library' as const }
-  const folderError = foldersQuery.error.value
-  if (folderError) return { ...errorDetails(folderError), source: 'library' as const }
+  if (!backgroundScanOnOtherLibrary.value) {
+    const libraryError = librariesQuery.error.value
+    if (libraryError) return { ...errorDetails(libraryError), source: 'library' as const }
+    const folderError = foldersQuery.error.value
+    if (folderError) return { ...errorDetails(folderError), source: 'library' as const }
+  }
   for (const mutation of [createMutation, updateMutation, deleteMutation]) {
     if (mutation.error.value) return { ...errorDetails(mutation.error.value), source: 'library' as const }
   }
@@ -93,6 +103,9 @@ async function retryPage() {
     await generatePlan()
     return
   }
+  // Library mutations never auto-clear their error; the retry button must
+  // dismiss the stale mutation error before reloading the queries.
+  for (const mutation of [createMutation, updateMutation, deleteMutation]) mutation.reset()
   await Promise.all([librariesQuery.refetch(), foldersQuery.refetch()])
 }
 
@@ -182,9 +195,9 @@ async function removeLibrary(id: string) {
   savingLibrary.value = true
   try {
     await deleteMutation.mutateAsync(id)
-    // Fall back deterministically to a remaining library or null.
-    const remaining = queryClient.getQueryData<Library[]>(queryKeys.libraries.list()) ?? []
-    ui.reconcileLibraries(remaining)
+    // The delete mutation updates the libraries list in the cache; the
+    // useLibraryList watchEffect reconciles the UI store (active ID fallback
+    // and selection clearing) on the same data.
     managerOpen.value = false
   } catch {
     // Keep the dialog open and expose the mutation error in the banner.
@@ -275,7 +288,7 @@ async function removeLibrary(id: string) {
         :error-message="scan.errorMessage"
       />
 
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div class="min-h-0 flex-1">
         <div v-if="foldersPending" class="grid h-full place-items-center text-xs text-muted-foreground">
           正在读取文件夹…
         </div>
@@ -289,6 +302,26 @@ async function removeLibrary(id: string) {
           @select-all="setAllFolders"
           @open="router.push(`/libraries/${encodeURIComponent(activeLibrary.id)}/folders/${encodeURIComponent($event)}`)"
         />
+        <div
+          v-else-if="foldersError"
+          class="grid h-full min-h-64 place-items-center px-6 text-center"
+        >
+          <div class="max-w-sm">
+            <AlertTriangle class="mx-auto size-7 text-destructive" />
+            <h2 class="mt-3 font-heading text-base font-semibold">无法读取文件夹列表</h2>
+            <p class="mt-1 text-xs leading-5 text-muted-foreground">请检查后端连接后重试。</p>
+            <Button
+              data-testid="retry-folders"
+              class="mt-4"
+              size="sm"
+              variant="outline"
+              @click="foldersQuery.refetch"
+            >
+              <RefreshCw class="size-3.5" />
+              重试
+            </Button>
+          </div>
+        </div>
         <div v-else-if="foldersSuccess" class="grid h-full min-h-64 place-items-center px-6 text-center">
           <div class="max-w-sm">
             <ScanLine class="mx-auto size-7 text-muted-foreground" />

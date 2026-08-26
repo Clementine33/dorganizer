@@ -20,10 +20,14 @@ async function refreshLibraryDerived(queryClient: QueryClient, libraryId: string
 
 // Maps the terminal scan outcome to the exact cache synchronization it
 // requires. Plan lists are deliberately never touched: plan membership no
-// longer depends on materialized folders. `streamStarted` tells whether any
-// SSE event arrived: a transport terminal without events means the scan never
-// began (e.g. the POST /scans request was rejected), so folders/trees cannot
-// have changed and the conservative derived refresh would be wasted work.
+// longer depends on materialized folders.
+//
+// Materialized folder rows are replaced in one transaction only when the scan
+// completes, so any non-completed outcome — user cancel (abort or SSE),
+// confirmed error, or a transport failure before the first event — leaves
+// folders/trees unchanged and only library metadata needs refreshing. The one
+// conservative case is a transport terminal after events: the backend may
+// have committed before the stream died.
 export async function syncAfterScan(
   queryClient: QueryClient,
   libraryId: string,
@@ -31,26 +35,22 @@ export async function syncAfterScan(
   terminal: ScanTerminal | null,
   streamStarted = true,
 ): Promise<void> {
-  if (status === 'completed') {
-    // Confirmed commit: refresh library metadata and the library's derived
-    // caches (active folders/trees refetch, inactive entries are dropped).
+  // A cancelled scan never materializes (the backend replaces folders in one
+  // transaction only on completion), so derived caches stay valid.
+  if (status === 'cancelled') {
+    await refreshLibraries(queryClient)
+    return
+  }
+  // Completed scan, or a transport failure after events (may have committed):
+  // refresh library metadata and the library's derived caches (active
+  // folders/trees refetch, inactive entries are dropped).
+  if (status === 'completed' || (terminal !== 'event' && streamStarted)) {
     await Promise.all([refreshLibraries(queryClient), refreshLibraryDerived(queryClient, libraryId)])
     return
   }
-  // The backend confirmed cancel/error over SSE: only library scan metadata
-  // changed; folders/trees stay valid.
-  if (terminal === 'event') {
-    await refreshLibraries(queryClient)
-    return
-  }
-  // Transport failure or premature stream end: the backend may or may not
-  // have committed, so conservatively refresh the derived caches too — unless
-  // the stream never delivered an event, in which case nothing was committed.
-  if (!streamStarted) {
-    await refreshLibraries(queryClient)
-    return
-  }
-  await Promise.all([refreshLibraries(queryClient), refreshLibraryDerived(queryClient, libraryId)])
+  // Confirmed cancel/error over SSE, or a transport terminal before any event:
+  // nothing was committed — only scan metadata changed.
+  await refreshLibraries(queryClient)
 }
 
 // Single entry point for scan orchestration: pages call start/cancel and
@@ -67,6 +67,10 @@ export function useLibraryScan() {
     // status 'scanning'. In that case this call did not begin a scan, so
     // synchronizing against the other scan's in-flight state would be wrong.
     if (scan.status === 'scanning') return
+    // The store may have been reset or repurposed while this stream was in
+    // flight (e.g. switchLibrary cleared a terminal, a newer scan started).
+    // Only synchronize when this call's library still owns the store state.
+    if (scan.libraryId !== libraryId) return
     await syncAfterScan(queryClient, libraryId, scan.status, scan.terminal, scan.receivedEvent)
   }
 

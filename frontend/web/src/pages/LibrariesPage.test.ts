@@ -15,6 +15,16 @@ import type {
 import { createTestQueryClient } from '@/test/query-client'
 import LibrariesPage from './LibrariesPage.vue'
 
+// jsdom has no layout, so the folder-list virtualizer's scroller measures a
+// 0-height viewport and renders an empty window. Give every element a
+// viewport-sized box in this file only (the 0-layout semantics itself is
+// covered explicitly in FolderFlatList.test.ts 'renders an empty window…').
+// Set AFTER restoreAllMocks so the describe-level reset cannot strip them.
+function stubViewportMetrics(): void {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800)
+}
+
 const library: Library = {
   id: 'lib-a',
   name: 'Lossless archive',
@@ -103,7 +113,10 @@ async function mountPageWithClient(
 }
 
 describe('LibrariesPage', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    stubViewportMetrics()
+  })
 
   it('renders a library switcher and the flat folder list', async () => {
     const { wrapper } = await mountPage(apiStub())

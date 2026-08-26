@@ -135,4 +135,22 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
     expect(plansUntouched(client)).toBe(true)
   })
+
+  it('user cancel is metadata-only even when the stream had started', async () => {
+    const client = createTestQueryClient()
+    seedLibraryDomain(client)
+    seedPlans(client)
+    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+
+    // Cancel aborts the stream (transport terminal) after a 'started' event:
+    // materialized folders are replaced in one transaction only on completion,
+    // so nothing changed — the derived caches must not be dropped or refetched.
+    await syncAfterScan(client, 'lib-a', 'cancelled', 'transport', true)
+
+    expect(client.getQueryData(foldersKey)).toEqual(folders)
+    expect(client.getQueryData(treeKey)).toEqual(tree)
+    expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
+    expect(plansUntouched(client)).toBe(true)
+  })
 })

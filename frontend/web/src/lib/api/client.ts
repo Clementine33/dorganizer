@@ -102,7 +102,10 @@ export class ApiClient implements ApiClientContract {
   }
 
   createPlan(input: CreatePlanInput): Promise<PlanResponse> {
-    return this.request('/plans', { method: 'POST', body: input })
+    // Plan generation is server-side work that can legitimately take longer
+    // than the read-path timeout; aborting here would surface a false failure
+    // and a retry would create a duplicate plan.
+    return this.request('/plans', { method: 'POST', body: input, timeoutMs: 60_000 })
   }
 
   async listPlans(libraryId?: string, limit = 100, signal?: AbortSignal): Promise<PlanInfo[]> {
@@ -130,11 +133,12 @@ export class ApiClient implements ApiClientContract {
   // that never resolves leaves query UI stuck on an infinite pending state
   // (e.g. the folder-tree page waiting on a never-settling libraries list).
   // The SSE scan stream is not routed through request() and is unaffected.
+  // Mutations that trigger long server-side work override this via timeoutMs.
   private static readonly REQUEST_TIMEOUT_MS = 15_000
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+    options: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<T> {
     const controller = new AbortController()
     let removeAbort: (() => void) | null = null
@@ -151,7 +155,7 @@ export class ApiClient implements ApiClientContract {
     }
     const timer = setTimeout(
       () => controller.abort(new DOMException('请求超时', 'TimeoutError')),
-      ApiClient.REQUEST_TIMEOUT_MS,
+      options.timeoutMs ?? ApiClient.REQUEST_TIMEOUT_MS,
     )
     try {
       return await this.doRequest<T>(path, options, controller.signal)

@@ -47,8 +47,13 @@ const refreshWarning = computed(() => (detail.value && detailError.value ? detai
 const cacheEvents = ref(0)
 let unsubscribeCache: (() => void) | null = null
 onMounted(() => {
-  unsubscribeCache = queryClient.getQueryCache().subscribe(() => {
-    cacheEvents.value++
+  unsubscribeCache = queryClient.getQueryCache().subscribe((event) => {
+    // Only plan-list writes can change the pill's metadata; ignore every
+    // other cache event so unrelated query activity does not re-scan all
+    // plan lists on each write.
+    if (event.query.queryKey[0] === 'plans' && event.query.queryKey[1] === 'list') {
+      cacheEvents.value++
+    }
   })
 })
 onBeforeUnmount(() => {
