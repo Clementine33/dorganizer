@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
-import path, { resolve } from 'node:path'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readStackState } from './helpers/stack-state.ts'
 
 /**
  * Navigation latency diagnostic (FolderDetailPage -> LibrariesPage).
@@ -19,7 +20,8 @@ import { fileURLToPath } from 'node:url'
  *               big-tree   real-small list (2 rows) + big tree     -> isolates
  *                          FolderTreeCard teardown cost
  *               big-list   2500 rows + tiny tree (3 visible rows)  -> isolates
- *                          FolderFlatList mount + layout cost
+ *                          the windowed flat-list cost (must stay near the
+ *                          small baseline)
  *
  * Per round it records:
  *   - painted: ms from clicking `back-to-libraries` until the folder list's
@@ -45,18 +47,6 @@ import { fileURLToPath } from 'node:url'
  */
 
 const e2eEnabled = process.env.ONSEI_E2E === '1'
-
-interface StackState {
-  fixtureRoot: string
-  httpPort: number
-}
-
-function readStackState(): StackState {
-  const stateFile = process.env.ONSEI_E2E_STATE_FILE
-    ? resolve(process.env.ONSEI_E2E_STATE_FILE)
-    : fileURLToPath(new URL('./.stack-state.json', import.meta.url))
-  return JSON.parse(readFileSync(stateFile, 'utf8')) as StackState
-}
 
 // ---- deterministic fixtures -------------------------------------------------
 
@@ -191,13 +181,21 @@ async function runCase(
 ): Promise<{ painted: number[]; long: number[]; requests: number }> {
   await page.selectOption('select[aria-label="切换媒体库"]', libraryId)
   await expect(page.locator(shape.firstRowSelector).first()).toBeVisible({ timeout: 30_000 })
+  // Warm-up round, unmeasured: performs the first tree fetch (per-case payload)
+  // and warms the virtualized list + JIT so the measured rounds below are pure
+  // cache hits and the numbers are not skewed by first-render setup.
+  await page.getByRole('button', { name: shape.openButtonName }).click()
+  await expect(page.getByTestId('tree-row-0')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId(`tree-row-${shape.lastTreeRow}`)).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('back-to-libraries').click()
+  await expect(page.locator(shape.firstRowSelector).first()).toBeVisible({ timeout: 30_000 })
+
   const before = folderRequests.length
   const painted: number[] = []
   const long: number[] = []
   for (let i = 0; i < shape.rounds; i++) {
     await page.getByRole('button', { name: shape.openButtonName }).click()
     await expect(page.getByTestId('tree-row-0')).toBeVisible({ timeout: 30_000 })
-    // First round fetches the (per-case) tree; later rounds must hit the cache.
     await expect(page.getByTestId(`tree-row-${shape.lastTreeRow}`)).toBeVisible({ timeout: 30_000 })
     await installPerfWatch(page, shape.firstRowSelector)
     await page.getByTestId('back-to-libraries').click()
@@ -206,8 +204,8 @@ async function runCase(
     painted.push(round.painted)
     long.push(...round.long)
   }
-  // Warm-cache invariant: the only request across the rounds is the first tree fetch.
-  expect(folderRequests.length).toBe(before + 1)
+  // Warm-cache invariant: measured rounds issue zero requests (all data cached).
+  expect(folderRequests.length).toBe(before)
   return { painted, long, requests: folderRequests.length - before }
 }
 
@@ -216,9 +214,15 @@ test.describe('navigation latency diagnostics', () => {
 
   test('measure and attribute warm-cache FolderDetailPage -> LibrariesPage return', async ({ page }) => {
     const { fixtureRoot } = readStackState()
+    // Count backend folder/tree API calls only — Vite dev-server module
+    // requests for the folder feature components would otherwise match the
+    // '/folders' path segment too.
     const folderRequests: string[] = []
     page.on('request', (request) => {
-      if (/\/folders(\/|$)/.test(new URL(request.url()).pathname)) folderRequests.push(request.url())
+      const url = new URL(request.url())
+      if (url.pathname.startsWith('/api/v1/') && /\/folders(\/|$)/.test(url.pathname)) {
+        folderRequests.push(request.url())
+      }
     })
 
     const tmpRoots: string[] = []
@@ -241,12 +245,18 @@ test.describe('navigation latency diagnostics', () => {
       await page.locator('#library-root').fill(path.join(smallRoot, 'music'))
       await page.getByRole('button', { name: '保存' }).click()
       await expect(page.getByTestId('scan-button')).toBeVisible()
+      // Baseline varies with stack state: an empty data dir fires no folders
+      // fetch at boot, but after the smoke spec there is a pre-existing
+      // library whose (now-active) folders query fires on load. Snapshot
+      // after creation, before the scan.
+      const requestsBeforeScan = folderRequests.length
       await page.getByTestId('scan-button').click()
       await expect(page.getByText('扫描完成')).toBeVisible()
       await expect(page.getByRole('checkbox', { name: '选择 albumA' })).toBeVisible()
       // Scan completion triggers a targeted folders refetch (active observer) —
-      // let it settle, otherwise the snapshot taken inside runCase could race it.
-      await page.waitForTimeout(1000)
+      // wait for it instead of sleeping so the snapshot taken inside runCase
+      // cannot race it.
+      await expect.poll(() => folderRequests.length).toBe(requestsBeforeScan + 1)
       const smallLibraryId = await libraryIdByName(page, 'Perf Small')
       expect(smallLibraryId).not.toBe('')
 
@@ -336,12 +346,18 @@ test.describe('navigation latency diagnostics', () => {
         contentType: 'application/json',
       })
 
-      // The diagnostic is only meaningful if the big cases clearly exceed the
-      // small baseline — otherwise the loop cannot go red on this bottleneck.
-      expect(summary['big-both'].medianPainted).toBeGreaterThan(summary.small.medianPainted * 1.5)
-      // Both directions must be attributable: neither differential case may be
-      // trivial next to the combined case (each contributes real cost).
-      expect(median(bigTree.painted) + median(bigList.painted)).toBeGreaterThan(median(both.painted) * 0.5)
+      // The flat list is windowed now: the 2500-row list return must stay near the
+      // small baseline and below a hard absolute bound — if windowing is ever
+      // removed this goes red again (the list was a 2-4s single long task).
+      // Both a relative-to-baseline ratio and an absolute floor are asserted so
+      // a single noisy sample cannot flip the verdict, and a slow CI machine
+      // cannot hide a real regression behind a large baseline.
+      expect(median(bigList.painted)).toBeLessThan(summary.small.medianPainted * 1.5)
+      expect(median(bigList.painted)).toBeLessThan(300)
+      // Combined tree teardown + windowed-list return stays bounded (relative
+      // and absolute); any regression in either renderer pushes it past both.
+      expect(median(both.painted)).toBeLessThan(summary.small.medianPainted * 3)
+      expect(median(both.painted)).toBeLessThan(500)
     } finally {
       for (const root of tmpRoots) rmSync(root, { recursive: true, force: true })
     }

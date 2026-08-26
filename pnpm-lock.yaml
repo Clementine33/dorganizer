@@ -16,6 +16,9 @@ importers:
       '@tanstack/vue-query':
         specifier: 5.102.3
         version: 5.102.3(vue@3.5.41(typescript@6.0.2))
+      '@tanstack/vue-virtual':
+        specifier: ^3.13.36
+        version: 3.13.36(vue@3.5.41(typescript@6.0.2))
       '@vue/devtools-api':
         specifier: ^8.1.5
         version: 8.2.1
