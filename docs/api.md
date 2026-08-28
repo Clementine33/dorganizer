@@ -152,59 +152,135 @@ the folder (folders scoped to the owning library):
 
 ### Plan request
 
-`POST /api/v1/plans` body:
+`POST /api/v1/plans` accepts exactly one branch:
+
+- **workflow** — declarative desired audio outputs over folder planning roots
+  (the `reconcile_audio_outputs` step). The user declares the final managed
+  audio set per classifier partition; conversion/cleanup mechanics are derived
+  by the backend.
+- **single_action** — an explicit delete or convert of selected source files
+  (retained independently of the workflow).
+
+The legacy `plan_type` / `target_format` / `prune_matched_excluded` fields
+were removed: sending them returns `400 LEGACY_FIELDS_NOT_SUPPORTED`. Nothing
+is silently derived.
+
+Workflow request:
 
 ```json
 {
   "library_id": "uuid",
   "folder_ids": ["uuid", "..."],
-  "source_files": ["/abs/path.flac"],
-  "plan_type": "slim",
-  "target_format": "slim:mode1",
-  "prune_matched_excluded": false
+  "workflow": {
+    "schema_version": 1,
+    "steps": [
+      {
+        "step_type": "reconcile_audio_outputs",
+        "policy": { "kind": "preset", "name": "balanced", "version": 1 }
+      }
+    ]
+  }
 }
 ```
 
-`folder_ids` and `source_files` are mutually optional but at least one is
-required (`SCOPE_REQUIRED` otherwise). Folder IDs are resolved to the
-library's own folder paths, so a folder belonging to another library 404s.
-Every `source_files` path must lexically and physically resolve inside the
-selected library root; outside paths, traversal escapes, and escapes through
-symbolic links or Windows junctions return `SOURCE_FILE_OUTSIDE_LIBRARY`.
-Source files and the configured root must exist when the plan is requested.
-`plan_type` may be `slim`, `prune`, `single_delete`, or `single_convert`
-(or omitted to derive from `target_format`).
+`folder_ids` are required for workflow requests and resolve to the library's
+own folder paths (a folder belonging to another library 404s). Each resolved
+folder is an independent **planning root**: classifier partitioning, component
+discovery and failure boundaries never cross roots.
 
-Response (200):
+The policy source is a tagged union:
+
+- `preset` — an immutable compiled-in preset (`balanced@1`, `compact@1`,
+  `archive@1`).
+- `inline` — a full policy object:
+  ```json
+  "policy": {
+    "kind": "inline",
+    "policy": {
+      "schema_version": 1,
+      "classifier": { "name": "effect-direction", "version": 1 },
+      "matched":   { "lossless": { "codec": "wav" }, "encoded": { "codec": "mp3", "quality": { "kind": "bitrate", "bitrate": 320 } } },
+      "unmatched": { "lossless": { "codec": "wav" }, "encoded": { "codec": "mp3", "quality": { "kind": "bitrate", "bitrate": 320 } } }
+    }
+  }
+  ```
+  Each profile declares at most one lossless output (wav/flac) and one encoded
+  output (mp3/aac with a bitrate quality), at least one of the two. `matched`
+  is the classifier match (UI 无音效); `unmatched` is its complement (UI 有音效).
+
+Structural policy errors are request failures (400, no Plan): `INVALID_POLICY`,
+`UNKNOWN_PRESET`, `UNKNOWN_CLASSIFIER`, `INVALID_WORKFLOW_SCHEMA`,
+`UNSUPPORTED_STEP`, `SCOPE_REQUIRED`. Media that cannot satisfy a *valid*
+policy produces a reviewable Plan with blocked Components instead.
+
+Workflow response (200):
 
 ```json
 {
   "plan_id": "plan-...",
   "snapshot_token": "...",
-  "root_path": "/home/me/music",
+  "root_path": "/home/me/music/albumA",
+  "plan_kind": "workflow",
   "summary": {
-    "operation_count": 2,
+    "operation_count": 4,
     "error_count": 0,
-    "total_count": 2,
-    "actionable_count": 2,
+    "total_count": 4,
+    "actionable_count": 4,
     "summary_reason": "ACTIONABLE"
   },
-  "operations": [
-    { "type": "delete", "source_path": "/home/me/music/albumA/track1.flac",
-      "target_path": "" }
-  ],
-  "errors": [],
-  "successful_folders": ["/home/me/music/albumA"]
+  "steps": [
+    {
+      "step_type": "reconcile_audio_outputs",
+      "step_index": 0,
+      "status": "ok",
+      "policy": { "...": "..." },
+      "policy_hash": "...",
+      "classifier": { "name": "effect-direction", "version": 1, "pattern": "...", "hash": "..." },
+      "summary": { "component_count": 1, "blocked_count": 0, "operation_count": 4, "error_count": 0, "summary_reason": "ACTIONABLE" },
+      "components": [
+        {
+          "component_id": "...", "partition": "unmatched", "status": "ok",
+          "lanes": [ { "lane": "lossless", "decision": "KEEP" }, { "lane": "encoded", "decision": "REBUILD_ALL" } ],
+          "variant_decisions": [ { "stem": "00", "decisions": [...] } ],
+          "operations": [ { "kind": "encode", "phase": "materialize_outputs", "component_id": "...", "variant_stem": "00", "source_path": ".../wav/00.wav", "target_path": ".../wav/00.mp3" } ],
+          "projected_inventory": ["...00.mp3", "..."],
+          "files": [ { "path": "...", "size": 1, "mtime": 1 } ]
+        }
+      ]
+    }
+  ]
 }
 ```
 
-`summary_reason` is `ACTIONABLE`, `NO_MATCH`, or `GLOBAL_SHORT_CIRCUIT`.
-Folder-level plan errors stay inside the successful 200 response
-(`errors[]`), one per failed folder; only request-level failures map to
-HTTP status codes (400 `INVALID_ARGUMENT`, 404, 409).
+`summary_reason` for workflows is `ACTIONABLE`, `NO_MATCH`, `BLOCKED`, or
+`PARTIAL`. A **blocked Component** contributes zero executable operations
+(retaining its decisions for review) and other Components may remain
+actionable. Non-audio files never receive decisions or operations.
+
+Single-action request:
+
+```json
+{
+  "library_id": "uuid",
+  "single_action": {
+    "action": "delete",
+    "source_files": ["/abs/path.flac"]
+  }
+}
+```
+
+Every `source_files` path must lexically and physically resolve inside the
+selected library root; outside paths, traversal escapes, and escapes through
+symbolic links or Windows junctions return `SOURCE_FILE_OUTSIDE_LIBRARY`.
 
 `GET /api/v1/plans?library_id=uuid&limit=100` lists plans for a library
-(including folder-scoped plans), newest first.
+(including folder-scoped plans), newest first. `GET /api/v1/plans/:id`
+returns the same layered shape as the create response, rebuilt from persisted
+snapshots (never from live preset/classifier state).
+
+Workflow execution is not implemented: calling the gRPC `ExecutePlan` on a
+workflow plan returns `EXECUTE_NOT_SUPPORTED` before any item loading. The
+single-action path remains executable.
 
 ## Paths: the one rule
 

@@ -122,25 +122,38 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	if albumFolderID == "" {
 		t.Fatalf("folders response missing albumA: %+v", folders.Folders)
 	}
+	// POST /api/v1/plans with the workflow contract: balanced preset over the
+	// albumA planning root. albumA holds flac+mp3 pairs with unknown bitrates,
+	// so the balanced profile (wav + mp3-320) is actionable (lossless and
+	// encoded lanes rebuild from the observed flac source).
 	planReq := map[string]any{
-		"library_id":    lib.ID,
-		"folder_ids":    []string{albumFolderID},
-		"plan_type":     "slim",
-		"target_format": "slim:mode1",
+		"library_id": lib.ID,
+		"folder_ids": []string{albumFolderID},
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps": []any{map[string]any{
+				"step_type": "reconcile_audio_outputs",
+				"policy":    map[string]any{"kind": "preset", "name": "balanced", "version": 1},
+			}},
+		},
 	}
 	var plan struct {
 		PlanID   string `json:"plan_id"`
-		RootPath string `json:"root_path"`
+		PlanKind string `json:"plan_kind"`
 		Summary  struct {
 			OperationCount  int    `json:"operation_count"`
 			ErrorCount      int    `json:"error_count"`
 			ActionableCount int    `json:"actionable_count"`
 			SummaryReason   string `json:"summary_reason"`
 		} `json:"summary"`
-		Operations []struct {
-			Type       string `json:"type"`
-			SourcePath string `json:"source_path"`
-		} `json:"operations"`
+		Steps []struct {
+			StepType   string `json:"step_type"`
+			Status     string `json:"status"`
+			Components []struct {
+				ComponentID string `json:"component_id"`
+				Status      string `json:"status"`
+			} `json:"components"`
+		} `json:"steps"`
 	}
 	code = doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/plans", token, planReq, &plan)
 	if code != http.StatusOK {
@@ -149,26 +162,27 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	if plan.PlanID == "" {
 		t.Fatal("POST /api/v1/plans: empty plan_id")
 	}
-	if len(plan.Operations) == 0 {
-		t.Fatalf("POST /api/v1/plans: expected delete operations for mp3+flac stems, got 0 (summary=%+v)", plan.Summary)
+	if plan.PlanKind != "workflow" {
+		t.Fatalf("plan_kind = %q, want workflow", plan.PlanKind)
 	}
-	if plan.Summary.OperationCount != len(plan.Operations) {
-		t.Fatalf("summary.operation_count %d != len(operations) %d", plan.Summary.OperationCount, len(plan.Operations))
+	if len(plan.Steps) != 1 || plan.Steps[0].StepType != "reconcile_audio_outputs" {
+		t.Fatalf("steps = %+v, want one reconcile_audio_outputs step", plan.Steps)
 	}
-	if plan.Summary.ActionableCount != plan.Summary.OperationCount {
+	if plan.Summary.OperationCount == 0 {
+		t.Fatalf("expected actionable operations for flac+mp3 pairs under balanced preset (summary=%+v)", plan.Summary)
+	}
+	if plan.Summary.OperationCount != plan.Summary.ActionableCount {
 		t.Fatalf("summary.actionable_count %d != operation_count %d", plan.Summary.ActionableCount, plan.Summary.OperationCount)
 	}
-	for _, op := range plan.Operations {
-		if op.Type != "delete" {
-			t.Fatalf("plan operation type %q, want delete", op.Type)
-		}
-		if !strings.HasSuffix(op.SourcePath, ".flac") {
-			t.Fatalf("plan delete source %q, want a .flac lossless copy", op.SourcePath)
-		}
+	if plan.Summary.SummaryReason != "ACTIONABLE" {
+		t.Fatalf("summary_reason = %q, want ACTIONABLE", plan.Summary.SummaryReason)
+	}
+	if len(plan.Steps[0].Components) == 0 {
+		t.Fatal("workflow step has no components")
 	}
 
-	t.Logf("http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d",
-		lib.ID, completed.ScanID, len(folders.Folders), plan.PlanID, len(plan.Operations))
+	t.Logf("http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d components=%d",
+		lib.ID, completed.ScanID, len(folders.Folders), plan.PlanID, plan.Summary.OperationCount, len(plan.Steps[0].Components))
 }
 
 // buildBackendBinary compiles the backend into a fresh temp dir and returns

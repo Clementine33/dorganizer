@@ -2,6 +2,7 @@ package execute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,29 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 		return Result{}, NewError(ErrKindInvalidArgument, "INVALID_PLAN_ID", "plan_id is required", nil)
 	}
 
-	// 2. Load persisted plan
+	// 2. Defensive isolation: workflow plans must never be consumed by the
+	// legacy item loader (whose op_type mapping would mis-execute new plan
+	// shapes). This is not the new Execute engine — it is the boundary guard.
+	planKind, schemaVersion, kindErr := s.repo.GetPlanWorkflowSchema(req.PlanID)
+	if kindErr != nil && !errors.Is(kindErr, sqlite.ErrPlanNotFound) {
+		useCaseErr := s.mapLoadError(req.PlanID, kindErr, sink)
+		return Result{}, useCaseErr
+	}
+	if planKind == "workflow" || schemaVersion > 0 {
+		_ = sink.Emit(newEvent("error", "execute", "EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID)))
+		s.persistExecuteErrorGlobal("EXECUTE_NOT_SUPPORTED", fmt.Sprintf("workflow plan execution is not implemented: %s", req.PlanID))
+		return Result{}, NewError(ErrKindFailedPrecondition, "EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID), nil)
+	}
+
+	// 3. Load persisted plan. A missing plan (ErrPlanNotFound from the guard)
+	// falls through to loadPlan so the existing PLAN_NOT_FOUND mapping stays
+	// the single source of truth; other guard errors were already returned.
+	if kindErr != nil {
+		useCaseErr := s.mapLoadError(req.PlanID, kindErr, sink)
+		return Result{}, useCaseErr
+	}
 	execPlan, rootPath, err := loadPlan(s.repo, req.PlanID, req.SoftDelete)
 	if err != nil {
 		useCaseErr := s.mapLoadError(req.PlanID, err, sink)
@@ -38,7 +61,7 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 	planID := req.PlanID
 	slashRootPath := filepath.ToSlash(rootPath)
 
-	// 3. Emit started event
+	// 4. Emit started event
 	if err := sink.Emit(Event{
 		Type:      "started",
 		Message:   fmt.Sprintf("Executing plan %s", planID),
@@ -50,7 +73,7 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 		return Result{}, err
 	}
 
-	// 4. Load config
+	// 5. Load config
 	hasConvertOp := hasConvertOp(execPlan)
 	var toolsConfig exesvc.ToolsConfig
 	if hasConvertOp {
@@ -72,7 +95,7 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			fmt.Sprintf("Execute config parse error (using defaults): %v", cfgErr)))
 	}
 
-	// 5. Create internal event handler wrapper
+	// 6. Create internal event handler wrapper
 	handler := newExecuteEventHandler(sink, s.repo, slashRootPath, planID)
 
 	// Pre-compute folder membership so the handler can determine folder lifecycle boundaries.
@@ -86,15 +109,15 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 		}
 	}
 
-	// 6. Create and configure lower-level execute service
+	// 7. Create and configure lower-level execute service
 	svc := exesvc.NewExecuteService(newExecuteRepoAdapter(s.repo), toolsConfig)
 	svc.SetExecuteConfig(execCfg)
 	svc.SetEventHandler(handler)
 
-	// 7. Execute the plan
+	// 8. Execute the plan
 	result, execErr := svc.ExecutePlan(execPlan)
 
-	// 8. Handle execution errors from lower-level service
+	// 9. Handle execution errors from lower-level service
 	if execErr != nil {
 		if result != nil && result.ErrorCode == "CONFIG_INVALID" {
 			msg := firstNonEmpty(result.ErrorMsg, execErr.Error())

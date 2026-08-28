@@ -35,17 +35,19 @@ func parseTimestamp(s string) time.Time {
 	return time.Time{}
 }
 
-// Plan represents a persisted Slim/Prune plan
+// Plan represents a persisted plan.
 type Plan struct {
-	PlanID        string
-	RootPath      string
-	ScanRootPath  string
-	LibraryID     string  // nullable: owning library when known (web-created plans)
-	PlanType      string  // slim, prune, single_delete, single_convert
-	SlimMode      *string // nullable: 1, 2, or nil
-	SnapshotToken string
-	Status        string // ready, executed, stale, canceled
-	CreatedAt     time.Time
+	PlanID                string
+	RootPath              string
+	ScanRootPath          string
+	LibraryID             string  // nullable: owning library when known (web-created plans)
+	PlanType              string  // display label: workflow, single_delete, single_convert
+	SlimMode              *string // nullable legacy column; unused for workflow plans
+	SnapshotToken         string
+	Status                string // ready, executed, stale, canceled, failed
+	PlanKind              string // single_action, workflow
+	WorkflowSchemaVersion int    // >0 for workflow plans, 0 for single actions
+	CreatedAt             time.Time
 }
 
 // PlanFolderError is a folder-scoped error persisted with a plan so the plan
@@ -177,6 +179,11 @@ func NewRepository(dbPath string) (*Repository, error) {
 	}
 
 	if err := migratePlansLibrarySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := migratePlansWorkflowSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -370,6 +377,140 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 	return nil
 }
 
+// migratePlansWorkflowSchema is the breaking migration for the workflow plan
+// refactor. Plan rows and their per-plan/execute intermediate state are
+// intermediate-state only: every legacy plan and execute session is purged in
+// one transaction, and the plans table is rebuilt with the new plan_kind /
+// workflow_schema_version columns. Libraries, entries, scans, classifiers and
+// error_events are preserved.
+func migratePlansWorkflowSchema(db *sql.DB) error {
+	hasWorkflow, err := tableHasColumn(db, "plans", "workflow_schema_version")
+	if err != nil {
+		return err
+	}
+	if hasWorkflow {
+		return nil
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("BEGIN"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = db.Exec("ROLLBACK")
+		}
+	}()
+
+	purge := []string{
+		"DELETE FROM execute_sessions",
+		"DELETE FROM plan_errors",
+		"DELETE FROM plan_successful_folders",
+		"DELETE FROM plan_items",
+		"DELETE FROM plans",
+	}
+	for _, stmt := range purge {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("workflow migration purge: %w", err)
+		}
+	}
+
+	// Rebuild plans via create + drop + rename (the same pattern the library
+	// migration uses) so the retained child tables (plan_items, execute_sessions)
+	// re-resolve their FK REFERENCES plans to the new table by name. A plain
+	// RENAME TO <legacy> would retarget those FKs at the legacy name and leave
+	// them dangling after the drop.
+	steps := []string{
+		`CREATE TABLE plans_new (
+			plan_id TEXT PRIMARY KEY,
+			root_path TEXT NOT NULL,
+			scan_root_path TEXT NOT NULL DEFAULT '',
+			library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+			plan_type TEXT NOT NULL,
+			slim_mode TEXT,
+			snapshot_token TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ready',
+			plan_kind TEXT NOT NULL DEFAULT 'single_action',
+			workflow_schema_version INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`DROP TABLE plans`,
+		`ALTER TABLE plans_new RENAME TO plans`,
+		`CREATE TABLE IF NOT EXISTS classifiers (
+			name TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			kind TEXT NOT NULL DEFAULT 'regex',
+			pattern TEXT NOT NULL DEFAULT '',
+			hash TEXT NOT NULL DEFAULT '',
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (name, version)
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_workflow_steps (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			step_type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ok',
+			policy_source_kind TEXT NOT NULL DEFAULT '',
+			policy_source_name TEXT NOT NULL DEFAULT '',
+			policy_source_version INTEGER NOT NULL DEFAULT 0,
+			policy_schema_version INTEGER NOT NULL DEFAULT 0,
+			policy_json TEXT NOT NULL DEFAULT '',
+			policy_hash TEXT NOT NULL DEFAULT '',
+			classifier_name TEXT NOT NULL DEFAULT '',
+			classifier_version INTEGER NOT NULL DEFAULT 0,
+			classifier_pattern TEXT NOT NULL DEFAULT '',
+			classifier_hash TEXT NOT NULL DEFAULT '',
+			step_summary_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, step_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_roots (
+			plan_id TEXT NOT NULL,
+			root_index INTEGER NOT NULL,
+			root_path TEXT NOT NULL,
+			root_identity TEXT NOT NULL DEFAULT '',
+			inventory_fingerprint TEXT NOT NULL DEFAULT '',
+			entry_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (plan_id, root_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_components (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			component_index INTEGER NOT NULL,
+			component_id TEXT NOT NULL,
+			root_index INTEGER NOT NULL DEFAULT 0,
+			partition TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			reason_code TEXT NOT NULL DEFAULT '',
+			outcome_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, component_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_classifiers_version ON classifiers(name, version)`,
+	}
+	for _, stmt := range steps {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("workflow migration rebuild: %w", err)
+		}
+	}
+
+	if _, err := db.Exec("COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func initSchema(db *sql.DB) error {
 	schemaTables := `
 -- P0 Schema V1: Main entries table with content revision tracking
@@ -431,6 +572,9 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 
 -- Persisted plans. Legacy schemas without library_id are upgraded by
 -- migratePlansLibrarySchema (the FK cannot be added via ALTER TABLE).
+-- plan_kind discriminates workflow plans (declare outputs) from the retained
+-- independent single-action path; workflow_schema_version is 0 for
+-- single-action rows.
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
@@ -440,6 +584,8 @@ CREATE TABLE IF NOT EXISTS plans (
     slim_mode TEXT,
     snapshot_token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ready',
+    plan_kind TEXT NOT NULL DEFAULT 'single_action',
+    workflow_schema_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -504,6 +650,68 @@ CREATE TABLE IF NOT EXISTS execute_sessions (
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
+-- Immutable named/versioned classifiers. Editing a rule produces a new
+-- version; deleted versions referenced by plans stay in this table.
+CREATE TABLE IF NOT EXISTS classifiers (
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'regex',
+    pattern TEXT NOT NULL DEFAULT '',
+    hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, version)
+);
+
+-- Workflow plan steps: resolved policy/classifier snapshots plus the step
+-- summary. Policy snapshots are immutable per plan.
+CREATE TABLE IF NOT EXISTS plan_workflow_steps (
+    plan_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    step_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',
+    policy_source_kind TEXT NOT NULL DEFAULT '',
+    policy_source_name TEXT NOT NULL DEFAULT '',
+    policy_source_version INTEGER NOT NULL DEFAULT 0,
+    policy_schema_version INTEGER NOT NULL DEFAULT 0,
+    policy_json TEXT NOT NULL DEFAULT '',
+    policy_hash TEXT NOT NULL DEFAULT '',
+    classifier_name TEXT NOT NULL DEFAULT '',
+    classifier_version INTEGER NOT NULL DEFAULT 0,
+    classifier_pattern TEXT NOT NULL DEFAULT '',
+    classifier_hash TEXT NOT NULL DEFAULT '',
+    step_summary_json TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_id, step_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
+-- Planning roots with their metadata inventory fingerprints.
+CREATE TABLE IF NOT EXISTS plan_roots (
+    plan_id TEXT NOT NULL,
+    root_index INTEGER NOT NULL,
+    root_path TEXT NOT NULL,
+    root_identity TEXT NOT NULL DEFAULT '',
+    inventory_fingerprint TEXT NOT NULL DEFAULT '',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (plan_id, root_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
+-- Component outcomes (lanes, decisions, operations, projected inventory)
+-- persisted as deterministic JSON snapshots.
+CREATE TABLE IF NOT EXISTS plan_components (
+    plan_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    component_index INTEGER NOT NULL,
+    component_id TEXT NOT NULL,
+    root_index INTEGER NOT NULL DEFAULT 0,
+    partition TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    reason_code TEXT NOT NULL DEFAULT '',
+    outcome_json TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_id, component_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
 -- Libraries (web library views)
 CREATE TABLE IF NOT EXISTS libraries (
     id TEXT PRIMARY KEY,
@@ -563,6 +771,10 @@ CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 -- idx_plans_library_created is created by migratePlansLibrarySchema after the
 -- library_id column exists on both new and legacy schemas.
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id);
+CREATE INDEX IF NOT EXISTS idx_classifiers_version ON classifiers(name, version);
 
 -- Error event indexes
 CREATE INDEX IF NOT EXISTS idx_errors_root ON error_events(root_path);

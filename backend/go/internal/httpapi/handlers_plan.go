@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,29 +9,57 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
-// planCreateRequest is the POST /api/v1/plans payload. Scope is provided
-// either via folder_ids (resolved to library-scoped folder paths) or
-// source_files; at least one of the two must be present.
+// planCreateRequest is the POST /api/v1/plans payload. Exactly one branch is
+// required: workflow (declarative desired outputs over folder planning roots)
+// or single_action (explicit delete/convert of selected source files).
 type planCreateRequest struct {
-	LibraryID            string   `json:"library_id"`
-	FolderIDs            []string `json:"folder_ids"`
-	SourceFiles          []string `json:"source_files"`
-	PlanType             string   `json:"plan_type"`
-	TargetFormat         string   `json:"target_format"`
-	PruneMatchedExcluded bool     `json:"prune_matched_excluded"`
+	LibraryID    string               `json:"library_id"`
+	FolderIDs    []string             `json:"folder_ids"`
+	SourceFiles  []string             `json:"source_files"`
+	Workflow     *workflowRequest     `json:"workflow"`
+	SingleAction *singleActionRequest `json:"single_action"`
+
+	// Legacy slim/prune fields: rejected explicitly, never derived silently.
+	PlanType             string `json:"plan_type"`
+	TargetFormat         string `json:"target_format"`
+	PruneMatchedExcluded bool   `json:"prune_matched_excluded"`
 }
 
-// planOperationResponse mirrors one plan usecase Operation with snake_case JSON.
+type workflowRequest struct {
+	SchemaVersion int                   `json:"schema_version"`
+	Steps         []workflowStepRequest `json:"steps"`
+}
+
+type workflowStepRequest struct {
+	StepType string              `json:"step_type"`
+	Policy   policySourceRequest `json:"policy"`
+}
+
+type policySourceRequest struct {
+	Kind    string          `json:"kind"` // preset | inline
+	Name    string          `json:"name"` // preset branch
+	Version int             `json:"version"`
+	Policy  json.RawMessage `json:"policy"` // inline branch (reconcile.Policy JSON)
+}
+
+type singleActionRequest struct {
+	Action       string   `json:"action"` // delete | convert
+	SourceFiles  []string `json:"source_files"`
+	TargetFormat string   `json:"target_format"`
+}
+
+// planOperationResponse mirrors one single-action operation.
 type planOperationResponse struct {
 	Type       string `json:"type"`
 	SourcePath string `json:"source_path"`
 	TargetPath string `json:"target_path"`
 }
 
-// planErrorResponse mirrors one plan usecase FolderError with snake_case JSON.
+// planErrorResponse mirrors a folder-scoped error (single-action branch).
 type planErrorResponse struct {
 	FolderPath string `json:"folder_path"`
 	Code       string `json:"code"`
@@ -38,7 +67,7 @@ type planErrorResponse struct {
 	Retryable  bool   `json:"retryable"`
 }
 
-// planSummaryResponse mirrors the plan usecase Summary with snake_case JSON.
+// planSummaryResponse mirrors the usecase summary.
 type planSummaryResponse struct {
 	OperationCount  int    `json:"operation_count"`
 	ErrorCount      int    `json:"error_count"`
@@ -47,19 +76,290 @@ type planSummaryResponse struct {
 	SummaryReason   string `json:"summary_reason"`
 }
 
-// planResponse mirrors the plan usecase Response with snake_case JSON.
+// planResponse mirrors the single-action usecase response.
 type planResponse struct {
 	PlanID            string                  `json:"plan_id"`
 	SnapshotToken     string                  `json:"snapshot_token"`
 	RootPath          string                  `json:"root_path"`
+	PlanKind          string                  `json:"plan_kind"`
 	Summary           planSummaryResponse     `json:"summary"`
 	Operations        []planOperationResponse `json:"operations"`
 	Errors            []planErrorResponse     `json:"errors"`
 	SuccessfulFolders []string                `json:"successful_folders"`
 }
 
-// toPlanResponse maps a plan usecase response to the HTTP JSON shape without
-// interpreting outcomes: the usecase owns summary semantics.
+// workflowStepResponse is the layered review payload of one step.
+type workflowStepResponse struct {
+	StepType   string            `json:"step_type"`
+	StepIndex  int               `json:"step_index"`
+	Status     string            `json:"status"`
+	Policy     json.RawMessage   `json:"policy"`
+	PolicyHash string            `json:"policy_hash"`
+	Classifier json.RawMessage   `json:"classifier"`
+	Summary    json.RawMessage   `json:"summary"`
+	Components []json.RawMessage `json:"components"`
+}
+
+// workflowPlanResponse is the create/detail shape for workflow plans.
+type workflowPlanResponse struct {
+	PlanID            string                  `json:"plan_id"`
+	SnapshotToken     string                  `json:"snapshot_token"`
+	RootPath          string                  `json:"root_path"`
+	PlanKind          string                  `json:"plan_kind"`
+	Summary           planSummaryResponse     `json:"summary"`
+	Steps             []workflowStepResponse  `json:"steps"`
+	Operations        []planOperationResponse `json:"operations"`
+	Errors            []planErrorResponse     `json:"errors"`
+	SuccessfulFolders []string                `json:"successful_folders"`
+}
+
+func rawJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(b)
+}
+
+// workflow response assembly keeps component outcomes as raw JSON snapshots so
+// create and detail payloads agree byte-for-byte with the persisted outcome.
+
+func toWorkflowPlanResponse(resp planusecase.Response) workflowPlanResponse {
+	out := workflowPlanResponse{
+		PlanID:        resp.PlanID,
+		SnapshotToken: resp.SnapshotToken,
+		RootPath:      resp.RootPath,
+		PlanKind:      resp.PlanKind,
+		Summary: planSummaryResponse{
+			OperationCount:  resp.Summary.OperationCount,
+			ErrorCount:      resp.Summary.ErrorCount,
+			TotalCount:      resp.Summary.TotalCount,
+			ActionableCount: resp.Summary.ActionableCount,
+			SummaryReason:   resp.Summary.SummaryReason,
+		},
+		Operations:        []planOperationResponse{},
+		Errors:            []planErrorResponse{},
+		SuccessfulFolders: []string{},
+	}
+	for _, step := range resp.Steps {
+		components := make([]json.RawMessage, 0, len(step.Components))
+		for _, c := range step.Components {
+			components = append(components, rawJSON(c))
+		}
+		out.Steps = append(out.Steps, workflowStepResponse{
+			StepType:   step.StepType,
+			StepIndex:  step.StepIndex,
+			Status:     step.Status,
+			Policy:     rawJSON(step.Policy),
+			PolicyHash: step.PolicyHash,
+			Classifier: rawJSON(struct {
+				Name    string `json:"name"`
+				Version int    `json:"version"`
+				Pattern string `json:"pattern"`
+				Hash    string `json:"hash"`
+			}{step.Classifier.Name, step.Classifier.Version, step.Classifier.Pattern, step.Classifier.Hash}),
+			Summary:    rawJSON(step.Summary),
+			Components: components,
+		})
+	}
+	return out
+}
+
+// createPlan creates a workflow or single-action plan for a library scope and
+// returns the planned review payload.
+func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
+	var req planCreateRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeDecodeError(w, err, "invalid plan payload")
+		return
+	}
+
+	if req.PlanType != "" || req.TargetFormat != "" || req.PruneMatchedExcluded {
+		writeError(w, http.StatusBadRequest, "LEGACY_FIELDS_NOT_SUPPORTED", "plan_type/target_format/prune_matched_excluded are removed; use workflow or single_action")
+		return
+	}
+	if (req.Workflow == nil) == (req.SingleAction == nil) {
+		writeError(w, http.StatusBadRequest, "INVALID_PLAN_REQUEST", "exactly one of workflow or single_action is required")
+		return
+	}
+
+	lib, err := s.deps.Repo.GetLibrary(req.LibraryID)
+	if err != nil {
+		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
+		return
+	}
+
+	if s.deps.PlanService == nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "plan service not configured")
+		return
+	}
+
+	usecaseReq := planusecase.Request{LibraryID: req.LibraryID}
+
+	switch {
+	case req.Workflow != nil:
+		if len(req.FolderIDs) == 0 {
+			writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "workflow requires folder_ids as planning roots")
+			return
+		}
+		folderPaths := make([]string, 0, len(req.FolderIDs))
+		for _, folderID := range req.FolderIDs {
+			folder, err := s.deps.Repo.GetLibraryFolder(lib.ID, folderID)
+			if err != nil {
+				if errors.Is(err, sqlite.ErrLibraryFolderNotFound) {
+					writeError(w, http.StatusNotFound, "LIBRARY_FOLDER_NOT_FOUND", "folder not found in library")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load folder")
+				return
+			}
+			folderPaths = append(folderPaths, folder.Path)
+		}
+
+		steps := make([]planusecase.WorkflowStep, 0, len(req.Workflow.Steps))
+		for _, step := range req.Workflow.Steps {
+			policySource, err := parsePolicySource(step.Policy)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "INVALID_POLICY_SOURCE", err.Error())
+				return
+			}
+			steps = append(steps, planusecase.WorkflowStep{StepType: step.StepType, Policy: policySource})
+		}
+		usecaseReq.Workflow = &planusecase.Workflow{
+			SchemaVersion: req.Workflow.SchemaVersion,
+			Steps:         steps,
+		}
+		usecaseReq.PlanningRoots = folderPaths
+
+	case req.SingleAction != nil:
+		if len(req.SingleAction.SourceFiles) == 0 && len(req.SourceFiles) == 0 {
+			writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "single_action requires source_files")
+			return
+		}
+		sourceFiles := req.SingleAction.SourceFiles
+		if len(sourceFiles) == 0 {
+			sourceFiles = req.SourceFiles
+		}
+		normalized, ok := validatePlanSourceFiles(w, lib.RootPath, sourceFiles)
+		if !ok {
+			return
+		}
+		usecaseReq.SingleAction = &planusecase.SingleAction{
+			Action:       req.SingleAction.Action,
+			SourceFiles:  normalized,
+			TargetFormat: req.SingleAction.TargetFormat,
+		}
+	}
+
+	resp, err := s.deps.PlanService.Plan(r.Context(), usecaseReq)
+	if err != nil {
+		if planErr, ok := planusecase.AsError(err); ok {
+			switch planErr.Kind {
+			case planusecase.ErrKindInvalidArgument:
+				writeError(w, http.StatusBadRequest, planErr.Code, planErr.Message)
+				return
+			case planusecase.ErrKindAlreadyExists:
+				writeError(w, http.StatusConflict, planErr.Code, planErr.Message)
+				return
+			}
+			// ErrKindInternal and unknown kinds fall through to 500.
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create plan")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create plan")
+		return
+	}
+
+	if resp.PlanKind == planusecase.PlanKindWorkflow {
+		writeJSON(w, http.StatusOK, toWorkflowPlanResponse(resp))
+		return
+	}
+	writeJSON(w, http.StatusOK, toPlanResponse(resp))
+}
+
+// resolveStepSummary rebuilds the plan summary from the persisted step
+// summaries. Schema v1 has a single step; a future multi-step workflow sums
+// all steps' operation counts and treats any blocked step as PARTIAL/BLOCKED.
+func resolveStepSummary(steps []sqlite.WorkflowStepRecord) planSummaryResponse {
+	out := planSummaryResponse{SummaryReason: "NO_MATCH"}
+	var agg reconcile.StepSummary
+	for _, step := range steps {
+		var s reconcile.StepSummary
+		if err := json.Unmarshal([]byte(step.StepSummaryJSON), &s); err != nil {
+			continue
+		}
+		agg.ComponentCount += s.ComponentCount
+		agg.BlockedCount += s.BlockedCount
+		agg.OperationCount += s.OperationCount
+		agg.ErrorCount += s.ErrorCount
+	}
+	switch {
+	case agg.BlockedCount > 0 && agg.OperationCount > 0:
+		out.SummaryReason = reconcile.ReasonPartial
+	case agg.BlockedCount > 0:
+		out.SummaryReason = reconcile.ReasonBlocked
+	case agg.OperationCount > 0:
+		out.SummaryReason = reconcile.ReasonActionable
+	}
+	out.OperationCount = agg.OperationCount
+	out.ErrorCount = agg.ErrorCount
+	out.TotalCount = agg.OperationCount
+	out.ActionableCount = agg.OperationCount
+	return out
+}
+
+// parsePolicySource decodes the tagged policy source into the usecase shape.
+func parsePolicySource(req policySourceRequest) (planusecase.PolicySource, error) {
+	switch req.Kind {
+	case "preset":
+		if req.Name == "" || req.Version <= 0 {
+			return planusecase.PolicySource{}, errors.New("preset policy requires name and version")
+		}
+		return planusecase.PolicySource{Kind: "preset", PresetName: req.Name, PresetVersion: req.Version}, nil
+	case "inline":
+		policy, err := parseInlinePolicy(req.Policy)
+		if err != nil {
+			return planusecase.PolicySource{}, err
+		}
+		return planusecase.PolicySource{Kind: "inline", InlinePolicy: &policy}, nil
+	}
+	return planusecase.PolicySource{}, errors.New("unsupported policy source kind; use preset or inline")
+}
+
+func parseInlinePolicy(raw json.RawMessage) (reconcile.Policy, error) {
+	var policy reconcile.Policy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return policy, errors.New("inline policy is not valid JSON")
+	}
+	return policy, nil
+}
+
+// validatePlanSourceFiles normalizes single-action source files and emits a
+// 400 when they escape the library.
+func validatePlanSourceFiles(w http.ResponseWriter, rootPath string, sourceFiles []string) ([]string, bool) {
+	out := make([]string, 0, len(sourceFiles))
+	for _, sourceFile := range sourceFiles {
+		withinLibrary := pathnorm.IsWithinRoot(rootPath, sourceFile)
+		isLibraryRoot := pathnorm.IsWithinRoot(sourceFile, rootPath)
+		if !withinLibrary || isLibraryRoot {
+			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must be inside the selected library")
+			return nil, false
+		}
+		resolvedWithinLibrary, err := pathnorm.IsResolvedWithinRoot(rootPath, sourceFile)
+		if err != nil || !resolvedWithinLibrary {
+			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must resolve inside the selected library")
+			return nil, false
+		}
+		out = append(out, pathnorm.NormalizeToPOSIX(sourceFile))
+	}
+	return out, true
+}
+
+// toPlanResponse maps a single-action usecase response to the HTTP JSON shape.
 func toPlanResponse(resp planusecase.Response) planResponse {
 	ops := make([]planOperationResponse, 0, len(resp.Operations))
 	for _, op := range resp.Operations {
@@ -82,6 +382,7 @@ func toPlanResponse(resp planusecase.Response) planResponse {
 		PlanID:        resp.PlanID,
 		SnapshotToken: resp.SnapshotToken,
 		RootPath:      resp.RootPath,
+		PlanKind:      resp.PlanKind,
 		Summary: planSummaryResponse{
 			OperationCount:  resp.Summary.OperationCount,
 			ErrorCount:      resp.Summary.ErrorCount,
@@ -93,99 +394,6 @@ func toPlanResponse(resp planusecase.Response) planResponse {
 		Errors:            errs,
 		SuccessfulFolders: resp.SuccessfulFolders,
 	}
-}
-
-// createPlan creates a plan for a library scope (folders or source files) and
-// returns the planned operations and summary. Folder IDs are resolved to
-// library-scoped folder paths before the plan usecase runs, so paths are never
-// normalized or re-based in HTTP.
-func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
-	var req planCreateRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid plan payload")
-		return
-	}
-
-	lib, err := s.deps.Repo.GetLibrary(req.LibraryID)
-	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
-			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
-		return
-	}
-
-	if len(req.FolderIDs) == 0 && len(req.SourceFiles) == 0 {
-		writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "folder_ids or source_files is required")
-		return
-	}
-	sourceFiles := make([]string, len(req.SourceFiles))
-	for i, sourceFile := range req.SourceFiles {
-		withinLibrary := pathnorm.IsWithinRoot(lib.RootPath, sourceFile)
-		isLibraryRoot := pathnorm.IsWithinRoot(sourceFile, lib.RootPath)
-		if !withinLibrary || isLibraryRoot {
-			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must be inside the selected library")
-			return
-		}
-		resolvedWithinLibrary, err := pathnorm.IsResolvedWithinRoot(lib.RootPath, sourceFile)
-		if err != nil || !resolvedWithinLibrary {
-			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must resolve inside the selected library")
-			return
-		}
-		sourceFiles[i] = pathnorm.NormalizeToPOSIX(sourceFile)
-	}
-
-	// Resolve folder IDs to paths within the library. GetLibraryFolder scopes
-	// by library ID, so a folder belonging to another library 404s here.
-	folderPaths := make([]string, 0, len(req.FolderIDs))
-	for _, folderID := range req.FolderIDs {
-		folder, err := s.deps.Repo.GetLibraryFolder(lib.ID, folderID)
-		if err != nil {
-			if errors.Is(err, sqlite.ErrLibraryFolderNotFound) {
-				writeError(w, http.StatusNotFound, "LIBRARY_FOLDER_NOT_FOUND", "folder not found in library")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load folder")
-			return
-		}
-		folderPaths = append(folderPaths, folder.Path)
-	}
-
-	// The plan service is optional in Dependencies (nil until wired); guard
-	// before calling so an unwired server reports a clean error.
-	if s.deps.PlanService == nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "plan service not configured")
-		return
-	}
-
-	resp, err := s.deps.PlanService.Plan(r.Context(), planusecase.Request{
-		PlanType:             req.PlanType,
-		TargetFormat:         req.TargetFormat,
-		SourceFiles:          sourceFiles,
-		FolderPaths:          folderPaths,
-		PruneMatchedExcluded: req.PruneMatchedExcluded,
-		LibraryID:            req.LibraryID,
-	})
-	if err != nil {
-		if planErr, ok := planusecase.AsError(err); ok {
-			switch planErr.Kind {
-			case planusecase.ErrKindInvalidArgument:
-				writeError(w, http.StatusBadRequest, planErr.Code, planErr.Message)
-				return
-			case planusecase.ErrKindAlreadyExists:
-				writeError(w, http.StatusConflict, planErr.Code, planErr.Message)
-				return
-			}
-			// ErrKindInternal and unknown kinds fall through to 500.
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create plan")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create plan")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, toPlanResponse(resp))
 }
 
 // planInfoResponse is one plan in GET /api/v1/plans.
@@ -200,8 +408,7 @@ type planInfoResponse struct {
 // listPlans returns plans for a library (when library_id is given) or across
 // all libraries, newest first. Ownership is stored on the plan (not derived
 // from the current folder index), so folder-scoped plans stay listed after
-// rescans and the unfiltered list includes every plan. Filtering, ordering,
-// and limiting happen in one SQL query.
+// rescans and the unfiltered list includes every plan.
 func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -248,10 +455,82 @@ func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 }
 
 // getPlanDetail returns the full review payload for one plan, rebuilt from
-// persisted plan items and folder outcomes. Summary semantics mirror the
-// usecase's own reconstruction so the create and detail payloads agree.
+// persisted snapshots (workflow) or plan items (single actions).
 func (s *Server) getPlanDetail(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.deps.Repo.GetPlanDetail(r.PathValue("id"))
+	planID := r.PathValue("id")
+	kind, _, err := s.deps.Repo.GetPlanWorkflowSchema(planID)
+	if err != nil {
+		if errors.Is(err, sqlite.ErrPlanNotFound) {
+			writeError(w, http.StatusNotFound, "PLAN_NOT_FOUND", "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load plan")
+		return
+	}
+	if kind == "workflow" {
+		s.writeWorkflowPlanDetail(w, planID)
+		return
+	}
+	s.writeSingleActionPlanDetail(w, planID)
+}
+
+func (s *Server) writeWorkflowPlanDetail(w http.ResponseWriter, planID string) {
+	detail, err := s.deps.Repo.GetWorkflowPlanDetail(planID)
+	if err != nil {
+		if errors.Is(err, sqlite.ErrPlanNotFound) {
+			writeError(w, http.StatusNotFound, "PLAN_NOT_FOUND", "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load plan")
+		return
+	}
+
+	steps := make([]workflowStepResponse, 0, len(detail.Steps))
+	for _, step := range detail.Steps {
+		// Components carry a step_index; only attach the ones belonging to
+		// this step so a future multi-step workflow renders correctly.
+		components := make([]json.RawMessage, 0)
+		for _, c := range detail.Components {
+			if c.StepIndex != step.StepIndex {
+				continue
+			}
+			components = append(components, json.RawMessage(c.OutcomeJSON))
+		}
+		steps = append(steps, workflowStepResponse{
+			StepType:   step.StepType,
+			StepIndex:  step.StepIndex,
+			Status:     step.Status,
+			Policy:     json.RawMessage(step.PolicyJSON),
+			PolicyHash: step.PolicyHash,
+			Classifier: rawJSON(struct {
+				Name    string `json:"name"`
+				Version int    `json:"version"`
+				Pattern string `json:"pattern"`
+				Hash    string `json:"hash"`
+			}{step.ClassifierName, step.ClassifierVersion, step.ClassifierPattern, step.ClassifierHash}),
+			Summary:    json.RawMessage(step.StepSummaryJSON),
+			Components: components,
+		})
+	}
+
+	// Rebuild the plan summary from the persisted step summary so create and
+	// detail agree without consulting live state.
+	summaryResp := resolveStepSummary(detail.Steps)
+	writeJSON(w, http.StatusOK, workflowPlanResponse{
+		PlanID:            detail.Plan.PlanID,
+		SnapshotToken:     detail.Plan.SnapshotToken,
+		RootPath:          detail.Plan.RootPath,
+		PlanKind:          detail.Plan.PlanKind,
+		Summary:           summaryResp,
+		Steps:             steps,
+		Operations:        []planOperationResponse{},
+		Errors:            []planErrorResponse{},
+		SuccessfulFolders: []string{},
+	})
+}
+
+func (s *Server) writeSingleActionPlanDetail(w http.ResponseWriter, planID string) {
+	detail, err := s.deps.Repo.GetPlanDetail(planID)
 	if err != nil {
 		if errors.Is(err, sqlite.ErrPlanNotFound) {
 			writeError(w, http.StatusNotFound, "PLAN_NOT_FOUND", "plan not found")
@@ -291,16 +570,6 @@ func (s *Server) getPlanDetail(w http.ResponseWriter, r *http.Request) {
 	if len(ops) > 0 {
 		summaryReason = "ACTIONABLE"
 	}
-	for _, pe := range detail.FolderErrors {
-		if pe.Code == "GLOBAL_NO_SCOPE" {
-			summaryReason = "GLOBAL_SHORT_CIRCUIT"
-			break
-		}
-	}
-
-	// Mirror the create response: the usecase reports the scan root (library
-	// root for folder/file plans) as root_path, while the persisted plan row
-	// stores the scope root (the folder) in RootPath.
 	rootPath := detail.Plan.RootPath
 	if detail.Plan.ScanRootPath != "" {
 		rootPath = detail.Plan.ScanRootPath
@@ -310,6 +579,7 @@ func (s *Server) getPlanDetail(w http.ResponseWriter, r *http.Request) {
 		PlanID:        detail.Plan.PlanID,
 		SnapshotToken: detail.Plan.SnapshotToken,
 		RootPath:      rootPath,
+		PlanKind:      detail.Plan.PlanKind,
 		Summary: planSummaryResponse{
 			OperationCount:  len(ops),
 			ErrorCount:      len(errs),

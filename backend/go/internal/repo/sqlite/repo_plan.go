@@ -12,16 +12,18 @@ import (
 // ErrPlanNotFound is returned when a plan cannot be found.
 var ErrPlanNotFound = errors.New("plan not found")
 
-const planColumns = `plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, created_at`
+const planColumns = `plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, plan_kind, workflow_schema_version, created_at`
 
 // scanPlan scans one plan row (ordered per planColumns) into p.
-func scanPlan(p *Plan, createdAtStr string, libraryID sql.NullString, slimMode sql.NullString) {
+func scanPlan(p *Plan, createdAtStr string, libraryID, slimMode sql.NullString, planKind string, workflowSchemaVersion int) {
 	if libraryID.Valid {
 		p.LibraryID = libraryID.String
 	}
 	if slimMode.Valid {
 		p.SlimMode = &slimMode.String
 	}
+	p.PlanKind = planKind
+	p.WorkflowSchemaVersion = workflowSchemaVersion
 	p.CreatedAt = parseTimestamp(createdAtStr)
 }
 
@@ -35,10 +37,14 @@ func (r *Repository) CreatePlan(p *Plan) error {
 	if p.LibraryID != "" {
 		libraryID = p.LibraryID
 	}
+	planKind := p.PlanKind
+	if planKind == "" {
+		planKind = "single_action"
+	}
 	_, err := r.db.Exec(`
-		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.PlanID, p.RootPath, p.ScanRootPath, libraryID, p.PlanType, slimMode, p.SnapshotToken, p.Status, p.CreatedAt.Format(timeFormat))
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, plan_kind, workflow_schema_version, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.PlanID, p.RootPath, p.ScanRootPath, libraryID, p.PlanType, slimMode, p.SnapshotToken, p.Status, planKind, p.WorkflowSchemaVersion, p.CreatedAt.Format(timeFormat))
 	return err
 }
 
@@ -47,17 +53,19 @@ func (r *Repository) GetPlan(planID string) (*Plan, error) {
 	var p Plan
 	var createdAtStr string
 	var slimMode, libraryID sql.NullString
+	var planKind string
+	var workflowSchemaVersion int
 	err := r.db.QueryRow(`
 		SELECT `+planColumns+`
 		FROM plans WHERE plan_id = ?
-	`, planID).Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr)
+	`, planID).Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &planKind, &workflowSchemaVersion, &createdAtStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrPlanNotFound
 		}
 		return nil, err
 	}
-	scanPlan(&p, createdAtStr, libraryID, slimMode)
+	scanPlan(&p, createdAtStr, libraryID, slimMode, planKind, workflowSchemaVersion)
 	return &p, nil
 }
 
@@ -75,10 +83,12 @@ func scanPlanRows(rows *sql.Rows) ([]*Plan, error) {
 		var p Plan
 		var createdAtStr string
 		var slimMode, libraryID sql.NullString
-		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &createdAtStr); err != nil {
+		var planKind string
+		var workflowSchemaVersion int
+		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &planKind, &workflowSchemaVersion, &createdAtStr); err != nil {
 			return nil, err
 		}
-		scanPlan(&p, createdAtStr, libraryID, slimMode)
+		scanPlan(&p, createdAtStr, libraryID, slimMode, planKind, workflowSchemaVersion)
 		plans = append(plans, &p)
 	}
 	if err := rows.Err(); err != nil {

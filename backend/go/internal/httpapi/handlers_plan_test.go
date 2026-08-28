@@ -3,19 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
@@ -36,22 +30,6 @@ func (s *stubPlanService) Plan(ctx context.Context, req planusecase.Request) (pl
 	return s.planFn(ctx, req)
 }
 
-// planOperationDTO mirrors the operation objects in POST /api/v1/plans.
-type planOperationDTO struct {
-	Type       string `json:"type"`
-	SourcePath string `json:"source_path"`
-	TargetPath string `json:"target_path"`
-}
-
-// planErrorDTO mirrors the folder-scoped errors in POST /api/v1/plans.
-type planErrorDTO struct {
-	FolderPath string `json:"folder_path"`
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	Retryable  bool   `json:"retryable"`
-}
-
-// planSummaryDTO mirrors the summary object in POST /api/v1/plans.
 type planSummaryDTO struct {
 	OperationCount  int    `json:"operation_count"`
 	ErrorCount      int    `json:"error_count"`
@@ -60,15 +38,48 @@ type planSummaryDTO struct {
 	SummaryReason   string `json:"summary_reason"`
 }
 
-// planResponseDTO mirrors the POST /api/v1/plans response body.
+type planOperationDTO struct {
+	Type       string `json:"type"`
+	SourcePath string `json:"source_path"`
+	TargetPath string `json:"target_path"`
+}
+
+type planErrorDTO struct {
+	FolderPath string `json:"folder_path"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Retryable  bool   `json:"retryable"`
+}
+
+type workflowStepDTO struct {
+	StepType   string            `json:"step_type"`
+	StepIndex  int               `json:"step_index"`
+	Status     string            `json:"status"`
+	Policy     json.RawMessage   `json:"policy"`
+	PolicyHash string            `json:"policy_hash"`
+	Classifier json.RawMessage   `json:"classifier"`
+	Summary    planSummaryDTO    `json:"summary"`
+	Components []json.RawMessage `json:"components"`
+}
+
+type workflowPlanDTO struct {
+	PlanID        string             `json:"plan_id"`
+	SnapshotToken string             `json:"snapshot_token"`
+	RootPath      string             `json:"root_path"`
+	PlanKind      string             `json:"plan_kind"`
+	Summary       planSummaryDTO     `json:"summary"`
+	Steps         []workflowStepDTO  `json:"steps"`
+	Operations    []planOperationDTO `json:"operations"`
+	Errors        []planErrorDTO     `json:"errors"`
+}
+
 type planResponseDTO struct {
-	PlanID            string             `json:"plan_id"`
-	SnapshotToken     string             `json:"snapshot_token"`
-	RootPath          string             `json:"root_path"`
-	Operations        []planOperationDTO `json:"operations"`
-	Errors            []planErrorDTO     `json:"errors"`
-	Summary           planSummaryDTO     `json:"summary"`
-	SuccessfulFolders []string           `json:"successful_folders"`
+	PlanID     string             `json:"plan_id"`
+	RootPath   string             `json:"root_path"`
+	PlanKind   string             `json:"plan_kind"`
+	Summary    planSummaryDTO     `json:"summary"`
+	Operations []planOperationDTO `json:"operations"`
+	Errors     []planErrorDTO     `json:"errors"`
 }
 
 // planInfoDTO mirrors one item of GET /api/v1/plans.
@@ -81,7 +92,7 @@ type planInfoDTO struct {
 }
 
 // newPlanTestServer builds a test server with a real plan service wired over
-// the shared temp repository, and returns the engine plus the repo handle.
+// the shared temp repository.
 func newPlanTestServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	t.Helper()
 	var repo *sqlite.Repository
@@ -92,16 +103,18 @@ func newPlanTestServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	return engine, repo
 }
 
-// seedFolderLibrary seeds a library with two flac files under albumA and
-// returns the library ID and the albumA folder.
-func seedFolderLibrary(t *testing.T, engine http.Handler, repo *sqlite.Repository) (libID string, folder *sqlite.LibraryFolder) {
+// seedWorkflowFolder seeds a library with one folder holding flac+mp3 pairs
+// (no wav, no bitrate facts) so a balanced preset is actionable.
+func seedWorkflowFolder(t *testing.T, engine http.Handler, repo *sqlite.Repository) (libID string, folder *sqlite.LibraryFolder) {
 	t.Helper()
 	libID = createLibraryViaAPI(t, engine, "Music", "/music")
 
 	insertEntryMeta(t, repo, "/music", "", "music", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA", "/music", "albumA", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, nil, "flac")
+	insertEntryMeta(t, repo, "/music/albumA/01.mp3", "/music/albumA", "01.mp3", false, 1234, int64Ptr(0), "mpeg")
 	insertEntryMeta(t, repo, "/music/albumA/02.flac", "/music/albumA", "02.flac", false, 2048, nil, "flac")
+	insertEntryMeta(t, repo, "/music/albumA/02.mp3", "/music/albumA", "02.mp3", false, 2048, int64Ptr(0), "mpeg")
 	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {
 		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
 	}
@@ -115,807 +128,323 @@ func seedFolderLibrary(t *testing.T, engine http.Handler, repo *sqlite.Repositor
 	return libID, folders[0]
 }
 
-// decodePlanResponse decodes the POST /api/v1/plans response body.
-func decodePlanResponse(t *testing.T, w *httptest.ResponseRecorder) planResponseDTO {
-	t.Helper()
-	var out planResponseDTO
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode plan response: %v (body=%s)", err, w.Body.String())
-	}
-	return out
-}
-
-func writeTestAudioFile(t *testing.T, root, relative string) string {
-	t.Helper()
-	filePath := filepath.Join(root, relative)
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		t.Fatalf("create audio parent directory: %v", err)
-	}
-	if err := os.WriteFile(filePath, []byte("audio"), 0o644); err != nil {
-		t.Fatalf("create audio file: %v", err)
-	}
-	return filePath
-}
+func int64Ptr(v int64) *int64 { return &v }
 
 // =============================================================================
+// Workflow create
 // =============================================================================
 
-func TestCreatePlanWithFolderIDs(t *testing.T) {
-	// The fixture seeds POSIX-style paths (/music/...) that are not absolute
-	// on Windows, so the plan usecase rejects them. Folder-scoped plan
-	// creation is covered cross-platform by TestCreatePlanWithSourceFiles.
+func TestCreateWorkflowPlanWithFolderIDs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX /music paths; skip on Windows")
 	}
 	engine, repo := newPlanTestServer(t)
-	libID, folder := seedFolderLibrary(t, engine, repo)
-
-	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-		"library_id":    libID,
-		"folder_ids":    []string{folder.ID},
-		"plan_type":     "slim",
-		"target_format": "slim:mode2",
-	}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-
-	out := decodePlanResponse(t, w)
-	if out.PlanID == "" {
-		t.Error("plan_id should not be empty")
-	}
-	if out.RootPath != "/music" {
-		t.Errorf("root_path = %q, want /music", out.RootPath)
-	}
-	if len(out.Operations) != 2 {
-		t.Fatalf("len(operations) = %d, want 2 (body=%s)", len(out.Operations), w.Body.String())
-	}
-	wantOps := []planOperationDTO{
-		{Type: "convert", SourcePath: "/music/albumA/01.flac", TargetPath: "/music/albumA/01.m4a"},
-		{Type: "convert", SourcePath: "/music/albumA/02.flac", TargetPath: "/music/albumA/02.m4a"},
-	}
-	for i, want := range wantOps {
-		if out.Operations[i] != want {
-			t.Errorf("operations[%d] = %+v, want %+v", i, out.Operations[i], want)
-		}
-	}
-	if len(out.Errors) != 0 {
-		t.Errorf("errors = %+v, want none", out.Errors)
-	}
-	if len(out.SuccessfulFolders) != 1 || out.SuccessfulFolders[0] != "/music/albumA" {
-		t.Errorf("successful_folders = %v, want [/music/albumA]", out.SuccessfulFolders)
-	}
-	summary := out.Summary
-	if summary.OperationCount != 2 || summary.ErrorCount != 0 || summary.TotalCount != 2 || summary.ActionableCount != 2 {
-		t.Errorf("summary = %+v, want operation_count=2 error_count=0 total_count=2 actionable_count=2", summary)
-	}
-	if summary.SummaryReason != "ACTIONABLE" {
-		t.Errorf("summary_reason = %q, want ACTIONABLE", summary.SummaryReason)
-	}
-
-	// The handler must have resolved folder_ids to library folder paths before
-	// calling the plan usecase: the persisted plan root is the folder path
-	// (/music/albumA), not the folder or library ID.
-	plan, err := repo.GetPlan(out.PlanID)
-	if err != nil {
-		t.Fatalf("GetPlan failed: %v", err)
-	}
-	if plan.RootPath != "/music/albumA" {
-		t.Errorf("persisted root_path = %q, want /music/albumA (folder path resolved)", plan.RootPath)
-	}
-	if plan.PlanType != "slim" {
-		t.Errorf("persisted plan_type = %q, want slim", plan.PlanType)
-	}
-	items, err := repo.ListPlanItems(out.PlanID)
-	if err != nil {
-		t.Fatalf("ListPlanItems failed: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("len(plan_items) = %d, want 2", len(items))
-	}
-	for _, it := range items {
-		if it.OpType != "convert_and_delete" {
-			t.Errorf("item op_type = %q, want convert_and_delete", it.OpType)
-		}
-		if it.TargetPath == nil || *it.TargetPath == "" {
-			t.Errorf("item %q missing target_path", it.SourcePath)
-		}
-	}
-}
-
-func TestCreatePlanWithSourceFiles(t *testing.T) {
-	engine, repo := newPlanTestServer(t)
-	libraryRoot := t.TempDir()
-	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
-
-	sources := []string{
-		writeTestAudioFile(t, libraryRoot, filepath.Join("albumA", "01.flac")),
-		writeTestAudioFile(t, libraryRoot, filepath.Join("albumA", "02.flac")),
-	}
-	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-		"library_id":   libID,
-		"source_files": sources,
-		"plan_type":    "single_delete",
-	}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-
-	out := decodePlanResponse(t, w)
-	if out.PlanID == "" {
-		t.Error("plan_id should not be empty")
-	}
-	if len(out.Operations) != 2 {
-		t.Fatalf("len(operations) = %d, want 2 (body=%s)", len(out.Operations), w.Body.String())
-	}
-	// The handler normalizes source files to POSIX form before the usecase,
-	// so operation paths compare in that form on every platform.
-	bySource := make(map[string]planOperationDTO, len(out.Operations))
-	for _, op := range out.Operations {
-		bySource[op.SourcePath] = op
-	}
-	for _, src := range sources {
-		op, ok := bySource[pathnorm.NormalizeToPOSIX(src)]
-		if !ok {
-			t.Errorf("missing operation for source %q (ops=%+v)", src, out.Operations)
-			continue
-		}
-		if op.Type != "delete" {
-			t.Errorf("op %q type = %q, want delete", src, op.Type)
-		}
-		// The usecase stages deletes under rootPath/Delete/; assert the exact
-		// staged target for this delete operation (also in POSIX form).
-		want := pathnorm.NormalizeToPOSIX(filepath.Join(libraryRoot, "albumA", "Delete", filepath.Base(src)))
-		if op.TargetPath != want {
-			t.Errorf("op %q target_path = %q, want %q", src, op.TargetPath, want)
-		}
-	}
-	if out.Summary.OperationCount != 2 || out.Summary.ErrorCount != 0 {
-		t.Errorf("summary = %+v, want operation_count=2 error_count=0", out.Summary)
-	}
-
-	// Each source file must be persisted as a plan item for later execution.
-	items, err := repo.ListPlanItems(out.PlanID)
-	if err != nil {
-		t.Fatalf("ListPlanItems failed: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("len(plan_items) = %d, want 2", len(items))
-	}
-}
-
-func TestCreatePlanValidation(t *testing.T) {
-	t.Run("no scope returns 400 SCOPE_REQUIRED", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-		libID := createLibraryViaAPI(t, engine, "Music", "/music")
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id": libID,
-			"plan_type":  "slim",
-		}, nil)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "SCOPE_REQUIRED" {
-			t.Fatalf("code = %q, want SCOPE_REQUIRED", code)
-		}
-	})
-
-	t.Run("empty arrays count as no scope", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-		libID := createLibraryViaAPI(t, engine, "Music", "/music")
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id":   libID,
-			"folder_ids":   []string{},
-			"source_files": []string{},
-			"plan_type":    "slim",
-		}, nil)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "SCOPE_REQUIRED" {
-			t.Fatalf("code = %q, want SCOPE_REQUIRED", code)
-		}
-	})
-
-	t.Run("unknown library returns 404", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id":   "does-not-exist",
-			"source_files": []string{"/music/01.flac"},
-			"plan_type":    "single_delete",
-		}, nil)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "LIBRARY_NOT_FOUND" {
-			t.Fatalf("code = %q, want LIBRARY_NOT_FOUND", code)
-		}
-	})
-
-	t.Run("unknown folder id returns 404", func(t *testing.T) {
-		engine, repo := newPlanTestServer(t)
-		libID, _ := seedFolderLibrary(t, engine, repo)
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id": libID,
-			"folder_ids": []string{"no-such-folder"},
-			"plan_type":  "slim",
-		}, nil)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "LIBRARY_FOLDER_NOT_FOUND" {
-			t.Fatalf("code = %q, want LIBRARY_FOLDER_NOT_FOUND", code)
-		}
-	})
-
-	t.Run("malformed json returns 400", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", "not-json", nil)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "INVALID_ARGUMENT" {
-			t.Fatalf("code = %q, want INVALID_ARGUMENT", code)
-		}
-	})
-
-	t.Run("source files outside the library return 400", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-		libID := createLibraryViaAPI(t, engine, "Music", "/music")
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id":   libID,
-			"source_files": []string{"/music/../outside/01.flac"},
-			"plan_type":    "single_delete",
-		}, nil)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "SOURCE_FILE_OUTSIDE_LIBRARY" {
-			t.Fatalf("code = %q, want SOURCE_FILE_OUTSIDE_LIBRARY", code)
-		}
-	})
-
-	t.Run("source files escaping through a symlink return 400", func(t *testing.T) {
-		engine, _ := newPlanTestServer(t)
-		workspace := t.TempDir()
-		libraryRoot := filepath.Join(workspace, "library")
-		outsideRoot := filepath.Join(workspace, "outside")
-		if err := os.MkdirAll(libraryRoot, 0o755); err != nil {
-			t.Fatalf("create library root: %v", err)
-		}
-		if err := os.MkdirAll(outsideRoot, 0o755); err != nil {
-			t.Fatalf("create outside root: %v", err)
-		}
-		outsideFile := filepath.Join(outsideRoot, "01.flac")
-		if err := os.WriteFile(outsideFile, []byte("audio"), 0o644); err != nil {
-			t.Fatalf("create outside file: %v", err)
-		}
-		linkPath := filepath.Join(libraryRoot, "linked")
-		if err := os.Symlink(outsideRoot, linkPath); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-
-		libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id":   libID,
-			"source_files": []string{filepath.Join(linkPath, "01.flac")},
-			"plan_type":    "single_delete",
-		}, nil)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "SOURCE_FILE_OUTSIDE_LIBRARY" {
-			t.Fatalf("code = %q, want SOURCE_FILE_OUTSIDE_LIBRARY", code)
-		}
-	})
-}
-
-// TestCreatePlanErrorMapping verifies how plan usecase errors map to HTTP
-// statuses and error-envelope codes.
-func TestCreatePlanErrorMapping(t *testing.T) {
-	resolveAndCall := func(t *testing.T, service planusecase.Service) *httptest.ResponseRecorder {
-		t.Helper()
-		var repo *sqlite.Repository
-		engine := newTestServer(t, func(d *Dependencies) {
-			repo = d.Repo
-			d.PlanService = service
-		})
-		libID, folder := seedFolderLibrary(t, engine, repo)
-
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id": libID,
-			"folder_ids": []string{folder.ID},
-			"plan_type":  "slim",
-		}, nil)
-		return w
-	}
-
-	t.Run("invalid_argument maps to 400 with code passthrough", func(t *testing.T) {
-		var gotReq planusecase.Request
-		stub := &stubPlanService{planFn: func(_ context.Context, req planusecase.Request) (planusecase.Response, error) {
-			gotReq = req
-			return planusecase.Response{}, planusecase.NewError(planusecase.ErrKindInvalidArgument, "MISSING_SOURCE_FILES", "source_files required for single_delete/single_convert", nil)
-		}}
-		w := resolveAndCall(t, stub)
-
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "MISSING_SOURCE_FILES" {
-			t.Fatalf("code = %q, want MISSING_SOURCE_FILES", code)
-		}
-		// The handler must pass the resolved folder path, not the folder ID.
-		if len(gotReq.FolderPaths) != 1 || gotReq.FolderPaths[0] != "/music/albumA" {
-			t.Errorf("FolderPaths = %v, want [/music/albumA]", gotReq.FolderPaths)
-		}
-		if gotReq.PlanType != "slim" {
-			t.Errorf("PlanType = %q, want slim", gotReq.PlanType)
-		}
-	})
-
-	t.Run("already_exists maps to 409 with code passthrough", func(t *testing.T) {
-		stub := &stubPlanService{planFn: func(_ context.Context, _ planusecase.Request) (planusecase.Response, error) {
-			return planusecase.Response{}, planusecase.NewError(planusecase.ErrKindAlreadyExists, "PLAN_ID_CONFLICT", "plan already exists", nil)
-		}}
-		w := resolveAndCall(t, stub)
-
-		if w.Code != http.StatusConflict {
-			t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "PLAN_ID_CONFLICT" {
-			t.Fatalf("code = %q, want PLAN_ID_CONFLICT", code)
-		}
-	})
-
-	t.Run("internal maps to 500 INTERNAL", func(t *testing.T) {
-		stub := &stubPlanService{planFn: func(_ context.Context, _ planusecase.Request) (planusecase.Response, error) {
-			return planusecase.Response{}, planusecase.NewError(planusecase.ErrKindInternal, "ANALYZE_FAILED", "analyze exploded", nil)
-		}}
-		w := resolveAndCall(t, stub)
-
-		if w.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "INTERNAL" {
-			t.Fatalf("code = %q, want INTERNAL", code)
-		}
-	})
-
-	t.Run("non-plan error maps to 500 INTERNAL", func(t *testing.T) {
-		stub := &stubPlanService{planFn: func(_ context.Context, _ planusecase.Request) (planusecase.Response, error) {
-			return planusecase.Response{}, context.DeadlineExceeded
-		}}
-		w := resolveAndCall(t, stub)
-
-		if w.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "INTERNAL" {
-			t.Fatalf("code = %q, want INTERNAL", code)
-		}
-	})
-}
-
-func TestCreatePlanServiceNotConfigured(t *testing.T) {
-	// PlanService left nil: the handler must fail cleanly, not panic.
-	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
-	libID, folder := seedFolderLibrary(t, engine, repo)
+	libID, folder := seedWorkflowFolder(t, engine, repo)
 
 	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
 		"library_id": libID,
 		"folder_ids": []string{folder.ID},
-		"plan_type":  "slim",
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps": []any{map[string]any{
+				"step_type": "reconcile_audio_outputs",
+				"policy": map[string]any{
+					"kind":    "preset",
+					"name":    "balanced",
+					"version": 1,
+				},
+			}},
+		},
+	}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+
+	var plan workflowPlanDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode workflow plan: %v (body=%s)", err, w.Body.String())
+	}
+	if plan.PlanID == "" {
+		t.Fatal("workflow plan_id empty")
+	}
+	if plan.PlanKind != "workflow" {
+		t.Fatalf("plan_kind = %q, want workflow", plan.PlanKind)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("steps = %d, want 1", len(plan.Steps))
+	}
+	step := plan.Steps[0]
+	if step.StepType != "reconcile_audio_outputs" {
+		t.Fatalf("step_type = %q", step.StepType)
+	}
+	if len(step.Components) != 1 {
+		t.Fatalf("components = %d, want 1", len(step.Components))
+	}
+	if plan.Summary.SummaryReason != "ACTIONABLE" {
+		t.Fatalf("summary_reason = %q, want ACTIONABLE", plan.Summary.SummaryReason)
+	}
+	if plan.Summary.OperationCount == 0 {
+		t.Fatal("expected actionable operations for flac+mp3 pairs under balanced preset")
+	}
+}
+
+func TestCreateWorkflowPlanLegacyFieldsRejected(t *testing.T) {
+	engine, repo := newPlanTestServer(t)
+	libID, folder := seedWorkflowFolder(t, engine, repo)
+
+	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id":    libID,
+		"folder_ids":    []string{folder.ID},
+		"plan_type":     "slim",
+		"target_format": "slim:mode1",
+	}, nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "LEGACY_FIELDS_NOT_SUPPORTED") {
+		t.Fatalf("body missing LEGACY_FIELDS_NOT_SUPPORTED: %s", w.Body.String())
+	}
+}
+
+func TestCreateWorkflowPlanSchemaErrors(t *testing.T) {
+	engine, repo := newPlanTestServer(t)
+	libID, folder := seedWorkflowFolder(t, engine, repo)
+
+	cases := []struct {
+		name   string
+		body   map[string]any
+		code   string
+		status int
+	}{
+		{
+			name: "bad schema version",
+			body: map[string]any{
+				"library_id": libID, "folder_ids": []string{folder.ID},
+				"workflow": map[string]any{"schema_version": 99, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}}},
+			},
+			code: "INVALID_WORKFLOW_SCHEMA", status: http.StatusBadRequest,
+		},
+		{
+			name: "unsupported step",
+			body: map[string]any{
+				"library_id": libID, "folder_ids": []string{folder.ID},
+				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "rename_files", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}}},
+			},
+			code: "UNSUPPORTED_STEP", status: http.StatusBadRequest,
+		},
+		{
+			name: "unknown preset",
+			body: map[string]any{
+				"library_id": libID, "folder_ids": []string{folder.ID},
+				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "nope", "version": 1}}}},
+			},
+			code: "UNKNOWN_PRESET", status: http.StatusBadRequest,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", tc.body, nil)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tc.status, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatalf("body missing %s: %s", tc.code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateWorkflowPlanRequiresScope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fixture; skip on Windows")
+	}
+	engine, repo := newPlanTestServer(t)
+	libID, _ := seedWorkflowFolder(t, engine, repo)
+
+	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id": libID,
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}},
+		},
+	}, nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "SCOPE_REQUIRED") {
+		t.Fatalf("body missing SCOPE_REQUIRED: %s", w.Body.String())
+	}
+}
+
+func TestCreateSingleActionDelete(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fixture; skip on Windows")
+	}
+	engine, repo := newPlanTestServer(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "01.mp3")
+	if err := os.WriteFile(source, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	sourcePosix := filepath.ToSlash(source)
+	rootPosix := filepath.ToSlash(root)
+
+	libID := createLibraryViaAPI(t, engine, "Music", rootPosix)
+	insertEntryMeta(t, repo, rootPosix, "", "Music", true, 0, nil, "")
+	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, int64Ptr(320000), "mpeg")
+
+	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id": libID,
+		"single_action": map[string]any{
+			"action":       "delete",
+			"source_files": []string{sourcePosix},
+		},
+	}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var plan planResponseDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode single action plan: %v", err)
+	}
+	if plan.PlanKind != "single_action" {
+		t.Fatalf("plan_kind = %q, want single_action", plan.PlanKind)
+	}
+	if len(plan.Operations) != 1 || plan.Operations[0].Type != "delete" {
+		t.Fatalf("operations = %+v, want one delete", plan.Operations)
+	}
+	if plan.Operations[0].SourcePath != sourcePosix {
+		t.Fatalf("source = %q", plan.Operations[0].SourcePath)
+	}
+}
+
+func TestCreatePlanServiceNotConfigured(t *testing.T) {
+	engine := newTestServer(t, func(d *Dependencies) {
+		_ = d.Repo
+		// PlanService left nil.
+	})
+	libID := createLibraryViaAPI(t, engine, "Music", "/music")
+	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id": libID,
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}},
+		},
 	}, nil)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
 	}
-	code, _ := errorEnvelope(t, w)
-	if code != "INTERNAL" {
-		t.Fatalf("code = %q, want INTERNAL", code)
-	}
 }
 
-// =============================================================================
-// GET /api/v1/plans
-// =============================================================================
-
-// createSingleDeletePlan creates a single_delete plan through the API and
-// returns its plan ID.
-func createSingleDeletePlan(t *testing.T, engine http.Handler, libID string, sources []string) string {
-	t.Helper()
-	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-		"library_id":   libID,
-		"source_files": sources,
-		"plan_type":    "single_delete",
-	}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("create plan status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	out := decodePlanResponse(t, w)
-	return out.PlanID
-}
-
-// createFolderPlan creates a slim folder-scoped plan through the API and
-// returns its plan ID.
-func createFolderPlan(t *testing.T, engine http.Handler, libID, folderID string) string {
-	t.Helper()
-	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-		"library_id":    libID,
-		"folder_ids":    []string{folderID},
-		"plan_type":     "slim",
-		"target_format": "slim:mode2",
-	}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("create folder plan status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	out := decodePlanResponse(t, w)
-	return out.PlanID
-}
-
-// TestCreatePlanSuccessivePlansGetDistinctIDs verifies that immediate
-// successive POST /api/v1/plans calls each get a unique plan ID (plan IDs are
-// generated at second resolution in the usecase, so persistence used to
-// collide with 409 PLAN_ID_CONFLICT within the same second).
-func TestCreatePlanSuccessivePlansGetDistinctIDs(t *testing.T) {
-	engine, _ := newPlanTestServer(t)
-	libraryRoot := t.TempDir()
-	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
-
-	ids := make(map[string]bool)
-	for i := range 5 {
-		src := writeTestAudioFile(t, libraryRoot, fmt.Sprintf("track-%02d.flac", i))
-		w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-			"library_id":   libID,
-			"source_files": []string{src},
-			"plan_type":    "single_delete",
-		}, nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("plan %d: status = %d, want 200 (body=%s)", i, w.Code, w.Body.String())
-		}
-		out := decodePlanResponse(t, w)
-		if !strings.HasPrefix(out.PlanID, "plan-") {
-			t.Fatalf("plan_id %q lost the plan- prefix", out.PlanID)
-		}
-		if ids[out.PlanID] {
-			t.Fatalf("duplicate plan_id %q on successive POSTs", out.PlanID)
-		}
-		ids[out.PlanID] = true
-	}
-}
-
-func TestListPlans(t *testing.T) {
-	engine, repo := newPlanTestServer(t)
-	libraryRootA := t.TempDir()
-	libraryRootB := t.TempDir()
-	libA := createLibraryViaAPI(t, engine, "Music", libraryRootA)
-	// libB must exist so the all-plans listing iterates its root too.
-	createLibraryViaAPI(t, engine, "Other", libraryRootB)
-
-	sourceA := writeTestAudioFile(t, libraryRootA, "01.flac")
-	planA := createSingleDeletePlan(t, engine, libA, []string{sourceA})
-
-	// Insert the second plan directly: plan IDs are second-resolution
-	// timestamps, so two POSTs within the same second would collide (a
-	// pre-existing usecase property, not an HTTP concern). Give it a later
-	// CreatedAt so the newest-first order is deterministic. Persist the root
-	// in the same POSIX-normalized form the API layer uses, since the listing
-	// matches roots with exact string equality.
-	if err := repo.CreatePlan(&sqlite.Plan{
-		PlanID:    "plan-list-test-b",
-		RootPath:  pathnorm.NormalizeToPOSIX(libraryRootB),
-		PlanType:  "single_delete",
-		Status:    "ready",
-		CreatedAt: time.Now().Add(time.Second),
-	}); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
-	}
-	const planB = "plan-list-test-b"
-
-	t.Run("by library returns only that library's plans", func(t *testing.T) {
-		w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id="+libA, nil, nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-		}
-		var out struct {
-			Plans []planInfoDTO `json:"plans"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
-		}
-		if len(out.Plans) != 1 {
-			t.Fatalf("len(plans) = %d, want 1 (body=%s)", len(out.Plans), w.Body.String())
-		}
-		p := out.Plans[0]
-		if p.PlanID != planA {
-			t.Errorf("plan_id = %q, want %q", p.PlanID, planA)
-		}
-		// The plan root must be under (or equal to) the selected library root,
-		// persisted in the API's POSIX-normalized form.
-		if p.RootPath != pathnorm.NormalizeToPOSIX(libraryRootA) {
-			t.Errorf("root_path = %q, want %q", p.RootPath, pathnorm.NormalizeToPOSIX(libraryRootA))
-		}
-		if p.PlanType != "single_delete" {
-			t.Errorf("plan_type = %q, want single_delete", p.PlanType)
-		}
-		if p.Status != "ready" {
-			t.Errorf("status = %q, want ready", p.Status)
-		}
-		if _, err := time.Parse(time.RFC3339, p.CreatedAt); err != nil {
-			t.Errorf("created_at = %q is not RFC3339: %v", p.CreatedAt, err)
-		}
-	})
-
-	t.Run("without library_id returns all plans newest first", func(t *testing.T) {
-		w := doRequest(t, engine, http.MethodGet, "/api/v1/plans", nil, nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-		}
-		var out struct {
-			Plans []planInfoDTO `json:"plans"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
-		}
-		if len(out.Plans) != 2 {
-			t.Fatalf("len(plans) = %d, want 2 (body=%s)", len(out.Plans), w.Body.String())
-		}
-		// planB was created after planA, so it must sort first (created_at DESC).
-		if out.Plans[0].PlanID != planB || out.Plans[1].PlanID != planA {
-			t.Errorf("plan order = [%s %s], want [%s %s]", out.Plans[0].PlanID, out.Plans[1].PlanID, planB, planA)
-		}
-		if !sort.SliceIsSorted(out.Plans, func(i, j int) bool {
-			return out.Plans[i].CreatedAt > out.Plans[j].CreatedAt
-		}) {
-			t.Errorf("plans not sorted by created_at desc: %+v", out.Plans)
-		}
-	})
-
-	t.Run("limit caps the result set", func(t *testing.T) {
-		w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?limit=1", nil, nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-		}
-		var out struct {
-			Plans []planInfoDTO `json:"plans"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
-		}
-		if len(out.Plans) != 1 {
-			t.Fatalf("len(plans) = %d, want 1 (body=%s)", len(out.Plans), w.Body.String())
-		}
-		if out.Plans[0].PlanID != planB {
-			t.Errorf("plan_id = %q, want %q (newest)", out.Plans[0].PlanID, planB)
-		}
-	})
-
-	t.Run("unknown library returns 404", func(t *testing.T) {
-		w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id=does-not-exist", nil, nil)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404 (body=%s)", w.Code, w.Body.String())
-		}
-		code, _ := errorEnvelope(t, w)
-		if code != "LIBRARY_NOT_FOUND" {
-			t.Fatalf("code = %q, want LIBRARY_NOT_FOUND", code)
-		}
-	})
-}
-
-// TestListPlansIncludesFolderScopedPlans verifies that a folder-scoped plan
-// (persisted with its scope folder as root, e.g. /music/albumA) appears in the
-// library-filtered listing via its stored ownership, and that the unfiltered
-// listing includes every plan (folder-scoped and unattributed legacy plans).
-func TestListPlansIncludesFolderScopedPlans(t *testing.T) {
-	engine, repo := newPlanTestServer(t)
-	libID, folder := seedFolderLibrary(t, engine, repo)
-
-	const rootPlan = "plan-list-root"
-	if err := repo.CreatePlan(&sqlite.Plan{
-		PlanID:    rootPlan,
-		RootPath:  "/music",
-		LibraryID: libID,
-		PlanType:  "single_delete",
-		Status:    "ready",
-		CreatedAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
-	}
-	folderPlan := createFolderPlan(t, engine, libID, folder.ID)
-
-	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id="+libID, nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	var out struct {
-		Plans []planInfoDTO `json:"plans"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
-	}
-	if len(out.Plans) != 2 {
-		t.Fatalf("len(plans) = %d, want 2 (body=%s)", len(out.Plans), w.Body.String())
-	}
-
-	byID := make(map[string]planInfoDTO, len(out.Plans))
-	roots := make(map[string]bool, len(out.Plans))
-	for _, p := range out.Plans {
-		byID[p.PlanID] = p
-		roots[p.RootPath] = true
-	}
-	if _, ok := byID[rootPlan]; !ok {
-		t.Errorf("library-filtered list missing root-scoped plan %q (body=%s)", rootPlan, w.Body.String())
-	}
-	if _, ok := byID[folderPlan]; !ok {
-		t.Errorf("library-filtered list missing folder-scoped plan %q (body=%s)", folderPlan, w.Body.String())
-	}
-	// Both roots are under/equal to the library root /music.
-	for root := range roots {
-		if root != "/music" && !strings.HasPrefix(root, "/music/") {
-			t.Errorf("plan root %q is not under the library root /music", root)
-		}
-	}
-}
-
-// TestGetPlanDetailRootMatchesCreate verifies the create/detail payload
-// agreement: the usecase reports the scan root (library root) as root_path in
-// both responses, never the scope folder the plan row is persisted under.
-func TestGetPlanDetailRootMatchesCreate(t *testing.T) {
+func TestGetWorkflowPlanDetailRoundTrip(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("fixture uses POSIX /music paths; skip on Windows")
+		t.Skip("POSIX fixture; skip on Windows")
 	}
 	engine, repo := newPlanTestServer(t)
-	libID, folder := seedFolderLibrary(t, engine, repo)
+	libID, folder := seedWorkflowFolder(t, engine, repo)
 
-	createW := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
-		"library_id":    libID,
-		"folder_ids":    []string{folder.ID},
-		"plan_type":     "slim",
-		"target_format": "slim:mode2",
-	}, nil)
-	if createW.Code != http.StatusOK {
-		t.Fatalf("create status = %d, want 200 (body=%s)", createW.Code, createW.Body.String())
+	body := map[string]any{
+		"library_id": libID,
+		"folder_ids": []string{folder.ID},
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps": []any{map[string]any{
+				"step_type": "reconcile_audio_outputs",
+				"policy":    map[string]any{"kind": "preset", "name": "balanced", "version": 1},
+			}},
+		},
 	}
-	created := decodePlanResponse(t, createW)
-	if created.RootPath != "/music" {
-		t.Fatalf("create root_path = %q, want /music (library scan root)", created.RootPath)
+	_ = repo
+	created := doRequest(t, engine, http.MethodPost, "/api/v1/plans", body, nil)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status = %d (body=%s)", created.Code, created.Body.String())
 	}
-
-	detailW := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+url.PathEscape(created.PlanID), nil, nil)
-	if detailW.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, want 200 (body=%s)", detailW.Code, detailW.Body.String())
-	}
-	detail := decodePlanResponse(t, detailW)
-	if detail.RootPath != created.RootPath {
-		t.Errorf("detail root_path = %q, want %q (must agree with create)", detail.RootPath, created.RootPath)
-	}
-}
-
-// TestFolderScopedPlanSurvivesRescan is the core ownership regression: a plan
-// scoped to a folder must remain listed for its library even after a rescan
-// removes that folder from the materialized index (ownership is stored on the
-// plan, not derived from the folder index).
-func TestFolderScopedPlanSurvivesRescan(t *testing.T) {
-	engine, repo := newPlanTestServer(t)
-	libID, folder := seedFolderLibrary(t, engine, repo)
-	planID := createFolderPlan(t, engine, libID, folder.ID)
-
-	// Simulate a rescan where albumA disappears from the entries table; the
-	// materialized folder index no longer contains it.
-	if _, err := repo.DB().Exec(`
-		DELETE FROM entries WHERE path = '/music/albumA' OR path LIKE '/music/albumA/%'
-	`); err != nil {
-		t.Fatalf("delete albumA entries: %v", err)
-	}
-	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {
-		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
-	}
-	folders, err := repo.ListLibraryFolders(libID)
-	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
-	}
-	if len(folders) != 0 {
-		t.Fatalf("expected folder index to be empty after rescan, got %d folders", len(folders))
+	var plan workflowPlanDTO
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode created: %v", err)
 	}
 
-	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id="+libID, nil, nil)
+	// Cold GET rebuilds the same layered payload from snapshots.
+	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+plan.PlanID, nil, nil)
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		t.Fatalf("detail status = %d (body=%s)", w.Code, w.Body.String())
 	}
-	var out struct {
-		Plans []planInfoDTO `json:"plans"`
+	var detail workflowPlanDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode plans: %v (body=%s)", err, w.Body.String())
+	if detail.PlanKind != "workflow" {
+		t.Fatalf("detail plan_kind = %q", detail.PlanKind)
 	}
-	found := false
-	for _, p := range out.Plans {
-		if p.PlanID == planID {
-			found = true
-			break
-		}
+	if len(detail.Steps) != 1 {
+		t.Fatalf("detail steps = %d, want 1", len(detail.Steps))
 	}
-	if !found {
-		t.Errorf("folder-scoped plan %q disappeared from library listing after rescan (body=%s)", planID, w.Body.String())
+	if len(detail.Steps[0].Components) != len(plan.Steps[0].Components) {
+		t.Fatalf("detail components %d != create components %d", len(detail.Steps[0].Components), len(plan.Steps[0].Components))
 	}
-
-	// The unfiltered listing must also include folder-scoped plans.
-	w2 := doRequest(t, engine, http.MethodGet, "/api/v1/plans", nil, nil)
-	if w2.Code != http.StatusOK {
-		t.Fatalf("global status = %d, want 200 (body=%s)", w2.Code, w2.Body.String())
+	if detail.Steps[0].PolicyHash != plan.Steps[0].PolicyHash {
+		t.Fatalf("detail policy_hash %q != create %q", detail.Steps[0].PolicyHash, plan.Steps[0].PolicyHash)
 	}
-	var out2 struct {
-		Plans []planInfoDTO `json:"plans"`
-	}
-	if err := json.Unmarshal(w2.Body.Bytes(), &out2); err != nil {
-		t.Fatalf("decode global plans: %v (body=%s)", err, w2.Body.String())
-	}
-	found = false
-	for _, p := range out2.Plans {
-		if p.PlanID == planID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("folder-scoped plan %q missing from unfiltered listing (body=%s)", planID, w2.Body.String())
+	if detail.Summary.SummaryReason != plan.Summary.SummaryReason {
+		t.Fatalf("detail summary %q != create %q", detail.Summary.SummaryReason, plan.Summary.SummaryReason)
 	}
 }
 
-// TestGetPlanDetail verifies the durable plan detail endpoint: a plan created
-// via the API can be fetched by ID and reconstructed with its operations, and
-// unknown IDs yield PLAN_NOT_FOUND.
-func TestGetPlanDetail(t *testing.T) {
+func TestGetWorkflowPlanDetailNotFound(t *testing.T) {
 	engine, _ := newPlanTestServer(t)
-	libraryRoot := t.TempDir()
-	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
-	source := writeTestAudioFile(t, libraryRoot, "01.flac")
-	planID := createSingleDeletePlan(t, engine, libID, []string{source})
+	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans/plan-missing", nil, nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
 
-	w := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+url.PathEscape(planID), nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+func TestSingleActionDetailCarriesPlanKind(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fixture; skip on Windows")
 	}
-	out := decodePlanResponse(t, w)
-	if out.PlanID != planID {
-		t.Errorf("plan_id = %q, want %q", out.PlanID, planID)
+	engine, repo := newPlanTestServer(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "01.mp3")
+	if err := os.WriteFile(source, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
 	}
-	if len(out.Operations) != 1 {
-		t.Fatalf("expected 1 operation, got %+v", out.Operations)
+	sourcePosix := filepath.ToSlash(source)
+	rootPosix := filepath.ToSlash(root)
+
+	libID := createLibraryViaAPI(t, engine, "Music", rootPosix)
+	insertEntryMeta(t, repo, rootPosix, "", "Music", true, 0, nil, "")
+	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, int64Ptr(320000), "mpeg")
+
+	created := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
+		"library_id": libID,
+		"single_action": map[string]any{
+			"action":       "delete",
+			"source_files": []string{sourcePosix},
+		},
+	}, nil)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status = %d (body=%s)", created.Code, created.Body.String())
 	}
-	if out.Operations[0].Type != "delete" {
-		t.Errorf("operation type = %q, want delete", out.Operations[0].Type)
+	var plan planResponseDTO
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode created: %v", err)
 	}
-	if out.Operations[0].SourcePath != pathnorm.NormalizeToPOSIX(source) {
-		t.Errorf("operation source = %q, want %q", out.Operations[0].SourcePath, pathnorm.NormalizeToPOSIX(source))
-	}
-	if out.Summary.OperationCount != 1 || out.Summary.SummaryReason != "ACTIONABLE" {
-		t.Errorf("summary = %+v, want operation_count 1 / ACTIONABLE", out.Summary)
+	if plan.PlanKind != "single_action" {
+		t.Fatalf("create plan_kind = %q, want single_action", plan.PlanKind)
 	}
 
-	w2 := doRequest(t, engine, http.MethodGet, "/api/v1/plans/does-not-exist", nil, nil)
-	if w2.Code != http.StatusNotFound {
-		t.Fatalf("unknown plan status = %d, want 404 (body=%s)", w2.Code, w2.Body.String())
+	got := doRequest(t, engine, http.MethodGet, "/api/v1/plans/"+plan.PlanID, nil, nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("detail status = %d (body=%s)", got.Code, got.Body.String())
 	}
-	code, _ := errorEnvelope(t, w2)
-	if code != "PLAN_NOT_FOUND" {
-		t.Fatalf("code = %q, want PLAN_NOT_FOUND", code)
+	var detail planResponseDTO
+	if err := json.Unmarshal(got.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail.PlanKind != "single_action" {
+		t.Fatalf("detail plan_kind = %q, want single_action (create/detail agreement)", detail.PlanKind)
+	}
+	if len(detail.Operations) != 1 || detail.Operations[0].Type != "delete" {
+		t.Fatalf("detail operations = %+v, want one delete", detail.Operations)
 	}
 }

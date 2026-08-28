@@ -8,50 +8,15 @@ import (
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 )
 
-func derivePlanType(targetFormat string) string {
-	if strings.HasPrefix(targetFormat, "prune:") {
-		return "prune"
-	}
-	return "slim"
-}
-
-func encoderTargetExt(encoder string) string {
-	if strings.EqualFold(strings.TrimSpace(encoder), "lame") {
-		return ".mp3"
-	}
-	return ".m4a"
-}
-
-func rewriteConvertTargetsToExt(plan *analyze.Plan, targetExt string) {
-	if plan == nil {
-		return
-	}
-	for i, op := range plan.Operations {
-		if op.Type != analyze.OpTypeConvert || op.TargetPath == "" {
-			continue
-		}
-		dir := filepath.Dir(op.TargetPath)
-		base := filepath.Base(op.TargetPath)
-		stem := strings.TrimSuffix(base, filepath.Ext(base))
-		plan.Operations[i].TargetPath = filepath.ToSlash(filepath.Join(dir, stem+targetExt))
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
+// normalizeScopePath cleans a scope path to canonical POSIX form.
 func normalizeScopePath(path string) string {
 	native := filepath.FromSlash(path)
 	cleaned := filepath.Clean(native)
 	return filepath.ToSlash(cleaned)
 }
 
+// escapeLikePattern escapes SQL LIKE wildcards so a user-supplied path can
+// never widen a LIKE scope.
 func escapeLikePattern(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "%", "\\%")
@@ -59,6 +24,7 @@ func escapeLikePattern(s string) string {
 	return s
 }
 
+// buildSingleFileOperations builds explicit single delete/convert operations.
 func buildSingleFileOperations(sourceFiles []string, targetFormat, planType string) ([]analyze.Operation, error) {
 	var ops []analyze.Operation
 
@@ -72,7 +38,7 @@ func buildSingleFileOperations(sourceFiles []string, targetFormat, planType stri
 			opType = analyze.OpTypeDelete
 		} else {
 			targetExt := ".m4a"
-			if targetFormat != "" && !strings.HasPrefix(targetFormat, "prune:") {
+			if targetFormat != "" {
 				targetExt = "." + strings.TrimPrefix(targetFormat, ".")
 			}
 			dir := filepath.Dir(sourceFile)
@@ -96,12 +62,4 @@ func generatePlanID() string {
 
 func generateSnapshotToken() string {
 	return "snapshot-" + time.Now().Format("20060102150405.000000")
-}
-
-func isSQLiteBusyLockedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "sqlite_locked")
 }

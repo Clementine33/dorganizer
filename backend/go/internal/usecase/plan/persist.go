@@ -1,159 +1,62 @@
 package plan
 
 import (
-	"database/sql"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/analyze"
 )
 
-func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *analyze.Plan, planType string, planErrors []*FolderError, successfulFolders []string, useBatchRootResolve bool) error {
-	resolveRootFromEntries := func(tx *sql.Tx, path string) (string, error) {
-		pathPosix := filepath.ToSlash(path)
-		if pathPosix == "" {
-			return "", nil
-		}
-		prefix := strings.TrimSuffix(pathPosix, "/") + "/%"
-		var resolved string
-		err := tx.QueryRow("SELECT root_path FROM entries WHERE path = ? OR path LIKE ? LIMIT 1", pathPosix, prefix).Scan(&resolved)
-		if err == sql.ErrNoRows {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return resolved, nil
-	}
-
+// persistSingleActionPlan persists an explicit single delete/convert plan with
+// precondition snapshots for its operation sources.
+func persistSingleActionPlan(repo *sqlite.Repository, planID, planType, rootPath, snapshotToken, libraryID string, sourceFiles []string, ops []analyze.Operation) error {
 	tx, err := repo.DB().Begin()
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return fmt.Errorf("begin single action tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	rootPath := ""
-	if useBatchRootResolve {
-		candidates := collectDetermineRootCandidates(req, plan)
-		resolved, err := resolveRootPathFromExactMatches(candidates, func(chunk []string) (map[string]string, error) {
-			return loadRootPathsByExactMatch(func(query string, args ...any) (*sql.Rows, error) {
-				return tx.Query(query, args...)
-			}, chunk)
-		})
-		if err != nil {
-			return err
-		}
-		rootPath = resolved
+	var libID any
+	if libraryID != "" {
+		libID = libraryID
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, plan_kind, workflow_schema_version, created_at)
+		VALUES (?, ?, ?, ?, ?, NULL, ?, 'ready', 'single_action', 0, ?)
+	`, planID, filepath.ToSlash(rootPath), filepath.ToSlash(rootPath), libID, planType, snapshotToken, time.Now().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("insert single action plan: %w", err)
 	}
 
-	if rootPath == "" {
-		for _, candidate := range collectDetermineRootOperationSourceCandidates(req, plan) {
-			resolved, err := resolveRootFromEntries(tx, candidate)
-			if err != nil {
-				return err
-			}
-			if resolved != "" {
-				rootPath = resolved
-				break
-			}
-		}
-	}
-
-	if rootPath == "" && req.FolderPath != "" {
-		resolved, err := resolveRootFromEntries(tx, req.FolderPath)
-		if err != nil {
-			return err
-		}
-		if resolved != "" {
-			rootPath = resolved
-		}
-	}
-	if rootPath == "" {
-		for _, scope := range req.FolderPaths {
-			resolved, err := resolveRootFromEntries(tx, scope)
-			if err != nil {
-				return err
-			}
-			if resolved != "" {
-				rootPath = resolved
-				break
-			}
-		}
-	}
-
-	if rootPath == "" {
-		rootPath = req.FolderPath
-	}
-	if rootPath == "" && len(req.FolderPaths) > 0 {
-		rootPath = req.FolderPaths[0]
-	}
-	if rootPath == "" && len(req.SourceFiles) > 0 {
-		rootPath = filepath.Dir(req.SourceFiles[0])
-	}
-
-	scopeRootPath := req.FolderPath
-	if scopeRootPath == "" && len(req.FolderPaths) > 0 {
-		scopeRootPath = req.FolderPaths[0]
-	}
-	if scopeRootPath == "" && rootPath != "" {
-		scopeRootPath = rootPath
-	}
-	if scopeRootPath == "" && len(req.SourceFiles) > 0 {
-		scopeRootPath = filepath.Dir(req.SourceFiles[0])
-	}
-	if scopeRootPath == "" {
-		scopeRootPath = rootPath
-	}
-
-	effectivePlanType := planType
-	if effectivePlanType == "" {
-		effectivePlanType = "slim"
-	}
-
-	planRow := &sqlite.Plan{PlanID: planID, RootPath: filepath.ToSlash(scopeRootPath), ScanRootPath: filepath.ToSlash(rootPath), LibraryID: req.LibraryID, PlanType: effectivePlanType, SnapshotToken: plan.SnapshotToken, Status: "ready", CreatedAt: time.Now()}
-	if err := sqlite.CreatePlanTx(tx, planRow); err != nil {
-		if sqlite.IsPlanIDConflictError(err) {
-			return NewError(ErrKindAlreadyExists, "PLAN_ID_CONFLICT", fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID), err)
-		}
-		return err
-	}
-
-	sourcePaths := make([]string, 0, len(plan.Operations))
-	for _, op := range plan.Operations {
+	sourcePaths := make([]string, 0, len(ops))
+	for _, op := range ops {
 		if op.SourcePath != "" {
 			sourcePaths = append(sourcePaths, filepath.ToSlash(op.SourcePath))
 		}
 	}
-
-	var preconds map[string]sqlite.Precond
+	preconds := map[string]sqlite.Precond{}
 	if len(sourcePaths) > 0 {
+		var err error
 		preconds, err = sqlite.LoadEntryPreconditionsBatchTx(tx, sourcePaths)
 		if err != nil {
 			return fmt.Errorf("batch load preconditions: %w", err)
 		}
-	} else {
-		preconds = make(map[string]sqlite.Precond)
 	}
 
-	items := make([]sqlite.PlanItem, 0, len(plan.Operations))
-	for itemIndex, op := range plan.Operations {
+	items := make([]sqlite.PlanItem, 0, len(ops))
+	for itemIndex, op := range ops {
 		opType := "delete"
 		if op.Type == analyze.OpTypeConvert {
 			opType = "convert_and_delete"
 		}
-
 		prePath := filepath.ToSlash(op.SourcePath)
 		p := preconds[prePath]
-
 		var targetPath *string
 		if op.TargetPath != "" {
 			tp := filepath.ToSlash(op.TargetPath)
 			targetPath = &tp
 		}
-
 		items = append(items, sqlite.PlanItem{
 			PlanID:                 planID,
 			ItemIndex:              itemIndex,
@@ -167,43 +70,13 @@ func persistPlan(repo *sqlite.Repository, planID string, req Request, plan *anal
 			PreconditionMtime:      p.Mtime,
 		})
 	}
-
 	if len(items) > 0 {
 		if err := sqlite.CreatePlanItemsBatchTx(tx, planID, items); err != nil {
 			return fmt.Errorf("batch insert plan items: %w", err)
 		}
 	}
-
-	// Persist folder outcomes with the plan so the review page can be
-	// reconstructed from the plan detail; error_events are retention-managed
-	// and not plan-scoped, so they cannot serve as the durable source.
-	folderErrs := make([]sqlite.PlanFolderError, 0, len(planErrors))
-	for i, pe := range planErrors {
-		if pe.Code == "" {
-			continue
-		}
-		folderErrs = append(folderErrs, sqlite.PlanFolderError{
-			ErrorIndex: i,
-			FolderPath: pe.FolderPath,
-			Code:       pe.Code,
-			Message:    pe.Message,
-			Retryable:  pe.Retryable,
-		})
-	}
-	if len(folderErrs) > 0 {
-		if err := sqlite.CreatePlanFolderErrorsBatchTx(tx, planID, folderErrs); err != nil {
-			return fmt.Errorf("batch insert plan folder errors: %w", err)
-		}
-	}
-	if len(successfulFolders) > 0 {
-		if err := sqlite.CreatePlanSuccessfulFoldersBatchTx(tx, planID, successfulFolders); err != nil {
-			return fmt.Errorf("batch insert plan successful folders: %w", err)
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit plan persistence: %w", err)
+		return fmt.Errorf("commit single action plan tx: %w", err)
 	}
-
 	return nil
 }
