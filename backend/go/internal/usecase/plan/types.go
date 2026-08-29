@@ -23,24 +23,24 @@ type Request struct {
 
 // Workflow is a versioned linear workflow of steps.
 type Workflow struct {
-	SchemaVersion int
-	Steps         []WorkflowStep
+	SchemaVersion int            `json:"schema_version"`
+	Steps         []WorkflowStep `json:"steps"`
 }
 
 // WorkflowStep is one linear workflow step.
 type WorkflowStep struct {
-	StepType string
-	Policy   PolicySource
+	StepType string       `json:"step_type"`
+	Policy   PolicySource `json:"policy"`
 }
 
 // PolicySource addresses an immutable named/versioned preset or an inline
 // policy. Both forms resolve to the same reconcile.Policy; overrides are
 // never merged.
 type PolicySource struct {
-	Kind          string // "preset" | "inline"
-	PresetName    string
-	PresetVersion int
-	InlinePolicy  *reconcile.Policy
+	Kind          string            `json:"kind"` // "preset" | "inline"
+	PresetName    string            `json:"name,omitempty"`
+	PresetVersion int               `json:"version,omitempty"`
+	InlinePolicy  *reconcile.Policy `json:"policy,omitempty"`
 }
 
 // SingleAction is the retained explicit single-file path (independent from

@@ -124,6 +124,7 @@ type ErrorEvent struct {
 type CleanupStats struct {
 	DeletedErrorEvents  int64
 	DeletedScanSessions int64
+	DeletedGenerations  int64
 	DeletedPlans        int64
 }
 
@@ -184,6 +185,11 @@ func NewRepository(dbPath string) (*Repository, error) {
 	}
 
 	if err := migratePlansWorkflowSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := migrateWorksetSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -511,6 +517,100 @@ func migratePlansWorkflowSchema(db *sql.DB) error {
 	return nil
 }
 
+// migrateWorksetSchema adds the workset aggregate tables, the plan revision
+// association columns, and the plan_roots root-outcome columns to schemas
+// created before the workset model. It is additive: standalone plans keep
+// workset_id ” and every existing plan_roots row stays status 'ok'. The
+// tables themselves are created by initSchema's CREATE IF NOT EXISTS, so this
+// migration only guarantees the columns and indexes exist on legacy databases.
+func migrateWorksetSchema(db *sql.DB) error {
+	if _, err := db.Exec("ALTER TABLE plans ADD COLUMN workset_id TEXT NOT NULL DEFAULT ''"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	if _, err := db.Exec("ALTER TABLE plan_roots ADD COLUMN root_status TEXT NOT NULL DEFAULT 'ok'"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	if _, err := db.Exec("ALTER TABLE plan_roots ADD COLUMN root_error_code TEXT NOT NULL DEFAULT ''"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	if _, err := db.Exec("ALTER TABLE plan_roots ADD COLUMN root_error_message TEXT NOT NULL DEFAULT ''"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	workTable := "CREATE TABLE IF NOT EXISTS worksets (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL, root_path TEXT NOT NULL DEFAULT '', root_path_key TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, current_revision_id TEXT, creation_idem_key TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+	for _, stmt := range []string{
+		workTable,
+		`CREATE TABLE IF NOT EXISTS workset_members (
+			workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+			member_index INTEGER NOT NULL,
+			rel_path TEXT NOT NULL,
+			folder_id TEXT NOT NULL DEFAULT '',
+			folder_path TEXT NOT NULL DEFAULT '',
+			folder_name TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (workset_id, member_index),
+			UNIQUE (workset_id, rel_path)
+		)`,
+		`CREATE TABLE IF NOT EXISTS workset_drafts (
+			workset_id TEXT PRIMARY KEY REFERENCES worksets(id) ON DELETE CASCADE,
+			workflow_schema_version INTEGER NOT NULL DEFAULT 1,
+			steps_json TEXT NOT NULL DEFAULT '[]',
+			draft_hash TEXT NOT NULL DEFAULT '',
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS workset_revisions (
+			plan_id TEXT PRIMARY KEY REFERENCES plans(plan_id) ON DELETE CASCADE,
+			workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+			revision_index INTEGER NOT NULL,
+			draft_hash TEXT NOT NULL DEFAULT '',
+			member_hash TEXT NOT NULL DEFAULT '',
+			worksets_version INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (workset_id, revision_index)
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_generations (
+			generation_id TEXT PRIMARY KEY,
+			workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'queued',
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			request_hash TEXT NOT NULL DEFAULT '',
+			expected_draft_version INTEGER NOT NULL DEFAULT 0,
+			request_json TEXT NOT NULL DEFAULT '',
+			total_roots INTEGER NOT NULL DEFAULT 0,
+			completed_roots INTEGER NOT NULL DEFAULT 0,
+			current_root TEXT NOT NULL DEFAULT '',
+			error_count INTEGER NOT NULL DEFAULT 0,
+			cancel_requested INTEGER NOT NULL DEFAULT 0,
+			revision_id TEXT REFERENCES plans(plan_id) ON DELETE SET NULL,
+			error_code TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			started_at TEXT,
+			finished_at TEXT,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_worksets_idem ON worksets(creation_idem_key) WHERE creation_idem_key IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_worksets_library_updated ON worksets(library_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_worksets_updated ON worksets(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_workset_revisions_workset ON workset_revisions(workset_id, revision_index DESC)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_generations_idem ON plan_generations(workset_id, idempotency_key) WHERE idempotency_key <> '' AND status IN ('queued','running','completed')`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_generations_workset_status ON plan_generations(workset_id, status, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_generations_queue ON plan_generations(status, created_at, generation_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_workset_created ON plans(workset_id, created_at)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("workset schema migration: %w", err)
+		}
+	}
+	return nil
+}
+
 func initSchema(db *sql.DB) error {
 	schemaTables := `
 -- P0 Schema V1: Main entries table with content revision tracking
@@ -574,7 +674,8 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 -- migratePlansLibrarySchema (the FK cannot be added via ALTER TABLE).
 -- plan_kind discriminates workflow plans (declare outputs) from the retained
 -- independent single-action path; workflow_schema_version is 0 for
--- single-action rows.
+-- single-action rows. workset_id is NULL for standalone plans and set for
+-- workset-owned revision plans (FK semantics are managed in app logic).
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
@@ -586,6 +687,7 @@ CREATE TABLE IF NOT EXISTS plans (
     status TEXT NOT NULL DEFAULT 'ready',
     plan_kind TEXT NOT NULL DEFAULT 'single_action',
     workflow_schema_version INTEGER NOT NULL DEFAULT 0,
+    workset_id TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -684,7 +786,9 @@ CREATE TABLE IF NOT EXISTS plan_workflow_steps (
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
--- Planning roots with their metadata inventory fingerprints.
+-- Planning roots with their metadata inventory fingerprints. root_status is
+-- 'ok' for planned roots and 'missing' for members whose subtree no longer
+-- exists at planning time; error_code/message carry the stable root outcome.
 CREATE TABLE IF NOT EXISTS plan_roots (
     plan_id TEXT NOT NULL,
     root_index INTEGER NOT NULL,
@@ -692,6 +796,9 @@ CREATE TABLE IF NOT EXISTS plan_roots (
     root_identity TEXT NOT NULL DEFAULT '',
     inventory_fingerprint TEXT NOT NULL DEFAULT '',
     entry_count INTEGER NOT NULL DEFAULT 0,
+    root_status TEXT NOT NULL DEFAULT 'ok',
+    root_error_code TEXT NOT NULL DEFAULT '',
+    root_error_message TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (plan_id, root_index),
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
@@ -743,6 +850,105 @@ CREATE TABLE IF NOT EXISTS library_folders (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_lib_path ON library_folders(library_id, path);
+
+-- Worksets: long-lived aggregates owned by a library (nullable once the
+-- library is deleted). title duplicates are allowed. version is the single
+-- aggregate concurrency counter (rename, draft save, revision promotion).
+-- current_revision_id is never mutated after generation; a failed/canceled/
+-- interrupted generation never clears it. creation_idem_key enables replay of
+-- workset creation for up to 30 days (expired keys are cleared, never the row).
+CREATE TABLE IF NOT EXISTS worksets (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+    root_path TEXT NOT NULL DEFAULT '',
+    root_path_key TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
+    current_revision_id TEXT,
+    creation_idem_key TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worksets_idem ON worksets(creation_idem_key) WHERE creation_idem_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_worksets_library_updated ON worksets(library_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_worksets_updated ON worksets(updated_at);
+
+-- Ordered album-folder membership. rel_path (normalized library-relative
+-- path) is the durable member identity; folder_id/path/name are display
+-- snapshots that may churn across rescans.
+CREATE TABLE IF NOT EXISTS workset_members (
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    member_index INTEGER NOT NULL,
+    rel_path TEXT NOT NULL,
+    folder_id TEXT NOT NULL DEFAULT '',
+    folder_path TEXT NOT NULL DEFAULT '',
+    folder_name TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (workset_id, member_index),
+    UNIQUE (workset_id, rel_path)
+);
+
+-- One mutable workflow draft per workset. steps_json is the canonical strict
+-- workflow JSON; draft_hash is the canonical content hash used for
+-- needs_planning derivation and generation dedup.
+CREATE TABLE IF NOT EXISTS workset_drafts (
+    workset_id TEXT PRIMARY KEY REFERENCES worksets(id) ON DELETE CASCADE,
+    workflow_schema_version INTEGER NOT NULL DEFAULT 1,
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    draft_hash TEXT NOT NULL DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Immutable plan revisions owned by a workset. revision_index is monotonic
+-- within the workset; draft_hash frozen at generation time (audit + replay);
+-- worksets_version frozen for audit only (the aggregate version is never used
+-- as a mutation lock).
+CREATE TABLE IF NOT EXISTS workset_revisions (
+    plan_id TEXT PRIMARY KEY REFERENCES plans(plan_id) ON DELETE CASCADE,
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    revision_index INTEGER NOT NULL,
+    draft_hash TEXT NOT NULL DEFAULT '',
+    member_hash TEXT NOT NULL DEFAULT '',
+    worksets_version INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (workset_id, revision_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workset_revisions_workset ON workset_revisions(workset_id, revision_index DESC);
+
+-- Async planning session. status: queued|running|completed|failed|canceled|
+-- interrupted. idempotency_key is guaranteed for 30 days for completed rows;
+-- failed/canceled/interrupted release the key immediately. cancel_requested is
+-- observed by the worker at cooperative checkpoints.
+CREATE TABLE IF NOT EXISTS plan_generations (
+    generation_id TEXT PRIMARY KEY,
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued',
+    idempotency_key TEXT NOT NULL DEFAULT '',
+    request_hash TEXT NOT NULL DEFAULT '',
+    expected_draft_version INTEGER NOT NULL DEFAULT 0,
+    request_json TEXT NOT NULL DEFAULT '',
+    total_roots INTEGER NOT NULL DEFAULT 0,
+    completed_roots INTEGER NOT NULL DEFAULT 0,
+    current_root TEXT NOT NULL DEFAULT '',
+    error_count INTEGER NOT NULL DEFAULT 0,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    revision_id TEXT REFERENCES plans(plan_id) ON DELETE SET NULL,
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_generations_idem
+    ON plan_generations(workset_id, idempotency_key)
+    WHERE idempotency_key <> '' AND status IN ('queued','running','completed');
+CREATE INDEX IF NOT EXISTS idx_plan_generations_workset_status
+    ON plan_generations(workset_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
+    ON plan_generations(status, created_at, generation_id);
 `
 	if _, err := db.Exec(schemaTables); err != nil {
 		return err

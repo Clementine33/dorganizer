@@ -3,7 +3,6 @@ package plan
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -45,143 +44,21 @@ func (s *serviceImpl) Plan(_ context.Context, req Request) (Response, error) {
 }
 
 // planWorkflow runs the declarative reconcile_audio_outputs step over each
-// planning root and persists snapshots.
+// planning root and persists snapshots. The reconciliation itself delegates to
+// RunWorkflow so the workset planning session reuses one implementation.
 func (s *serviceImpl) planWorkflow(req Request) (Response, error) {
-	wf := req.Workflow
-	if wf.SchemaVersion != WorkflowSchemaVersion {
-		return Response{}, NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW_SCHEMA", fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion), nil)
-	}
-	if len(wf.Steps) != 1 || wf.Steps[0].StepType != StepTypeReconcileAudio {
-		return Response{}, NewError(ErrKindInvalidArgument, "UNSUPPORTED_STEP", "schema v1 supports only the reconcile_audio_outputs step", nil)
-	}
-	if len(req.PlanningRoots) == 0 {
-		return Response{}, NewError(ErrKindInvalidArgument, "SCOPE_REQUIRED", "workflow requires at least one planning root", nil)
-	}
-	step := wf.Steps[0]
-
-	planCfg, cfgErr := getPlanConfig(s.configDir)
-	if cfgErr != nil {
-		planCfg = defaultPlanConfig()
-	}
-
-	policy, classifier, err := s.resolvePolicy(s.configDir, step.Policy)
+	result, err := RunWorkflow(context.Background(), s.repo, s.configDir, req.Workflow, req.PlanningRoots, RunOptions{})
 	if err != nil {
 		return Response{}, err
 	}
 
-	type rootResult struct {
-		root   string
-		result reconcile.ReconcileResult
-	}
-	results := make([]rootResult, 0, len(req.PlanningRoots))
-	var allComponents []reconcile.ComponentOutcome
-	aggregated := reconcile.StepSummary{}
-
-	// Planning roots are independent works: analyze them concurrently (the
-	// bitrate enrichment serializes its own DB writes internally). Results
-	// are collected in request order so persistence is deterministic.
-	type planOutcome struct {
-		index  int
-		root   string
-		result reconcile.ReconcileResult
-		err    error
-	}
-	outcomes := make(chan planOutcome, len(req.PlanningRoots))
-	for i, root := range req.PlanningRoots {
-		go func(i int, root string) {
-			entries, collectErr := collectWorkflowEntries(s.repo, root)
-			if collectErr != nil {
-				outcomes <- planOutcome{index: i, root: root, err: collectErr}
-				return
-			}
-			enriched, enrichErr := enrichWorkflowBitrate(s.repo, entries, planCfg.Bitrate.BatchUpdate)
-			if enrichErr != nil {
-				outcomes <- planOutcome{index: i, root: root, err: enrichErr}
-				return
-			}
-			result, recErr := reconcile.Reconcile(reconcile.ReconcileInput{
-				RootPath:   root,
-				Entries:    enriched,
-				Policy:     policy,
-				Classifier: *classifier,
-			})
-			outcomes <- planOutcome{index: i, root: root, result: result, err: recErr}
-		}(i, root)
-	}
-
-	ordered := make([]planOutcome, len(req.PlanningRoots))
-	for range req.PlanningRoots {
-		o := <-outcomes
-		ordered[o.index] = o
-	}
-	for _, o := range ordered {
-		if o.err != nil {
-			return Response{}, NewError(ErrKindInternal, "COLLECT_FAILED", fmt.Sprintf("analyze planning root %s: %v", o.root, o.err), o.err)
-		}
-		results = append(results, rootResult{root: o.root, result: o.result})
-		allComponents = append(allComponents, o.result.Components...)
-		aggregated.ComponentCount += o.result.Summary.ComponentCount
-		aggregated.BlockedCount += o.result.Summary.BlockedCount
-		aggregated.OperationCount += o.result.Summary.OperationCount
-		aggregated.ErrorCount += o.result.Summary.ErrorCount
-	}
-	aggregated.SummaryReason = aggregateSummaryReason(aggregated)
-
 	planID := generatePlanID()
 	snapshotToken := generateSnapshotToken()
-	policyJSON, _ := json.Marshal(policy)
-	sum := sha256Sum(policyJSON)
-	policyHash := hex.EncodeToString(sum[:])
-
-	stepRecords := []sqlite.WorkflowStepRecord{{
-		StepIndex:           0,
-		StepType:            StepTypeReconcileAudio,
-		Status:              stepStatus(aggregated),
-		PolicySourceKind:    step.Policy.Kind,
-		PolicySourceName:    step.Policy.PresetName,
-		PolicySourceVersion: step.Policy.PresetVersion,
-		PolicySchemaVersion: policy.SchemaVersion,
-		PolicyJSON:          string(policyJSON),
-		PolicyHash:          policyHash,
-		ClassifierName:      classifier.Name,
-		ClassifierVersion:   classifier.Version,
-		ClassifierPattern:   classifier.Pattern,
-		ClassifierHash:      classifier.Hash,
-		StepSummaryJSON:     mustJSON(aggregated),
-	}}
-
-	rootRecords := make([]sqlite.WorkflowRootRecord, 0, len(results))
-	componentRecords := make([]sqlite.WorkflowComponentRecord, 0)
-	componentIndex := 0
-	for i, r := range results {
-		rootRecords = append(rootRecords, sqlite.WorkflowRootRecord{
-			RootIndex:            i,
-			RootPath:             r.root,
-			RootIdentity:         r.root,
-			InventoryFingerprint: r.result.Digest,
-			EntryCount:           r.result.Count,
-		})
-		for _, comp := range r.result.Components {
-			componentRecords = append(componentRecords, sqlite.WorkflowComponentRecord{
-				StepIndex:      0,
-				ComponentIndex: componentIndex,
-				ComponentID:    comp.ComponentID,
-				RootIndex:      i,
-				Partition:      string(comp.Partition),
-				Status:         comp.Status,
-				ReasonCode:     comp.ReasonCode,
-				OutcomeJSON:    mustJSON(comp),
-			})
-			componentIndex++
-		}
-	}
-
 	// plans.root_path carries the merged planning-root scope so a multi-root
 	// plan is addressable under every root it covers (the per-root rows in
 	// plan_roots hold the authoritative inventory fingerprints). The display
 	// root is the first planning root.
-	rootPath := strings.Join(req.PlanningRoots, " + ")
-	if err := sqlite.CreateWorkflowPlanTx(s.repo.DB(), planID, "workflow", rootPath, snapshotToken, req.LibraryID, stepRecords, rootRecords, componentRecords); err != nil {
+	if err := sqlite.CreateWorkflowPlanTx(s.repo.DB(), planID, "workflow", result.RootPath, snapshotToken, req.LibraryID, result.StepRecords, result.Roots, result.Components); err != nil {
 		if sqlite.IsPlanIDConflictError(err) {
 			return Response{}, NewError(ErrKindAlreadyExists, "PLAN_ID_CONFLICT", fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID), err)
 		}
@@ -191,24 +68,24 @@ func (s *serviceImpl) planWorkflow(req Request) (Response, error) {
 	return Response{
 		PlanID:        planID,
 		SnapshotToken: snapshotToken,
-		RootPath:      rootPath,
+		RootPath:      result.RootPath,
 		PlanKind:      PlanKindWorkflow,
 		Summary: Summary{
-			OperationCount:  aggregated.OperationCount,
-			ErrorCount:      aggregated.ErrorCount,
-			TotalCount:      aggregated.OperationCount,
-			ActionableCount: aggregated.OperationCount,
-			SummaryReason:   aggregated.SummaryReason,
+			OperationCount:  result.Summary.OperationCount,
+			ErrorCount:      result.Summary.ErrorCount,
+			TotalCount:      result.Summary.OperationCount,
+			ActionableCount: result.Summary.OperationCount,
+			SummaryReason:   result.Summary.SummaryReason,
 		},
 		Steps: []StepResponse{{
 			StepType:   StepTypeReconcileAudio,
 			StepIndex:  0,
-			Status:     stepStatus(aggregated),
-			Policy:     policy,
-			PolicyHash: policyHash,
-			Classifier: *classifier,
-			Components: allComponents,
-			Summary:    aggregated,
+			Status:     stepStatus(result.Summary),
+			Policy:     result.Policy,
+			PolicyHash: result.PolicyHash,
+			Classifier: result.Classifier,
+			Components: result.AllComponents,
+			Summary:    result.Summary,
 		}},
 	}, nil
 }

@@ -9,19 +9,21 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // Dependencies carries the wiring for the HTTP API. ScanService is used by the
-// scan route; PlanService by the plan routes. Both may be nil until wired, and
-// the handlers guard against that.
+// scan route; PlanService by the plan routes; WorksetService by the workset
+// routes. Any may be nil until wired, and the handlers guard against that.
 type Dependencies struct {
-	Repo        *sqlite.Repository
-	ConfigDir   string
-	Token       string
-	CORSOrigins []string
-	Version     string
-	ScanService scanusecase.Service
-	PlanService planusecase.Service
+	Repo           *sqlite.Repository
+	ConfigDir      string
+	Token          string
+	CORSOrigins    []string
+	Version        string
+	ScanService    scanusecase.Service
+	PlanService    planusecase.Service
+	WorksetService worksetusecase.Service
 }
 
 type Server struct{ deps Dependencies }
@@ -42,6 +44,18 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("POST /api/v1/plans", protect(http.HandlerFunc(s.createPlan)))
 	mux.Handle("GET /api/v1/plans", protect(http.HandlerFunc(s.listPlans)))
 	mux.Handle("GET /api/v1/plans/{id}", protect(http.HandlerFunc(s.getPlanDetail)))
+	mux.Handle("POST /api/v1/worksets", protect(http.HandlerFunc(s.createWorkset)))
+	mux.Handle("GET /api/v1/worksets", protect(http.HandlerFunc(s.listWorksets)))
+	mux.Handle("GET /api/v1/worksets/{id}", protect(http.HandlerFunc(s.getWorkset)))
+	mux.Handle("PATCH /api/v1/worksets/{id}", protect(http.HandlerFunc(s.patchWorkset)))
+	mux.Handle("GET /api/v1/worksets/{id}/draft", protect(http.HandlerFunc(s.getWorksetDraft)))
+	mux.Handle("PUT /api/v1/worksets/{id}/draft", protect(http.HandlerFunc(s.putWorksetDraft)))
+	mux.Handle("POST /api/v1/worksets/{id}/revisions", protect(http.HandlerFunc(s.startGeneration)))
+	mux.Handle("GET /api/v1/worksets/{id}/revisions", protect(http.HandlerFunc(s.listRevisions)))
+	mux.Handle("GET /api/v1/worksets/{id}/revisions/{planId}", protect(http.HandlerFunc(s.getRevision)))
+	mux.Handle("GET /api/v1/worksets/{id}/planning-sessions/{genId}", protect(http.HandlerFunc(s.getGeneration)))
+	mux.Handle("GET /api/v1/worksets/{id}/planning-sessions/{genId}/events", protect(http.HandlerFunc(s.generationEvents)))
+	mux.Handle("POST /api/v1/worksets/{id}/planning-sessions/{genId}/cancel", protect(http.HandlerFunc(s.cancelGeneration)))
 	return recoveryMiddleware(corsMiddleware(deps.CORSOrigins)(routingCompatibilityMiddleware(mux)))
 }
 

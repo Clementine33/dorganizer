@@ -91,6 +91,10 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
 			return
 		}
+		if errors.Is(err, sqlite.ErrLibraryHasWorksets) {
+			writeError(w, http.StatusConflict, "LIBRARY_HAS_WORKSETS", "cannot change the library root while worksets are linked; delete the library to orphan its worksets first")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update library")
 		return
 	}
@@ -102,6 +106,10 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sqlite.ErrLibraryNotFound) {
 			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
+			return
+		}
+		if errors.Is(err, sqlite.ErrGenerationInProgress) {
+			writeError(w, http.StatusConflict, "GENERATION_IN_PROGRESS", "cancel active generations before deleting the library")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to delete library")

@@ -108,18 +108,20 @@ func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
 	return scanPlanRows(rows)
 }
 
-// ListPlans returns plans newest-first in a single SQL query. When libraryID
-// is non-nil only plans owned by that library are returned; otherwise all
-// plans (including legacy plans without ownership) are listed. Ordering and
-// limiting happen in SQL.
+// ListPlans returns standalone (non-workset) plans newest-first in a single
+// SQL query. Workset-owned revision plans are excluded: they are discovered
+// through the nested workset revision endpoints, and the legacy plan list must
+// not silently duplicate them. When libraryID is non-nil only plans owned by
+// that library are returned; otherwise all standalone plans (including legacy
+// plans without ownership) are listed. Ordering and limiting happen in SQL.
 func (r *Repository) ListPlans(libraryID *string, limit int) ([]*Plan, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	query := `SELECT ` + planColumns + ` FROM plans`
+	query := `SELECT ` + planColumns + ` FROM plans WHERE workset_id = ''`
 	var args []any
 	if libraryID != nil {
-		query += ` WHERE library_id = ?`
+		query += ` AND library_id = ?`
 		args = append(args, *libraryID)
 	}
 	query += planOrderSQL + ` LIMIT ?`

@@ -26,15 +26,17 @@ func TestVersion_DefaultNonEmptyAndEmittedInHandshake(t *testing.T) {
 }
 
 type stubRepo struct {
-	cutoff time.Time
-	stats  sqlite.CleanupStats
-	err    error
-	calls  int
+	cutoff           time.Time
+	generationCutoff time.Time
+	stats            sqlite.CleanupStats
+	err              error
+	calls            int
 }
 
-func (s *stubRepo) RunRetentionCleanup(cutoff time.Time) (sqlite.CleanupStats, error) {
+func (s *stubRepo) RunRetentionCleanupWithCutoffs(cutoff, generationCutoff time.Time) (sqlite.CleanupStats, error) {
 	s.calls++
 	s.cutoff = cutoff
+	s.generationCutoff = generationCutoff
 	return s.stats, s.err
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -17,12 +18,14 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/bootstrap"
+	appconfig "github.com/onsei/organizer/backend/internal/config"
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 	"google.golang.org/grpc"
 )
 
@@ -50,21 +53,22 @@ func parseCORSOrigins(raw string) []string {
 
 // retentionCleaner abstracts the repo for startup cleanup so main_test.go can stub it.
 type retentionCleaner interface {
-	RunRetentionCleanup(cutoff time.Time) (sqlite.CleanupStats, error)
+	RunRetentionCleanupWithCutoffs(cutoff, generationCutoff time.Time) (sqlite.CleanupStats, error)
 }
 
 // runStartupRetentionCleanup performs a one-time retention cleanup at startup.
 // It is non-fatal: the returned error is logged but does not stop the process.
 func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
 	cutoff := now.UTC().Add(-7 * 24 * time.Hour)
+	generationCutoff := now.UTC().Add(-30 * 24 * time.Hour)
 	start := time.Now()
-	stats, err := repo.RunRetentionCleanup(cutoff)
+	stats, err := repo.RunRetentionCleanupWithCutoffs(cutoff, generationCutoff)
 	if err != nil {
 		return err
 	}
 	elapsed := time.Since(start)
-	log.Printf("startup retention cleanup: deleted error_events=%d scan_sessions=%d plans=%d cutoff=%s elapsed_ms=%d",
-		stats.DeletedErrorEvents, stats.DeletedScanSessions, stats.DeletedPlans,
+	log.Printf("startup retention cleanup: deleted error_events=%d scan_sessions=%d generations=%d plans=%d cutoff=%s elapsed_ms=%d",
+		stats.DeletedErrorEvents, stats.DeletedScanSessions, stats.DeletedGenerations, stats.DeletedPlans,
 		cutoff.Format(time.RFC3339), elapsed.Milliseconds())
 	return nil
 }
@@ -155,19 +159,38 @@ func main() {
 	}
 	httpPort := httpListener.Addr().(*net.TCPAddr).Port
 
-	// Shared scan/plan usecases power both the gRPC server and the HTTP API.
+	// Shared scan/plan/workset usecases power both the gRPC server and the
+	// HTTP API. The workset service owns the async planning dispatcher.
 	scanSvc := scanusecase.NewService(repo)
 	planSvc := planusecase.NewService(repo, configDir)
+	generationConcurrency := appconfig.DefaultAppConfig().Workset.GenerationConcurrency
+	if cfg, err := os.ReadFile(filepath.Join(configDir, "config.json")); err == nil {
+		var appCfg appconfig.AppConfig
+		if json.Unmarshal(cfg, &appCfg) == nil && appCfg.Workset.GenerationConcurrency > 0 {
+			generationConcurrency = appCfg.Workset.GenerationConcurrency
+		}
+	}
+	worksetSvc := worksetusecase.NewService(repo, configDir, generationConcurrency)
+
+	// Startup recovery: any session left queued/running by a previous process
+	// is marked interrupted (releasing its idempotency key) before the
+	// dispatcher starts from an empty queue.
+	if err := repo.InterruptStaleGenerations(); err != nil {
+		log.Printf("interrupt stale generations failed: %v", err)
+	}
+	worksetSvc.DispatcherHandle().Start()
+	defer worksetSvc.DispatcherHandle().Stop()
 
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
-			Repo:        repo,
-			ConfigDir:   configDir,
-			Token:       token,
-			CORSOrigins: parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
-			Version:     version,
-			ScanService: scanSvc,
-			PlanService: planSvc,
+			Repo:           repo,
+			ConfigDir:      configDir,
+			Token:          token,
+			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
+			Version:        version,
+			ScanService:    scanSvc,
+			PlanService:    planSvc,
+			WorksetService: worksetSvc,
 		}),
 	}
 	go func() {

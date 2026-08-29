@@ -147,9 +147,22 @@ func (r *Repository) GetLibrary(id string) (*Library, error) {
 	return lib, nil
 }
 
+// ErrLibraryHasWorksets is returned when a root-path change is attempted on a
+// library that still owns worksets. Workset membership identity is a
+// normalized library-relative path, so silently rebinding the root would
+// reattach fixed worksets to unrelated content.
+var ErrLibraryHasWorksets = errors.New("library has worksets")
+
+// ErrGenerationInProgress is returned when an owned workset has a queued or
+// running planning session and an operation that must wait for it (library
+// deletion) is attempted.
+var ErrGenerationInProgress = errors.New("generation in progress")
+
 // UpdateLibrary updates a library's name and root path and returns the
 // updated row. Changing the root invalidates the materialized folder list and
 // prior scan state in the same transaction so no stale paths remain attached.
+// A root-path change is rejected with ErrLibraryHasWorksets while any workset
+// is still linked to the library; name edits stay allowed.
 func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) {
 	candidateRoot := pathnorm.CleanRootPath(rootPath)
 	rootPathKey := pathnorm.RootPathKey(candidateRoot)
@@ -172,6 +185,15 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	// edit (e.g. `/music/.` for `/music`) must not invalidate folders or scan
 	// state, while `C:/Music` -> `c:/music` is genuinely unchanged on Windows.
 	rootChanged := pathnorm.RootPathKey(currentRoot) != rootPathKey
+	if rootChanged {
+		var n int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM worksets WHERE library_id = ?", id).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			return nil, ErrLibraryHasWorksets
+		}
+	}
 	query := `UPDATE libraries SET name = ?, root_path = ?, root_path_key = ?, updated_at = ? WHERE id = ?`
 	if rootChanged {
 		query = `
@@ -198,20 +220,47 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	return r.GetLibrary(id)
 }
 
-// DeleteLibrary removes a library; library_folders rows cascade via FK.
+// DeleteLibrary removes a library and orphans its worksets in one transaction.
+// It fails with ErrGenerationInProgress while any owned workset has a queued
+// or running planning session (the client must cancel first), and with
+// ErrLibraryNotFound when the library does not exist. The active-session check
+// happens inside the write transaction; generation claim/complete updates
+// serialize on the same SQLite writer, so a delete that commits cannot race a
+// generation that would start against the deleted library.
 func (r *Repository) DeleteLibrary(id string) error {
-	result, err := r.db.Exec("DELETE FROM libraries WHERE id = ?", id)
+	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM libraries WHERE id = ?", id).Scan(&exists); err != nil {
 		return err
 	}
-	if affected == 0 {
+	if exists == 0 {
 		return ErrLibraryNotFound
 	}
-	return nil
+
+	var active int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM plan_generations g
+		JOIN worksets w ON w.id = g.workset_id
+		WHERE w.library_id = ? AND g.status IN ('queued','running')
+	`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrGenerationInProgress
+	}
+
+	if _, err := tx.Exec("UPDATE worksets SET library_id = NULL WHERE library_id = ?", id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM libraries WHERE id = ?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // UpdateLibraryScanState records the outcome of a library scan.

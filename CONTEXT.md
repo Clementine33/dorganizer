@@ -1,5 +1,38 @@
 # Domain Glossary
 
+## Workset
+
+A long-lived aggregate referencing a single Library: the first-level Feed
+identity of the workbench, holding an ordered set of Album Folder members
+(1–500), one mutable Workflow Draft, planning history, and a single
+concurrency `version`. Deleting the owning Library orphans the Workset:
+membership, Draft, and Revisions remain reviewable but the Workset becomes
+read-only and no longer plans. See `docs/adr/0002-workset-plan-revision.md`.
+
+## Workflow Draft
+
+The server-persisted mutable configuration of a Workset: a schema-v1 linear
+workflow whose only persisted step is `reconcile_audio_outputs`, backed by a
+preset reference or a complete inline policy. Draft replacement is
+full-replacement and guarded by the Workset version.
+
+## Plan Revision
+
+An immutable workflow snapshot generated from a frozen Draft + ordered member
+set, owned by exactly one Workset. Backed by the existing `plans`/
+`plan_workflow_steps`/`plan_roots`/`plan_components` rows; `workset_revisions`
+is the single source of revision association and ordering. Revision
+`validation_state` (`valid | stale | unavailable`) is derived on read from
+stored per-root inventory fingerprints; `summary_reason` is immutable.
+
+## Planning Session
+
+An asynchronous, persisted generation request: it freezes the Draft and
+member inputs at enqueue time, runs on a global FIFO dispatcher (configurable
+concurrency, default 2), and streams root-level progress over SSE. Only a
+successful completion promotes the Workset's current Revision; failure,
+cancellation, and restart interruption leave the current Revision untouched.
+
 ## Plan
 
 A reviewable proposal for reconciling the currently observed media inventory with a chosen Plan Policy. A Plan records decisions before any filesystem changes are executed.

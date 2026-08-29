@@ -68,13 +68,18 @@ type WorkflowStepRecord struct {
 }
 
 // WorkflowRootRecord is a persisted planning root with its inventory
-// fingerprint.
+// fingerprint. RootStatus is "ok" for planned roots and "missing" for member
+// folders whose subtree no longer exists; RootErrorCode/Message carry the
+// stable machine outcome for missing roots (SOURCE_MISSING).
 type WorkflowRootRecord struct {
 	RootIndex            int
 	RootPath             string
 	RootIdentity         string
 	InventoryFingerprint string
 	EntryCount           int
+	RootStatus           string
+	RootErrorCode        string
+	RootErrorMessage     string
 }
 
 // WorkflowComponentRecord is a persisted component outcome snapshot.
@@ -118,6 +123,31 @@ func CreateWorkflowPlanTx(
 	}
 	defer tx.Rollback()
 
+	if err := InsertWorkflowPlanTx(tx, planID, planType, rootPath, snapshotToken, libraryID, steps, roots, components); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit workflow plan tx: %w", err)
+	}
+	return nil
+}
+
+// InsertWorkflowPlanTx is the transaction-scoped form of
+// CreateWorkflowPlanTx for callers that must persist the plan snapshot inside
+// a larger atomic transaction (the workset generation completion path writes
+// the plan, its revision association, and the current-revision promotion in
+// one commit).
+func InsertWorkflowPlanTx(
+	tx *sql.Tx,
+	planID string,
+	planType string,
+	rootPath string,
+	snapshotToken string,
+	libraryID string,
+	steps []WorkflowStepRecord,
+	roots []WorkflowRootRecord,
+	components []WorkflowComponentRecord,
+) error {
 	var libID any
 	if libraryID != "" {
 		libID = libraryID
@@ -144,10 +174,14 @@ func CreateWorkflowPlanTx(
 	}
 
 	for _, r := range roots {
+		rootStatus := r.RootStatus
+		if rootStatus == "" {
+			rootStatus = "ok"
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO plan_roots (plan_id, root_index, root_path, root_identity, inventory_fingerprint, entry_count)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, planID, r.RootIndex, r.RootPath, r.RootIdentity, r.InventoryFingerprint, r.EntryCount); err != nil {
+			INSERT INTO plan_roots (plan_id, root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, planID, r.RootIndex, r.RootPath, r.RootIdentity, r.InventoryFingerprint, r.EntryCount, rootStatus, r.RootErrorCode, r.RootErrorMessage); err != nil {
 			return fmt.Errorf("insert workflow root: %w", err)
 		}
 	}
@@ -162,9 +196,6 @@ func CreateWorkflowPlanTx(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit workflow plan tx: %w", err)
-	}
 	return nil
 }
 
@@ -227,7 +258,7 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	}
 
 	rootRows, err := r.db.Query(`
-		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count
+		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message
 		FROM plan_roots WHERE plan_id = ? ORDER BY root_index
 	`, planID)
 	if err != nil {
@@ -236,7 +267,7 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	defer rootRows.Close()
 	for rootRows.Next() {
 		var r WorkflowRootRecord
-		if err := rootRows.Scan(&r.RootIndex, &r.RootPath, &r.RootIdentity, &r.InventoryFingerprint, &r.EntryCount); err != nil {
+		if err := rootRows.Scan(&r.RootIndex, &r.RootPath, &r.RootIdentity, &r.InventoryFingerprint, &r.EntryCount, &r.RootStatus, &r.RootErrorCode, &r.RootErrorMessage); err != nil {
 			return nil, err
 		}
 		detail.Roots = append(detail.Roots, r)
@@ -265,6 +296,29 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	}
 
 	return detail, nil
+}
+
+// GetWorkflowPlanRoots returns the persisted planning roots of a workflow
+// plan in root_index order.
+func (r *Repository) GetWorkflowPlanRoots(planID string) ([]WorkflowRootRecord, error) {
+	rows, err := r.db.Query(`
+		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message
+		FROM plan_roots WHERE plan_id = ? ORDER BY root_index
+	`, planID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WorkflowRootRecord
+	for rows.Next() {
+		var rec WorkflowRootRecord
+		if err := rows.Scan(&rec.RootIndex, &rec.RootPath, &rec.RootIdentity, &rec.InventoryFingerprint, &rec.EntryCount, &rec.RootStatus, &rec.RootErrorCode, &rec.RootErrorMessage); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 // GetPlanWorkflowSchema reports plan_kind and workflow schema version for the

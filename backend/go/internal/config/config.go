@@ -40,12 +40,18 @@ type PlanBitrateConfig struct {
 	BatchUpdate bool `json:"batch_update"`
 }
 
+// WorksetConfig defines workset-generation settings in config.json.
+type WorksetConfig struct {
+	GenerationConcurrency int `json:"generation_concurrency"`
+}
+
 // AppConfig represents the full application configuration from config.json.
 type AppConfig struct {
 	Prune   PruneConfig   `json:"prune"`
 	Tools   ToolsConfig   `json:"tools"`
 	Execute ExecuteConfig `json:"execute"`
 	Plan    PlanConfig    `json:"plan"`
+	Workset WorksetConfig `json:"workset"`
 }
 
 func DefaultAppConfig() AppConfig {
@@ -66,6 +72,9 @@ func DefaultAppConfig() AppConfig {
 			Bitrate: PlanBitrateConfig{
 				BatchUpdate: true,
 			},
+		},
+		Workset: WorksetConfig{
+			GenerationConcurrency: 2,
 		},
 	}
 }
