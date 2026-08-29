@@ -477,7 +477,8 @@ func (s *serviceImpl) GetDraft(ctx context.Context, id string) (*Draft, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.GetWorkset(id); err != nil {
+	w, err := s.repo.GetWorkset(id)
+	if err != nil {
 		if err == sqlite.ErrWorksetNotFound {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
@@ -496,6 +497,7 @@ func (s *serviceImpl) GetDraft(ctx context.Context, id string) (*Draft, error) {
 	}
 	return &Draft{
 		WorksetID:             d.WorksetID,
+		Version:               w.Version,
 		WorkflowSchemaVersion: d.WorkflowSchemaVersion,
 		Workflow:              wf,
 		WorkflowJSON:          d.StepsJSON,

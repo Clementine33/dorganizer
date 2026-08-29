@@ -100,11 +100,13 @@ type worksetListResponse struct {
 	NextCursor string            `json:"next_cursor,omitempty"`
 }
 
-// draftResponse is the persisted workflow draft.
+// draftResponse is the persisted workflow draft. There is intentionally no
+// separate draft concurrency counter: worksets.version is the single mutation
+// authority, so the draft response carries that version directly.
 type draftResponse struct {
 	WorksetID             string           `json:"workset_id"`
+	Version               int              `json:"version"`
 	WorkflowSchemaVersion int              `json:"workflow_schema_version"`
-	DraftVersion          int              `json:"draft_version"`
 	Workflow              workflowResponse `json:"workflow"`
 	UpdatedAt             string           `json:"updated_at"`
 }
@@ -318,6 +320,7 @@ func (s *Server) getWorksetDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, draftResponse{
 		WorksetID:             d.WorksetID,
+		Version:               d.Version,
 		WorkflowSchemaVersion: d.WorkflowSchemaVersion,
 		Workflow:              toWorkflowResponse(d.Workflow),
 		UpdatedAt:             d.UpdatedAt.UTC().Format(timeFormatJSON),

@@ -168,9 +168,12 @@ type RenameRequest struct {
 	IfMatchVersion int
 }
 
-// Draft is the persisted workflow draft view.
+// Draft is the persisted workflow draft view. Version is the aggregate
+// worksets.version (the single mutation authority); there is no separate
+// draft concurrency counter.
 type Draft struct {
 	WorksetID             string
+	Version               int
 	WorkflowSchemaVersion int
 	Workflow              planusecase.Workflow
 	WorkflowJSON          string
