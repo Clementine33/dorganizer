@@ -21,3 +21,17 @@
 ## CI facts
 - `.github/workflows/ci.yml`: main jobs on ubuntu-latest; `windows-smoke` gates the Windows release path (`task build:go:windows-x64` + optional e2e). Flutter Windows builds would need a Windows runner.
 - PRs reviewed by CodeRabbit (`.github/coderabbit.yaml`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as GitHub issues, driven via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical labels, each label string equal to its name: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
