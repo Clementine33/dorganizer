@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "plan-batch-review.html",
+  "entry": "plan-batch-review.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-28T15:23:49.228Z",
+  "updatedAt": "2026-08-28T15:23:49.228Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}
