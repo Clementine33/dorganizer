@@ -52,13 +52,16 @@ let teardownStarted = false
 let teardownExitCode = 0
 
 function launchVite(apiBase) {
-  const pnpmCmd = isWin ? 'pnpm.cmd' : 'pnpm'
-  vite = spawn(pnpmCmd, ['exec', 'vite'], {
+  // Launch vite directly via its bin entry (node node_modules/vite/bin/vite.js)
+  // instead of a pnpm shim: Windows pnpm installs may expose only pnpm.exe
+  // (scoop shim, no pnpm.cmd), and even with a .cmd shim cmd.exe has
+  // unreliable argument pass-through (the e2e launcher observed dropped
+  // flags). A direct node spawn needs no shell and no shim.
+  const viteBin = path.join(webDir, 'node_modules', 'vite', 'bin', 'vite.js')
+  vite = spawn(process.execPath, [viteBin], {
     cwd: webDir,
     env: { ...process.env, VITE_API_BASE: apiBase },
     stdio: 'inherit',
-    // On Windows .cmd shims need a shell; POSIX runs pnpm directly.
-    shell: isWin,
   })
   vite.on('exit', (code) => {
     console.log(`[dev-web] Vite exited (code ${code}) — stopping backend`)
@@ -116,18 +119,10 @@ function teardown(exitCode = 0) {
   teardownExitCode = exitCode
 
   // Stop Vite first (it is the foreground piece; the backend is the
-  // long-lived daemon that must not outlive us).
+  // long-lived daemon that must not outlive us). Vite is now a plain node
+  // child, so a direct kill works on every platform.
   if (vite && vite.exitCode === null) {
-    if (isWin) {
-      // vite was spawned via a .cmd shim (shell: true), so killing its pid
-      // leaves the real Vite process running; taskkill /T takes the whole
-      // tree, mirroring the backend teardown path.
-      const kill = spawn('taskkill', ['/pid', String(vite.pid), '/t', '/f'])
-      kill.on('error', () => {})
-      kill.on('exit', () => {})
-    } else {
-      vite.kill()
-    }
+    vite.kill()
   }
 
   const finish = () => process.exit(exitCode)
