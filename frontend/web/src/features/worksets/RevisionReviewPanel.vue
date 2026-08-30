@@ -48,7 +48,9 @@ const componentsByRoot = computed(() => {
   for (const s of revision.value.workflow.steps) {
     for (const c of s.components) byId.set(c.component_id, c)
   }
-  for (const ref of revision.value.component_roots) {
+  // Guard against a null payload: older/edge backend responses may omit the
+  // ownership table entirely.
+  for (const ref of revision.value.component_roots ?? []) {
     const comp = byId.get(ref.component_id)
     if (!comp) continue
     const list = byRoot.get(ref.root_index) ?? []

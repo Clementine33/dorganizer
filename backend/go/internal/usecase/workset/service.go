@@ -245,9 +245,10 @@ func mustJSON(v any) string {
 // ListWorksets lists worksets newest-first (keyset on updated_at, id). When a
 // feed filter is set, rows are classified post-hoc and the page is filled by
 // scanning successive keyset batches until `limit` matching views are found
-// or the feed is exhausted — so `next_cursor` always refers to the position
-// after the last returned row and pagination stays correct across pages.
-// The returned cursor is for the next page, "" when the feed is exhausted.
+// or the feed is exhausted. The next cursor is derived from the (limit+1)-th
+// matching view — NOT from the end of the scanned keyset batch — so matched
+// rows past the page boundary are never skipped, and pagination stays exact
+// across pages. The returned cursor is "" when the feed is exhausted.
 func (s *serviceImpl) ListWorksets(ctx context.Context, q ListQuery) ([]*WorksetView, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
@@ -267,7 +268,7 @@ func (s *serviceImpl) ListWorksets(ctx context.Context, q ListQuery) ([]*Workset
 		return views, next, err
 	}
 
-	filtered := make([]*WorksetView, 0, limit)
+	filtered := make([]*WorksetView, 0, limit+1)
 	cursor := q.Cursor
 	for {
 		page, next, err := s.listPage(ctx, q, limit, cursor)
@@ -279,12 +280,16 @@ func (s *serviceImpl) ListWorksets(ctx context.Context, q ListQuery) ([]*Workset
 				filtered = append(filtered, v)
 			}
 		}
-		// Stop when the page is full or the feed has no more rows.
-		if len(filtered) >= limit || next == "" {
-			if len(filtered) > limit {
-				filtered = filtered[:limit]
-			}
-			return filtered, next, nil
+		// Page boundary: one past `limit` matched. The keyset cursor is
+		// strictly exclusive (<), so point it at the LAST RETURNED match:
+		// the next page starts right after it and nothing is skipped.
+		if len(filtered) > limit {
+			last := filtered[limit-1]
+			return filtered[:limit], cursorEncode(last.UpdatedAt, last.WorksetID), nil
+		}
+		// Feed exhausted with fewer than limit matches.
+		if next == "" {
+			return filtered, "", nil
 		}
 		cursor = next
 	}

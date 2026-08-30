@@ -229,7 +229,11 @@ export interface RevisionListResponse {
 
 export type StartGenerationResponse =
   | { created: true; generation: GenerationView }
+  // Unchanged-input replay: current revision stands (200).
   | { created: false; revision: CurrentRevisionSummary }
+  // Idempotency-key replay of an already-accepted request: the existing
+  // session is returned (202).
+  | { created: false; generation: GenerationView }
 
 export interface StartGenerationInput {
   expected_draft_version?: number

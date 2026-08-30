@@ -155,10 +155,16 @@ export class ApiClient implements ApiClientContract {
   }
 
   startGeneration(id: string, input: StartGenerationInput, idempotencyKey: string): Promise<StartGenerationResponse> {
+    // Not a pure enqueue: the backend's dedup fast path recomputes live
+    // inventory fingerprints for every member root inside the request, which
+    // can exceed the read-path timeout on large worksets. Aborting would
+    // surface a false failure AND lose this idempotency key's protection
+    // (a retry with a fresh key could start a duplicate session).
     return this.request(`/worksets/${encodeURIComponent(id)}/revisions`, {
       method: 'POST',
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      timeoutMs: 60_000,
     })
   }
 

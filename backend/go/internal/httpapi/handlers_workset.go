@@ -387,11 +387,25 @@ func (s *Server) startGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !res.Created {
-		// Unchanged-input replay: current revision returned with created:false.
-		writeJSON(w, http.StatusOK, struct {
-			Created  bool                     `json:"created"`
-			Revision *currentRevisionResponse `json:"revision"`
-		}{Created: false, Revision: toCurrentRevisionResponse(res.Revision)})
+		// Two created:false shapes: an unchanged-input replay carries the
+		// current revision; an idempotent-key replay carries the existing
+		// generation instead. Encoding both keeps the nil-revision replay
+		// from dereferencing a nil pointer.
+		if res.Revision != nil {
+			writeJSON(w, http.StatusOK, struct {
+				Created  bool                     `json:"created"`
+				Revision *currentRevisionResponse `json:"revision"`
+			}{Created: false, Revision: toCurrentRevisionResponse(res.Revision)})
+			return
+		}
+		if res.Generation != nil {
+			writeJSON(w, http.StatusAccepted, struct {
+				Created    bool                   `json:"created"`
+				Generation generationViewResponse `json:"generation"`
+			}{Created: false, Generation: toGenerationViewResponse(res.Generation)})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "generation replay returned no result")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, struct {
@@ -495,6 +509,12 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		writeWorksetError(w, err)
 		return
 	}
+	// A revision over zero components would otherwise marshal as null; the
+	// frontend contract is always an array.
+	componentRoots := rv.ComponentRoots
+	if componentRoots == nil {
+		componentRoots = []worksetusecase.ComponentRootRef{}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		PlanID         string                            `json:"plan_id"`
 		RevisionIndex  int                               `json:"revision_index"`
@@ -502,7 +522,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		Roots          []rootValidationResponse          `json:"roots"`
 		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
 		Workflow       workflowPlanResponse              `json:"workflow"`
-	}{PlanID: rv.PlanID, RevisionIndex: rv.RevisionIndex, CreatedAt: rv.CreatedAt.UTC().Format(timeFormatJSON), Roots: toRoots(rv.Roots), ComponentRoots: rv.ComponentRoots, Workflow: toWorkflowPlanResponse(rv.Workflow)})
+	}{PlanID: rv.PlanID, RevisionIndex: rv.RevisionIndex, CreatedAt: rv.CreatedAt.UTC().Format(timeFormatJSON), Roots: toRoots(rv.Roots), ComponentRoots: componentRoots, Workflow: toWorkflowPlanResponse(rv.Workflow)})
 }
 
 // ==================== helpers ====================

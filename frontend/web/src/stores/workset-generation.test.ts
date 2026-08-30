@@ -78,14 +78,15 @@ describe('workset generation store', () => {
     const api = apiStub({ streamGenerationEvents })
 
     const first = store.attach('ws-1', 'gen-1', api)
-    // Second attach while streaming must be a no-op: the stream is only
-    // opened once.
-    store.attach('ws-1', 'gen-2', api)
+    // Second attach while streaming must be refused (resolve false) and the
+    // stream opened only once.
+    const second = await store.attach('ws-1', 'gen-2', api)
+    expect(second).toBe(false)
     // Let the generator reach its await (registering the abort listener)
     // before cancelling.
     await Promise.resolve()
     await Promise.resolve()
-    store.cancel()
+    store.cancel('ws-1', 'gen-1')
     await first
     expect(streamGenerationEvents).toHaveBeenCalledTimes(1)
   })

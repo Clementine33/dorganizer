@@ -8,7 +8,6 @@ import { errorDetails } from '@/lib/api/error'
 import type { DraftResponse, Workset, WorkflowInput } from '@/lib/api/types'
 import {
   saveDraftMutationOptions,
-  startGenerationMutationOptions,
   syncAfterDraftConflict,
   workflowPresetListQueryOptions,
 } from '@/queries/worksets'
@@ -16,7 +15,7 @@ import { useWorksetGeneration } from '@/composables/use-workset-generation'
 import PolicyEditor from './PolicyEditor.vue'
 import RevisionReviewPanel from './RevisionReviewPanel.vue'
 import GenerationProgressBar from './GenerationProgressBar.vue'
-import { formatWorksetTime, generationStatusLabel, planningStateLabel, planningStateTone, toneClass } from './workset-status'
+import { formatWorksetTime, generationStatusLabelOf, planningStateLabelOf, planningStateToneOf, toneClass } from './workset-status'
 
 // The right pane of the workset workbench: header + stage strip
 // (configure/review, with execute/result honestly locked) + the draft
@@ -43,7 +42,6 @@ const presetsQuery = useQuery(workflowPresetListQueryOptions(api))
 const presets = computed(() => presetsQuery.data.value ?? [])
 
 const saveMutation = useMutation(saveDraftMutationOptions(api, queryClient))
-const startMutation = useMutation(startGenerationMutationOptions(api, queryClient))
 
 const activeGeneration = computed(() => props.workset?.active_generation ?? null)
 
@@ -136,12 +134,20 @@ async function onSaveAndGenerate(input: { workflow: WorkflowInput }) {
       idempotencyKey: crypto.randomUUID(),
     })
     if (!result.created) {
-      // created:false replay: draft + inventory unchanged, current revision
-      // stands. The mutation options refresh the caches; surface the meaning.
-      unchangedNotice.value = `配置与文件库存未变化，继续使用 Revision v${result.revision.revision_index + 1}`
+      // Unchanged-input replay: draft + inventory unchanged, current revision
+      // stands. (A key replay of an in-flight/accepted request instead
+      // returns created:false with the generation payload — handled the same
+      // way, via the caches the mutation options refresh.)
+      if ('revision' in result) {
+        unchangedNotice.value = `配置与文件库存未变化，继续使用 Revision v${result.revision.revision_index + 1}`
+      } else {
+        unchangedNotice.value = '该生成请求已在进行中，正在展示其进度。'
+      }
     }
-  } catch {
-    // Generation errors surface through the mutation/error paths.
+  } catch (error) {
+    // The start mutation's error observer drives the action bar banner below;
+    // catching here only stops the async handler from rejecting.
+    void error
   }
 }
 
@@ -163,7 +169,16 @@ function discardChanges() {
   dirty.value = false
 }
 
-const generating = computed(() => startMutation.isPending.value || activeGeneration.value !== null)
+// Generation-start pending state and errors are owned by the composable's
+// mutation (the local startMutation above is unused for start flows — the
+// composable's save-and-generate path drives it).
+const generating = computed(() => generation.startMutation.isPending.value || activeGeneration.value !== null)
+
+// A failed generation start (409 conflicts, network errors) must be visible:
+// without this banner the click would silently do nothing.
+const startErrorDetails = computed(() =>
+  generation.startMutation.error.value ? errorDetails(generation.startMutation.error.value) : null,
+)
 
 const detailErrorDetails = computed(() =>
   props.detailError ? errorDetails(props.detailError) : null,
@@ -192,8 +207,8 @@ const detailErrorDetails = computed(() =>
       <header class="shrink-0 border-b border-border px-5 py-3" data-testid="workset-header">
         <div class="flex items-center gap-2.5">
           <h1 class="min-w-0 truncate font-heading text-lg font-semibold tracking-tight">{{ workset.title }}</h1>
-          <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold" :class="toneClass[planningStateTone[workset.planning_state]]" data-testid="workset-planning-state">
-            {{ planningStateLabel[workset.planning_state] }}
+          <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold" :class="toneClass[planningStateToneOf(workset.planning_state)]" data-testid="workset-planning-state">
+            {{ planningStateLabelOf(workset.planning_state) }}
           </span>
           <span
             v-if="workset.current_revision?.stale === true"
@@ -218,9 +233,22 @@ const detailErrorDetails = computed(() =>
         @cancel="onCancelGeneration"
       />
 
+      <!-- Generation-start failure (409 conflicts, network errors) -->
+      <div
+        v-if="startErrorDetails"
+        class="flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-5 py-2 text-[11px] text-destructive"
+        data-testid="generation-start-error"
+      >
+        <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />
+        <span>
+          无法开始生成：<span class="font-mono font-semibold">{{ startErrorDetails.code }}</span>
+          {{ startErrorDetails.message }}
+        </span>
+      </div>
+
       <!-- Transport error / latest generation failure banners -->
       <div
-        v-if="sseError"
+        v-else-if="sseError"
         class="border-b border-amber-500/40 bg-amber-500/10 px-5 py-2 text-[11px] text-amber-700 dark:text-amber-400"
         data-testid="generation-transport-error"
       >
@@ -233,7 +261,7 @@ const detailErrorDetails = computed(() =>
       >
         <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />
         <span>
-          最近一次生成{{ generationStatusLabel[workset.latest_generation.status] ?? '失败' }}：
+          最近一次生成{{ generationStatusLabelOf(workset.latest_generation.status) }}：
           <span class="font-mono font-semibold">{{ workset.latest_generation.error_code }}</span>
           {{ workset.latest_generation.error_message }}
         </span>

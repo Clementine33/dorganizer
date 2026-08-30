@@ -43,8 +43,16 @@ export const useWorksetGenerationStore = defineStore('workset-generation', {
     controller: null as AbortController | null,
   }),
   actions: {
-    async attach(worksetId: string, generationId: string, client: ApiClientContract) {
-      if (this.status === 'streaming') return
+    /**
+     * Attaches the SSE stream for one session. Resolves to false when the
+     * attach was refused because this singleton store is already streaming
+     * another session — callers MUST NOT run terminal synchronization for a
+     * refused attach (there is no terminal; sweeping here would feed the
+     * detail-refetch → re-attach → sweep loop). Resolves true only for an
+     * actually-attached stream that has now ended (event or transport).
+     */
+    async attach(worksetId: string, generationId: string, client: ApiClientContract): Promise<boolean> {
+      if (this.status === 'streaming') return false
       const controller = markRaw(new AbortController())
       this.controller = controller
       this.status = 'streaming'
@@ -60,12 +68,12 @@ export const useWorksetGenerationStore = defineStore('workset-generation', {
         for await (const event of client.streamGenerationEvents(worksetId, generationId, controller.signal)) {
           // A reset() or a newer session superseded this stream — never let
           // stale events overwrite the current state.
-          if (this.controller !== controller) return
+          if (this.controller !== controller) return true
           this.applyEvent(event as GenerationEvent)
-          if (this.controller !== controller) return
+          if (this.controller !== controller) return true
           if (this.status !== 'streaming') break // terminal event applied
         }
-        if (this.controller !== controller) return
+        if (this.controller !== controller) return true
         if (this.status === 'streaming') {
           // Stream ended without a terminal event: the backend outcome is
           // unknown (it may have completed just after the last event).
@@ -75,7 +83,7 @@ export const useWorksetGenerationStore = defineStore('workset-generation', {
           this.errorMessage = '生成连接提前结束，请刷新查看结果。'
         }
       } catch (error) {
-        if (this.controller !== controller) return
+        if (this.controller !== controller) return true
         this.terminal = 'transport'
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
           this.status = 'error'
@@ -89,6 +97,7 @@ export const useWorksetGenerationStore = defineStore('workset-generation', {
       } finally {
         if (this.controller === controller) this.controller = null
       }
+      return true
     },
     applyEvent(event: GenerationEvent) {
       this.receivedEvent = true
@@ -141,8 +150,11 @@ export const useWorksetGenerationStore = defineStore('workset-generation', {
         }
       }
     },
-    cancel() {
-      this.controller?.abort()
+    /** Aborts the SSE stream only when it belongs to the given session. */
+    cancel(worksetId: string, generationId: string) {
+      if (this.worksetId === worksetId && this.generationId === generationId) {
+        this.controller?.abort()
+      }
     },
     reset() {
       this.controller?.abort()

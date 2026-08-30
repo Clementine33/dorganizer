@@ -49,9 +49,13 @@ export function useWorksetGeneration() {
   }
 
   // Attaches the SSE stream for an already-running session (e.g. after a page
-  // reload while the backend session is still active).
+  // reload while the backend session is still active). A refused attach
+  // (another session is streaming in the singleton store) resolves without
+  // synchronizing — there is no terminal to react to, and sweeping caches
+  // here would feed the detail-refetch → re-attach loop.
   function attach(worksetId: string, generationId: string): void {
-    void store.attach(worksetId, generationId, api).then(() => {
+    void store.attach(worksetId, generationId, api).then((attached) => {
+      if (!attached) return
       // The attach promise settles when the stream ends. Guard against a
       // superseded session before synchronizing against its outcome.
       if (store.generationId !== generationId) return
@@ -59,19 +63,16 @@ export function useWorksetGeneration() {
     })
   }
 
-  // Explicit user cancel: abort the SSE, then POST cancel. The canceled
-  // terminal (SSE event, or the POST response) is the authoritative sync
-  // signal — cancel never touches caches directly here.
+  // Explicit user cancel: abort the SSE (scoped to this session), then POST
+  // cancel. The canceled POST response is the authoritative outcome even when
+  // the stream dies first via the abort — the terminal sync below runs in
+  // both cases, exactly once.
   async function cancel(worksetId: string, generationId: string): Promise<void> {
-    store.cancel()
+    store.cancel(worksetId, generationId)
     try {
       await cancelMutation.mutateAsync({ worksetId, generationId })
     } finally {
-      // If the stream already died (transport), the canceled POST response is
-      // still proof of the backend outcome.
-      if (store.terminal !== 'event' && store.generationId === generationId) {
-        await syncAfterGenerationTerminal(queryClient, worksetId)
-      }
+      await syncAfterGenerationTerminal(queryClient, worksetId)
     }
   }
 

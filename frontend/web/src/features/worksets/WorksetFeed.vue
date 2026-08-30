@@ -5,9 +5,9 @@ import type { Library, Workset } from '@/lib/api/types'
 import type { WorksetFeedFilter } from '@/lib/api/types'
 import {
   formatWorksetTime,
-  generationStatusLabel,
-  planningStateLabel,
-  planningStateTone,
+  generationStatusLabelOf,
+  planningStateLabelOf,
+  planningStateToneOf,
   summaryReasonLabel,
   toneClass,
   worksetBucket,
@@ -132,8 +132,8 @@ function bucketTone(bucket: 'pending' | 'normal' | 'error') {
       >
         <div class="flex items-center gap-2">
           <span class="min-w-0 flex-1 truncate font-heading text-xs font-semibold">{{ ws.title }}</span>
-          <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold" :class="toneClass[planningStateTone[ws.planning_state]]">
-            {{ planningStateLabel[ws.planning_state] }}
+          <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold" :class="toneClass[planningStateToneOf(ws.planning_state)]">
+            {{ planningStateLabelOf(ws.planning_state) }}
           </span>
         </div>
         <div class="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -156,7 +156,7 @@ function bucketTone(bucket: 'pending' | 'normal' | 'error') {
             class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-600 dark:text-sky-400"
             data-testid="feed-active-generation"
           >
-            {{ generationStatusLabel[ws.active_generation.status] ?? ws.active_generation.status }}
+            {{ generationStatusLabelOf(ws.active_generation.status) }}
             {{ ws.active_generation.completed_roots }}/{{ ws.active_generation.total_roots }}
           </span>
           <span
@@ -164,7 +164,7 @@ function bucketTone(bucket: 'pending' | 'normal' | 'error') {
             class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
             :class="toneClass[ws.latest_generation.status === 'failed' ? 'bad' : 'warn']"
           >
-            {{ generationStatusLabel[ws.latest_generation.status] ?? ws.latest_generation.status }}
+            {{ generationStatusLabelOf(ws.latest_generation.status) }}
           </span>
         </div>
         <p class="mt-1 text-[9px] text-muted-foreground">{{ formatWorksetTime(ws.updated_at) }}</p>

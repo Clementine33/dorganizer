@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { Square, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import type { GenerationProgress as GenProgress } from '@/lib/api/types'
-import { generationStatusLabel, toneClass } from './workset-status'
+import { generationStatusLabelOf, toneClass } from './workset-status'
 
 const props = defineProps<{
   progress: GenProgress
@@ -25,7 +25,7 @@ const percent = computed(() =>
   <div class="flex items-center gap-3 border-b border-border bg-sky-500/5 px-5 py-2.5" data-testid="generation-progress">
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
-        <span class="text-xs font-semibold">{{ generationStatusLabel[progress.status] ?? progress.status }}</span>
+        <span class="text-xs font-semibold">{{ generationStatusLabelOf(progress.status) }}</span>
         <span class="font-mono text-[10px] text-muted-foreground" data-testid="generation-progress-counts">
           {{ progress.completed_roots }}/{{ progress.total_roots }} 批次
         </span>

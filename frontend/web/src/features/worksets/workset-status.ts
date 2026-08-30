@@ -13,6 +13,17 @@ export const planningStateLabel: Record<PlanningState, string> = {
   orphaned: '已孤立',
 }
 
+// Lookup with verbatim passthrough: the frontend never invents semantics for
+// a value it does not recognize — unknown states render as themselves.
+export function planningStateLabelOf(state: string): string {
+  return planningStateLabel[state as PlanningState] ?? state
+}
+
+export function planningStateToneOf(state: string): BadgeTone {
+  const tone = planningStateTone[state as PlanningState]
+  return tone ?? 'neutral'
+}
+
 export const planningStateTone: Record<PlanningState, BadgeTone> = {
   unplanned: 'info',
   planning: 'info',
@@ -37,6 +48,15 @@ export const generationStatusTone: Record<GenerationStatus, BadgeTone> = {
   failed: 'bad',
   canceled: 'neutral',
   interrupted: 'warn',
+}
+
+export function generationStatusLabelOf(status: string): string {
+  return generationStatusLabel[status as GenerationStatus] ?? status
+}
+
+export function generationStatusToneOf(status: string): BadgeTone {
+  const tone = generationStatusTone[status as GenerationStatus]
+  return tone ?? 'neutral'
 }
 
 export function validationStateLabel(state: string): string {

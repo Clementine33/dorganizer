@@ -25,6 +25,8 @@ const props = defineProps<{
   conflict: boolean
   conflictMessage: string | null
   dirty: boolean
+  /** Orphaned worksets / active generations must not accept edits. */
+  readOnly: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,17 +42,23 @@ const localPolicy = ref<ResolvedPolicy | null>(null)
 const activePreset = ref<{ name: string; version: number } | null>(null)
 const advancedOpen = ref(false)
 
-// Seed the local model from the loaded draft (preset or inline).
+// Seed the local model from the loaded draft (preset or inline). Re-seeds
+// when the presets registry arrives: a preset draft seeded before the
+// presets fetch resolved would otherwise sit on an empty form, and editing
+// it would save an empty inline policy over the preset.
 watch(
-  () => props.draft,
-  (draft) => {
+  [() => props.draft, () => props.presets],
+  ([draft, presets]) => {
     if (!draft) return
     const step = draft.workflow.steps[0]
     if (!step) return
     if (step.policy.kind === 'preset') {
       const source = step.policy as { kind: 'preset'; name: string; version: number }
+      // While dirty, a re-seed would clobber the user's unsaved edits with
+      // the server draft; leave the local model alone until they settle.
+      if (props.dirty) return
       activePreset.value = { name: source.name, version: source.version }
-      const preset = props.presets.find((p) => p.name === source.name && p.version === source.version)
+      const preset = presets.find((p) => p.name === source.name && p.version === source.version)
       // Resolve the preset's policy through the presets API so the form can
       // show it; until presets load, show an empty form.
       localPolicy.value = preset ? clonePolicy(preset.policy) : emptyPolicy()
@@ -213,6 +221,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
               : 'border-border hover:bg-accent'
           "
           :data-testid="`preset-${preset.name}`"
+          :disabled="readOnly"
           @click="applyPreset(preset.name, preset.version)"
         >
           <Sparkles class="size-3 text-[var(--ring)]" />
@@ -252,7 +261,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
                 :value="codecOf(profile, side)"
                 class="h-7 min-w-0 flex-1 rounded border border-input bg-background px-1.5 text-[11px]"
                 :data-testid="`codec-${profile}-${side}`"
-                :disabled="!isCustom"
+                :disabled="!isCustom || readOnly"
                 @change="onCodecChange(profile, side, $event)"
               >
                 <option v-for="opt in codecOptions[side]" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -264,7 +273,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
                   :value="specFor(profile, side)?.quality?.bitrate"
                   class="h-7 w-16 rounded border border-input bg-background px-1.5 text-[11px]"
                   :data-testid="`bitrate-${profile}-${side}`"
-                  :disabled="!isCustom"
+                  :disabled="!isCustom || readOnly"
                   @change="onBitrateChange(profile, side, $event)"
                 />
                 <span class="text-[10px] text-muted-foreground">kbps</span>
@@ -292,7 +301,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
               type="text"
               class="mt-0.5 h-7 w-full rounded border border-input bg-background px-2 font-mono text-[11px]"
               data-testid="classifier-name"
-              :disabled="!isCustom"
+              :disabled="!isCustom || readOnly"
               @change="markDirty"
             />
           </label>
@@ -304,7 +313,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
               min="1"
               class="mt-0.5 h-7 w-full rounded border border-input bg-background px-2 font-mono text-[11px]"
               data-testid="classifier-version"
-              :disabled="!isCustom"
+              :disabled="!isCustom || readOnly"
               @change="markDirty"
             />
           </label>
@@ -343,14 +352,14 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
       <p class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
         {{ dirty ? '有未保存修改' : '配置已与服务器同步' }}
       </p>
-      <Button data-testid="save-draft" variant="outline" size="sm" :disabled="saving || generating" @click="onSave">
+      <Button data-testid="save-draft" variant="outline" size="sm" :disabled="saving || generating || readOnly" @click="onSave">
         保存配置
       </Button>
       <Button
         data-testid="save-and-generate"
         size="sm"
         class="bg-[var(--brand)] text-white hover:bg-[var(--brand)]"
-        :disabled="saving || generating"
+        :disabled="saving || generating || readOnly"
         @click="onSaveAndGenerate"
       >
         {{ generating ? '生成中…' : '保存并生成新计划版本' }}

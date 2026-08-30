@@ -101,6 +101,10 @@ export function deleteLibraryMutationOptions(api: ApiClientContract, queryClient
       )
       void refreshOrRemoveQueries(queryClient, queryKeys.libraries.foldersPrefix(id))
       void refreshOrRemoveQueries(queryClient, queryKeys.libraries.treesPrefix(id))
+      // Deleting the library orphans its worksets (planning_state flips to
+      // orphaned, validation becomes unavailable) — those transitions live in
+      // staleTime:Infinity workset caches with no other invalidation driver.
+      void refreshOrRemoveQueries(queryClient, queryKeys.worksets.all())
     },
   }
 }
