@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { WandSparkles, X } from '@lucide/vue'
+import { Layers, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 
 defineProps<{
@@ -24,14 +24,14 @@ const emit = defineEmits<{
       清除
     </Button>
     <Button
-      data-testid="generate-plan"
+      data-testid="create-workset"
       :class="selectedCount ? '' : 'ml-auto'"
       size="sm"
       :disabled="selectedCount === 0 || loading"
       @click="emit('generate')"
     >
-      <WandSparkles class="size-3.5" />
-      {{ loading ? '生成中…' : `生成计划${selectedCount ? ` (${selectedCount})` : ''}` }}
+      <Layers class="size-3.5" />
+      {{ loading ? '创建中…' : `创建工作集${selectedCount ? ` (${selectedCount})` : ''}` }}
     </Button>
   </div>
 </template>

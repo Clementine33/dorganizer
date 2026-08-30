@@ -9,6 +9,7 @@ import BatchPlanBar from '@/features/libraries/BatchPlanBar.vue'
 import FolderFlatList from '@/features/libraries/FolderFlatList.vue'
 import LibraryManager from '@/features/libraries/LibraryManager.vue'
 import ScanProgressBar from '@/features/libraries/ScanProgressBar.vue'
+import CreateWorksetDialog from '@/features/worksets/CreateWorksetDialog.vue'
 import { useApiClient } from '@/lib/api/client'
 import { errorDetails } from '@/lib/api/error'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
@@ -21,7 +22,7 @@ import {
   useLibraryList,
   useRootIdentity,
 } from '@/queries/libraries'
-import { createPlanMutationOptions } from '@/queries/plans'
+import { createWorksetMutationOptions } from '@/queries/worksets'
 import { useLibraryUiStore } from '@/stores/library-ui'
 import { useScanStore } from '@/stores/scan'
 
@@ -60,8 +61,13 @@ watchEffect(() => {
 const createMutation = useMutation(createLibraryMutationOptions(api, queryClient))
 const updateMutation = useMutation(updateLibraryMutationOptions(api, queryClient))
 const deleteMutation = useMutation(deleteLibraryMutationOptions(api, queryClient))
-const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClient))
-const planPending = computed(() => createPlanMutation.isPending.value)
+const createWorksetMutation = useMutation(createWorksetMutationOptions(api, queryClient))
+const planPending = computed(() => createWorksetMutation.isPending.value)
+const createDialogOpen = ref(false)
+// One idempotency key per user intent: kept for the lifetime of the dialog
+// submission so an unknown transport result retries the same create instead
+// of duplicating the workset; a new dialog open generates a fresh key.
+let createIdempotencyKey = ''
 
 // A scan running (or just finished) for another library refreshes the shared
 // library/folder queries in the background while this page is open; a
@@ -85,22 +91,17 @@ const pageError = computed(() => {
   for (const mutation of [createMutation, updateMutation, deleteMutation]) {
     if (mutation.error.value) return { ...errorDetails(mutation.error.value), source: 'library' as const }
   }
-  if (createPlanMutation.error.value) {
-    return { ...errorDetails(createPlanMutation.error.value), source: 'plan' as const }
+  if (createWorksetMutation.error.value) {
+    return { ...errorDetails(createWorksetMutation.error.value), source: 'workset' as const }
   }
   return null
 })
 
 async function retryPage() {
-  if (pageError.value?.source === 'plan') {
-    // A plan error can only be fixed by generating another plan. With no
-    // folders selected the retry can never succeed, so clear the stale error
-    // instead of leaving a permanently dead banner.
-    if (ui.selectedFolderIds.length === 0) {
-      createPlanMutation.reset()
-      return
-    }
-    await generatePlan()
+  if (pageError.value?.source === 'workset') {
+    // While the create dialog is open the user can retry the same submission
+    // with the same idempotency key; otherwise clear the stale error.
+    if (!createDialogOpen.value) createWorksetMutation.reset()
     return
   }
   // Library mutations never auto-clear their error; the retry button must
@@ -140,20 +141,29 @@ function setAllFolders(selected: boolean) {
   else ui.clearSelection()
 }
 
-async function generatePlan() {
+function openCreateWorkset() {
+  if (!ui.activeLibraryId || ui.selectedFolderIds.length === 0) return
+  createIdempotencyKey = crypto.randomUUID()
+  createDialogOpen.value = true
+}
+
+async function submitCreateWorkset(input: { title: string }) {
   const libraryId = ui.activeLibraryId
-  if (!libraryId || ui.selectedFolderIds.length === 0) return
+  if (!libraryId) return
   try {
-    const plan = await createPlanMutation.mutateAsync({
+    const result = await createWorksetMutation.mutateAsync({
       library_id: libraryId,
+      title: input.title,
       folder_ids: [...ui.selectedFolderIds],
-      plan_type: 'slim',
-      target_format: 'slim:mode1',
-      prune_matched_excluded: false,
+      idempotencyKey: createIdempotencyKey,
     })
-    await router.push(`/plans/${encodeURIComponent(plan.plan_id)}`)
+    createDialogOpen.value = false
+    ui.clearSelection()
+    await router.push(`/worksets/${encodeURIComponent(result.workset.workset_id)}`)
   } catch {
-    // The mutation error surfaces in the page banner via pageError.
+    // The mutation error surfaces in the page banner via pageError; the
+    // dialog stays open so the title/folder review is not lost. Retrying
+    // reuses the same idempotency key (unknown transport results).
   }
 }
 
@@ -338,7 +348,7 @@ async function removeLibrary(id: string) {
         :selected-count="ui.selectedFolderIds.length"
         :loading="planPending"
         @clear="ui.clearSelection"
-        @generate="generatePlan"
+        @generate="openCreateWorkset"
       />
     </template>
 
@@ -367,6 +377,15 @@ async function removeLibrary(id: string) {
       @close="managerOpen = false"
       @save="saveLibrary"
       @remove="removeLibrary"
+    />
+
+    <CreateWorksetDialog
+      :open="createDialogOpen"
+      :folders="folders.filter((f) => ui.selectedFolderIds.includes(f.id))"
+      :library-name="activeLibrary?.name ?? ''"
+      :saving="planPending"
+      @close="createDialogOpen = false"
+      @submit="submitCreateWorkset"
     />
   </section>
 </template>

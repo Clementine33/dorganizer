@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Folder, Library, PlanInfo, PlanResponse, TreeNode } from '@/lib/api/types'
+import type { Folder, Library, TreeNode } from '@/lib/api/types'
 import { queryKeys } from '@/queries/query-keys'
 import { createTestQueryClient } from '@/test/query-client'
 import { syncAfterScan } from './use-library-scan'
@@ -28,28 +28,19 @@ const tree: TreeNode = {
   children: [],
 }
 
-const planInfo: PlanInfo = {
-  plan_id: 'plan-1',
-  root_path: 'D:\\Music',
-  plan_type: 'slim',
-  status: 'planned',
-  created_at: '2026-08-22T00:00:00Z',
-}
-
-const planResponse: PlanResponse = {
-  plan_id: 'plan-1',
-  snapshot_token: 'snap-1',
-  root_path: 'D:\\Music',
-  summary: {
-    operation_count: 0,
-    error_count: 0,
-    total_count: 0,
-    actionable_count: 0,
-    summary_reason: 'ACTIONABLE',
-  },
-  operations: [],
-  errors: [],
-  successful_folders: [],
+// A seeded workset feed entry standing in for the workset domain caches.
+const seededWorkset = {
+  workset_id: 'ws-1',
+  title: 't',
+  version: 1,
+  library: null,
+  planning_state: 'planned',
+  current_revision: null,
+  active_generation: null,
+  latest_generation: null,
+  members: [],
+  updated_at: '',
+  created_at: '',
 }
 
 function seedLibraryDomain(client: ReturnType<typeof createTestQueryClient>) {
@@ -58,23 +49,22 @@ function seedLibraryDomain(client: ReturnType<typeof createTestQueryClient>) {
   client.setQueryData(queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a'), tree)
 }
 
-function seedPlans(client: ReturnType<typeof createTestQueryClient>) {
-  client.setQueryData(queryKeys.plans.list('lib-a', 100), [planInfo])
-  client.setQueryData(queryKeys.plans.detail('plan-1'), planResponse)
+function seedWorksetDomain(client: ReturnType<typeof createTestQueryClient>) {
+  client.setQueryData([...queryKeys.worksets.feed('all', null), 'infinite'], {
+    pages: [{ worksets: [seededWorkset], next_cursor: undefined }],
+    pageParams: [undefined],
+  })
 }
 
-function plansUntouched(client: ReturnType<typeof createTestQueryClient>): boolean {
-  return (
-    client.getQueryData(queryKeys.plans.list('lib-a', 100)) !== undefined &&
-    client.getQueryData(queryKeys.plans.detail('plan-1')) !== undefined
-  )
+function feedUntouched(client: ReturnType<typeof createTestQueryClient>): boolean {
+  return client.getQueryData([...queryKeys.worksets.feed('all', null), 'infinite']) !== undefined
 }
 
 describe('syncAfterScan terminal cache matrix', () => {
-  it('completed refreshes library metadata + derived caches and never touches plan keys', async () => {
+  it('completed refreshes library metadata, derived caches, and the workset domain', async () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
-    seedPlans(client)
+    seedWorksetDomain(client)
     const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
     const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
 
@@ -85,14 +75,15 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryData(treeKey)).toBeUndefined()
     // …the library list is invalidated for metadata refresh…
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
-    // …and plans are completely untouched.
-    expect(plansUntouched(client)).toBe(true)
+    // …and workset validation caches are conservatively dropped (stale is
+    // derived from the live inventory, which a completed scan just changed).
+    expect(feedUntouched(client)).toBe(false)
   })
 
   it('confirmed cancel/error over SSE only refreshes library metadata', async () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
-    seedPlans(client)
+    seedWorksetDomain(client)
     const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
     const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
 
@@ -101,13 +92,14 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryData(foldersKey)).toEqual(folders)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
-    expect(plansUntouched(client)).toBe(true)
+    // Nothing was committed: the workset domain keeps its caches.
+    expect(feedUntouched(client)).toBe(true)
   })
 
-  it('transport failure conservatively refreshes derived caches but never plans', async () => {
+  it('transport failure conservatively refreshes derived caches and worksets', async () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
-    seedPlans(client)
+    seedWorksetDomain(client)
     const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
     const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
 
@@ -116,13 +108,13 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryData(foldersKey)).toBeUndefined()
     expect(client.getQueryData(treeKey)).toBeUndefined()
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
-    expect(plansUntouched(client)).toBe(true)
+    expect(feedUntouched(client)).toBe(false)
   })
 
   it('transport failure before the first SSE event skips the derived refresh', async () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
-    seedPlans(client)
+    seedWorksetDomain(client)
     const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
     const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
 
@@ -133,13 +125,13 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryData(foldersKey)).toEqual(folders)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
-    expect(plansUntouched(client)).toBe(true)
+    expect(feedUntouched(client)).toBe(true)
   })
 
   it('user cancel is metadata-only even when the stream had started', async () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
-    seedPlans(client)
+    seedWorksetDomain(client)
     const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
     const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
 
@@ -151,6 +143,6 @@ describe('syncAfterScan terminal cache matrix', () => {
     expect(client.getQueryData(foldersKey)).toEqual(folders)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
-    expect(plansUntouched(client)).toBe(true)
+    expect(feedUntouched(client)).toBe(true)
   })
 })

@@ -1,21 +1,19 @@
 <script setup lang="ts">
-import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
+import { useQuery } from '@tanstack/vue-query'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AlertTriangle, ArrowLeft, RefreshCw, WandSparkles } from '@lucide/vue'
+import { AlertTriangle, ArrowLeft, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import FolderTreeCard from '@/features/folders/FolderTreeCard.vue'
 import { useApiClient } from '@/lib/api/client'
 import { errorDetails } from '@/lib/api/error'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
 import { folderTreeQueryOptions, useLibraryList } from '@/queries/libraries'
-import { createPlanMutationOptions } from '@/queries/plans'
 import { useLibraryUiStore } from '@/stores/library-ui'
 
 const api = useApiClient()
 const route = useRoute()
 const router = useRouter()
-const queryClient = useQueryClient()
 const ui = useLibraryUiStore()
 
 const libraryId = computed(() => route.params.libraryId as string)
@@ -65,49 +63,25 @@ watch(
 )
 
 // Tree selection is page-local and resets whenever the tree context changes.
-// The plan mutation's error would otherwise linger forever (TanStack keeps it
-// until the next mutate/reset), pinning a dead banner on the next folder.
 watch([libraryId, folderId], () => {
   selectedFiles.value = []
-  createPlanMutation.reset()
 })
 
 function onSelectionChange(paths: string[]): void {
   selectedFiles.value = paths
 }
 
-const createPlanMutation = useMutation(createPlanMutationOptions(api, queryClient))
-const planPending = computed(() => createPlanMutation.isPending.value)
-
 const pageError = computed(() => {
-  // Query failures take precedence over the lingering plan mutation error so
-  // a stale plan error cannot mask a fresh tree failure.
   if (treeError.value) return { code: treeError.value.code, message: treeError.value.message }
-  const planError = createPlanMutation.error.value
-  if (planError) return errorDetails(planError)
   return null
 })
 
 async function retryLoad(): Promise<void> {
-  createPlanMutation.reset()
   // The tree query key depends on the resolved root identity, which comes from
   // the library list. If the list failed (placeholder 'unresolved-root' key)
   // only refetching the tree can never recover — refetch the list too so the
   // key flips to the canonical identity (or the page falls back cleanly).
   await Promise.all([librariesQuery.refetch(), treeQuery.refetch()])
-}
-
-async function generatePlan(): Promise<void> {
-  if (selectedFiles.value.length === 0) return
-  try {
-    const plan = await createPlanMutation.mutateAsync({
-      library_id: libraryId.value,
-      source_files: [...selectedFiles.value],
-    })
-    await router.push(`/plans/${encodeURIComponent(plan.plan_id)}`)
-  } catch {
-    // The mutation error surfaces via pageError above.
-  }
 }
 </script>
 
@@ -162,21 +136,11 @@ async function generatePlan(): Promise<void> {
     <div class="flex min-h-14 shrink-0 items-center gap-3 border-t border-border bg-card px-5 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
       <div class="h-5 w-1 rounded-full bg-[var(--brand)]" aria-hidden="true" />
       <div class="min-w-0">
-        <p class="font-heading text-xs font-semibold">所选文件</p>
+        <p class="font-heading text-xs font-semibold">文件浏览</p>
         <p class="truncate font-mono text-[11px] text-muted-foreground">
-          {{ selectedFiles.length ? `${selectedFiles.length} 个文件，将按当前媒体库生成计划` : '在树中选择文件或文件夹' }}
+          {{ selectedFiles.length ? `${selectedFiles.length} 个文件已选择` : '在树中选择文件或文件夹' }}
         </p>
       </div>
-      <Button
-        data-testid="generate-plan"
-        class="ml-auto bg-[var(--brand)] text-white hover:bg-[var(--brand)]"
-        size="sm"
-        :disabled="selectedFiles.length === 0 || planPending || treePending"
-        @click="generatePlan"
-      >
-        <WandSparkles class="size-3.5" />
-        {{ planPending ? '生成中…' : `对所选文件生成计划${selectedFiles.length ? ` (${selectedFiles.length})` : ''}` }}
-      </Button>
     </div>
   </section>
 </template>

@@ -182,6 +182,17 @@ func TestCORSPreflightRunsBeforeAuth(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 		t.Fatalf("Access-Control-Allow-Origin = %q", got)
 	}
+	// Workset writes carry If-Match / Idempotency-Key; the preflight must
+	// allow them or the browser blocks every mutating request.
+	allowHeaders := w.Header().Get("Access-Control-Allow-Headers")
+	for _, want := range []string{"If-Match", "Idempotency-Key"} {
+		if !strings.Contains(allowHeaders, want) {
+			t.Fatalf("Access-Control-Allow-Headers = %q, missing %q", allowHeaders, want)
+		}
+	}
+	if methods := w.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(methods, "PUT") {
+		t.Fatalf("Access-Control-Allow-Methods = %q, missing PUT", methods)
+	}
 }
 
 func TestStandardRouterMethodAndPathSemantics(t *testing.T) {

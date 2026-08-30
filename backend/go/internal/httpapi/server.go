@@ -44,6 +44,7 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("POST /api/v1/plans", protect(http.HandlerFunc(s.createPlan)))
 	mux.Handle("GET /api/v1/plans", protect(http.HandlerFunc(s.listPlans)))
 	mux.Handle("GET /api/v1/plans/{id}", protect(http.HandlerFunc(s.getPlanDetail)))
+	mux.Handle("GET /api/v1/workflow-presets", protect(http.HandlerFunc(s.listWorkflowPresets)))
 	mux.Handle("POST /api/v1/worksets", protect(http.HandlerFunc(s.createWorkset)))
 	mux.Handle("GET /api/v1/worksets", protect(http.HandlerFunc(s.listWorksets)))
 	mux.Handle("GET /api/v1/worksets/{id}", protect(http.HandlerFunc(s.getWorkset)))

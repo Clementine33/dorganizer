@@ -66,12 +66,12 @@ function openLibrary(id: string) {
             媒体库
           </RouterLink>
           <RouterLink
-            to="/plans"
+            to="/worksets"
             class="mt-0.5 flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
             active-class="bg-sidebar-accent"
           >
             <ListMusic class="size-3.5" />
-            计划
+            工作集
           </RouterLink>
         </nav>
 

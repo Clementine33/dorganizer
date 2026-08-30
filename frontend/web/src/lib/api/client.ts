@@ -5,15 +5,26 @@ import type {
   ApiClientContract,
   ApiConfig,
   CreateLibraryInput,
-  CreatePlanInput,
+  CreateWorksetInput,
+  DraftResponse,
   Folder,
+  GenerationEvent,
+  GenerationView,
   HealthResponse,
   Library,
-  PlanInfo,
-  PlanResponse,
+  ListWorksetsParams,
+  RevisionDetailResponse,
+  RevisionListResponse,
   ScanEvent,
+  StartGenerationInput,
+  StartGenerationResponse,
   TreeNode,
   UpdateLibraryInput,
+  WorkflowInput,
+  Workset,
+  WorksetListResponse,
+  WorkflowPreset,
+  CurrentRevisionSummary,
 } from './types'
 
 interface ErrorEnvelope {
@@ -101,21 +112,98 @@ export class ApiClient implements ApiClientContract {
     return result.tree
   }
 
-  createPlan(input: CreatePlanInput): Promise<PlanResponse> {
-    // Plan generation is server-side work that can legitimately take longer
-    // than the read-path timeout; aborting here would surface a false failure
-    // and a retry would create a duplicate plan.
-    return this.request('/plans', { method: 'POST', body: input, timeoutMs: 60_000 })
+  // ==================== Workflow presets ====================
+
+  listWorkflowPresets(signal?: AbortSignal): Promise<WorkflowPreset[]> {
+    return this.request<{ presets: WorkflowPreset[] }>('/workflow-presets', { signal }).then((r) => r.presets)
   }
 
-  async listPlans(libraryId?: string, limit = 100, signal?: AbortSignal): Promise<PlanInfo[]> {
-    const query = new URLSearchParams({ limit: String(limit) })
-    if (libraryId) query.set('library_id', libraryId)
-    return (await this.request<{ plans: PlanInfo[] }>(`/plans?${query.toString()}`, { signal })).plans
+  // ==================== Worksets ====================
+
+  createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }> {
+    return this.request('/worksets', {
+      method: 'POST',
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
   }
 
-  getPlan(id: string, signal?: AbortSignal): Promise<PlanResponse> {
-    return this.request(`/plans/${encodeURIComponent(id)}`, { signal })
+  listWorksets(params: ListWorksetsParams = {}, signal?: AbortSignal): Promise<WorksetListResponse> {
+    const query = new URLSearchParams()
+    if (params.library_id) query.set('library_id', params.library_id)
+    if (params.feed) query.set('feed', params.feed)
+    if (params.cursor) query.set('cursor', params.cursor)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    const qs = query.toString()
+    return this.request(`/worksets${qs ? `?${qs}` : ''}`, { signal })
+  }
+
+  getWorkset(id: string, signal?: AbortSignal): Promise<Workset> {
+    return this.request(`/worksets/${encodeURIComponent(id)}`, { signal })
+  }
+
+  getWorksetDraft(id: string, signal?: AbortSignal): Promise<DraftResponse> {
+    return this.request(`/worksets/${encodeURIComponent(id)}/draft`, { signal })
+  }
+
+  saveWorksetDraft(id: string, workflow: WorkflowInput, ifMatchVersion: number): Promise<Workset> {
+    return this.request(`/worksets/${encodeURIComponent(id)}/draft`, {
+      method: 'PUT',
+      body: { workflow },
+      headers: { 'If-Match': String(ifMatchVersion) },
+    })
+  }
+
+  startGeneration(id: string, input: StartGenerationInput, idempotencyKey: string): Promise<StartGenerationResponse> {
+    return this.request(`/worksets/${encodeURIComponent(id)}/revisions`, {
+      method: 'POST',
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
+  }
+
+  getGeneration(worksetId: string, generationId: string, signal?: AbortSignal): Promise<GenerationView> {
+    return this.request(
+      `/worksets/${encodeURIComponent(worksetId)}/planning-sessions/${encodeURIComponent(generationId)}`,
+      { signal },
+    )
+  }
+
+  cancelGeneration(worksetId: string, generationId: string): Promise<GenerationView> {
+    return this.request(
+      `/worksets/${encodeURIComponent(worksetId)}/planning-sessions/${encodeURIComponent(generationId)}/cancel`,
+      { method: 'POST', body: {} },
+    )
+  }
+
+  listRevisions(worksetId: string, limit = 50, signal?: AbortSignal): Promise<CurrentRevisionSummary[]> {
+    return this.request<RevisionListResponse>(
+      `/worksets/${encodeURIComponent(worksetId)}/revisions?limit=${limit}`,
+      { signal },
+    ).then((r) => r.revisions)
+  }
+
+  getRevision(worksetId: string, planId: string, signal?: AbortSignal): Promise<RevisionDetailResponse> {
+    return this.request(
+      `/worksets/${encodeURIComponent(worksetId)}/revisions/${encodeURIComponent(planId)}`,
+      { signal },
+    )
+  }
+
+  async *streamGenerationEvents(
+    worksetId: string,
+    generationId: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<GenerationEvent> {
+    const response = await fetch(
+      this.url(`/worksets/${encodeURIComponent(worksetId)}/planning-sessions/${encodeURIComponent(generationId)}/events`),
+      { headers: this.headers(false), signal },
+    )
+    if (!response.ok) throw await this.toApiError(response)
+    if (!response.body) {
+      throw new ApiError(response.status, 'STREAM_UNAVAILABLE', 'Generation events response did not include a stream')
+    }
+    yield* parseSSEStream<GenerationEvent>(response.body)
   }
 
   private url(path: string): string {
@@ -138,7 +226,7 @@ export class ApiClient implements ApiClientContract {
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number; headers?: Record<string, string> } = {},
   ): Promise<T> {
     const controller = new AbortController()
     let removeAbort: (() => void) | null = null
@@ -167,12 +255,12 @@ export class ApiClient implements ApiClientContract {
 
   private async doRequest<T>(
     path: string,
-    options: { method?: string; body?: unknown },
+    options: { method?: string; body?: unknown; headers?: Record<string, string> },
     signal: AbortSignal,
   ): Promise<T> {
     const response = await fetch(this.url(path), {
       method: options.method ?? 'GET',
-      headers: this.headers(options.body !== undefined),
+      headers: { ...this.headers(options.body !== undefined), ...options.headers },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal,
     })

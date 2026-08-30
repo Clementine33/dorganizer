@@ -136,6 +136,14 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	// Review the nested immutable revision.
 	var rev struct {
 		PlanID   string `json:"plan_id"`
+		Roots    []struct {
+			RootIndex int    `json:"root_index"`
+			RootPath  string `json:"root_path"`
+		} `json:"roots"`
+		ComponentRoots []struct {
+			ComponentID string `json:"component_id"`
+			RootIndex   int    `json:"root_index"`
+		} `json:"component_roots"`
 		Workflow struct {
 			Summary struct {
 				SummaryReason string `json:"summary_reason"`
@@ -147,6 +155,23 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	}
 	if rev.Workflow.Summary.SummaryReason == "" {
 		t.Fatalf("revision missing summary_reason: %+v", rev)
+	}
+	// Every component must map to a valid planning root (stable ownership for
+	// batch grouping; albumA is root 0).
+	if len(rev.ComponentRoots) == 0 {
+		t.Fatalf("revision missing component_roots: %+v", rev)
+	}
+	rootIndexes := map[int]string{}
+	for _, r := range rev.Roots {
+		rootIndexes[r.RootIndex] = r.RootPath
+	}
+	for _, cr := range rev.ComponentRoots {
+		if _, ok := rootIndexes[cr.RootIndex]; !ok {
+			t.Fatalf("component %s maps to unknown root %d: %+v", cr.ComponentID, cr.RootIndex, rev.Roots)
+		}
+		if cr.ComponentID == "" {
+			t.Fatalf("component_roots contains empty component_id: %+v", rev.ComponentRoots)
+		}
 	}
 
 	// Unchanged generation returns created:false with the same revision.

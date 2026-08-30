@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiClientContract, ScanEvent } from '@/lib/api/types'
+import { apiStub } from '@/test/api-stub'
 import { useScanStore } from './scan'
 
 async function* events(items: ScanEvent[]): AsyncGenerator<ScanEvent> {
@@ -8,20 +9,7 @@ async function* events(items: ScanEvent[]): AsyncGenerator<ScanEvent> {
 }
 
 function apiWithScan(scanLibrary: ApiClientContract['scanLibrary']): ApiClientContract {
-  return {
-    getHealth: vi.fn(),
-    listLibraries: vi.fn(),
-    getLibrary: vi.fn(),
-    createLibrary: vi.fn(),
-    updateLibrary: vi.fn(),
-    deleteLibrary: vi.fn(),
-    scanLibrary,
-    listFolders: vi.fn(),
-    getFolderTree: vi.fn(),
-    getPlan: vi.fn(),
-    createPlan: vi.fn(),
-    listPlans: vi.fn(),
-  }
+  return apiStub({ scanLibrary })
 }
 
 describe('scan store', () => {

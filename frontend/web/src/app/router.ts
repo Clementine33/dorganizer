@@ -1,8 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LibrariesPage from '@/pages/LibrariesPage.vue'
 import FolderDetailPage from '@/pages/FolderDetailPage.vue'
-import PlansPage from '@/pages/PlansPage.vue'
-import PlanReviewPage from '@/pages/PlanReviewPage.vue'
+import WorksetsPage from '@/pages/WorksetsPage.vue'
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -15,14 +14,14 @@ export const router = createRouter({
       component: FolderDetailPage,
     },
     {
-      path: '/plans',
-      name: 'plans',
-      component: PlansPage,
+      path: '/worksets',
+      name: 'worksets',
+      component: WorksetsPage,
     },
     {
-      path: '/plans/:id',
-      name: 'plan-review',
-      component: PlanReviewPage,
+      path: '/worksets/:worksetId',
+      name: 'workset-detail',
+      component: WorksetsPage,
     },
   ],
 })

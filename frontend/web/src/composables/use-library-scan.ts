@@ -2,6 +2,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/vue-query'
 import { useApiClient } from '@/lib/api/client'
 import { refreshOrRemoveQueries } from '@/queries/cache-sync'
 import { queryKeys } from '@/queries/query-keys'
+import { sweepWorksetCaches } from '@/queries/worksets'
 import { useScanStore, type ScanStatus, type ScanTerminal } from '@/stores/scan'
 
 async function refreshLibraries(queryClient: QueryClient): Promise<void> {
@@ -43,9 +44,15 @@ export async function syncAfterScan(
   }
   // Completed scan, or a transport failure after events (may have committed):
   // refresh library metadata and the library's derived caches (active
-  // folders/trees refetch, inactive entries are dropped).
+  // folders/trees refetch, inactive entries are dropped). A committed scan
+  // also changes workset validation (stale is derived from the live
+  // inventory), so the workset domain is conservatively swept.
   if (status === 'completed' || (terminal !== 'event' && streamStarted)) {
-    await Promise.all([refreshLibraries(queryClient), refreshLibraryDerived(queryClient, libraryId)])
+    await Promise.all([
+      refreshLibraries(queryClient),
+      refreshLibraryDerived(queryClient, libraryId),
+      sweepWorksetCaches(queryClient),
+    ])
     return
   }
   // Confirmed cancel/error over SSE, or a transport terminal before any event:

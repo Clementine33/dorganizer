@@ -17,4 +17,19 @@ export const queryKeys = {
     list: (libraryId: string, limit = 100) => ['plans', 'list', libraryId, limit] as const,
     detail: (planId: string) => ['plans', 'detail', planId] as const,
   },
+  workflowPresets: {
+    list: () => ['workflow-presets', 'list'] as const,
+  },
+  worksets: {
+    all: () => ['worksets'] as const,
+    feedPrefix: () => ['worksets', 'feed'] as const,
+    feed: (filter: string, libraryId: string | null) =>
+      ['worksets', 'feed', filter, libraryId ?? ''] as const,
+    detail: (worksetId: string) => ['worksets', 'detail', worksetId] as const,
+    draft: (worksetId: string) => ['worksets', 'draft', worksetId] as const,
+    revisionsPrefix: (worksetId: string) => ['worksets', 'revisions', worksetId] as const,
+    revisionList: (worksetId: string) => ['worksets', 'revisions', worksetId, 'list'] as const,
+    revision: (worksetId: string, planId: string) =>
+      ['worksets', 'revisions', worksetId, planId] as const,
+  },
 } as const

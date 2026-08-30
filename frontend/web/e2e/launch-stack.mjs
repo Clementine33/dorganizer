@@ -74,13 +74,16 @@ let vite = null
 let teardownStarted = false
 
 function launchVite(httpPort) {
-  const pnpmCmd = isWin ? 'pnpm.cmd' : 'pnpm'
-  vite = spawn(pnpmCmd, ['exec', 'vite', '--', '--port', '5173', '--strictPort'], {
+  // Launch vite directly via its bin entry (node node_modules/vite/bin/vite.js)
+  // instead of a pnpm shim: Windows .cmd/.exe shims behind cmd.exe have
+  // unreliable argument pass-through (the --host 127.0.0.1 flag was dropped
+  // in practice, leaving vite bound to ::1 only, which the IPv4 readiness
+  // probe can never reach). A direct node spawn needs no shell and no shim.
+  const viteBin = path.join(webDir, 'node_modules', 'vite', 'bin', 'vite.js')
+  vite = spawn(process.execPath, [viteBin, '--port', '5173', '--strictPort', '--host', '127.0.0.1'], {
     cwd: webDir,
     env: { ...process.env, VITE_API_BASE: `http://127.0.0.1:${httpPort}/api/v1` },
     stdio: 'inherit',
-    // On Windows .cmd shims need a shell; POSIX runs pnpm directly.
-    shell: isWin,
   })
   vite.on('exit', (code) => {
     console.log(`[e2e] Vite exited (code ${code}) — tearing down`)
@@ -148,9 +151,9 @@ function teardown(exitCode = 0) {
     process.exit(exitCode)
   }
 
-  // Vite first: on Windows it was spawned through a .cmd shim (shell: true),
-  // so killing its pid leaves the real Vite process running; taskkill /T takes
-  // the whole tree, and cleanup proceeds only after the tree is gone so tmp
+  // Vite first: it is now a plain node child (no shim), but on Windows
+  // killing the launcher pid would still orphan it, so taskkill /T takes the
+  // whole tree; cleanup proceeds only after the tree is gone so tmp
   // dirs/state are not removed while children still hold them.
   const stopBackend = () => {
     if (backend.exitCode !== null) return finish()

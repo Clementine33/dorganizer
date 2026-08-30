@@ -2,6 +2,7 @@ package workset
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -213,8 +214,17 @@ func seedDraft(worksetID string, now time.Time) sqlite.WorksetDraft {
 	}
 }
 
+// newToken produces a sortable, collision-resistant identifier: a nanosecond
+// timestamp plus a random suffix. The timestamp alone collides when two
+// aggregates are created within the same nanosecond (e.g. test loops), which
+// surfaced as a spurious idempotency-key conflict on the primary key.
 func newToken() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	var rnd [4]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		// Fall back to the timestamp-only form rather than failing creation.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
 }
 
 func hashJSON(b []byte) string {
@@ -232,13 +242,59 @@ func mustJSON(v any) string {
 
 // ==================== Views ====================
 
-// ListWorksets lists worksets newest-first (keyset on updated_at, id). The
-// returned cursor is for the next page, "" when the page is short.
+// ListWorksets lists worksets newest-first (keyset on updated_at, id). When a
+// feed filter is set, rows are classified post-hoc and the page is filled by
+// scanning successive keyset batches until `limit` matching views are found
+// or the feed is exhausted — so `next_cursor` always refers to the position
+// after the last returned row and pagination stays correct across pages.
+// The returned cursor is for the next page, "" when the feed is exhausted.
 func (s *serviceImpl) ListWorksets(ctx context.Context, q ListQuery) ([]*WorksetView, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
+	if q.Feed != "" && !ValidFeed(q.Feed) {
+		return nil, "", NewError(ErrKindInvalidArgument, "INVALID_FEED_FILTER", "unknown feed filter", nil)
+	}
 	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultPageLimit
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+	if q.Feed == "" || q.Feed == FeedAll {
+		views, next, err := s.listPage(ctx, q, limit, q.Cursor)
+		return views, next, err
+	}
+
+	filtered := make([]*WorksetView, 0, limit)
+	cursor := q.Cursor
+	for {
+		page, next, err := s.listPage(ctx, q, limit, cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, v := range page {
+			if feedMatches(q.Feed, v) {
+				filtered = append(filtered, v)
+			}
+		}
+		// Stop when the page is full or the feed has no more rows.
+		if len(filtered) >= limit || next == "" {
+			if len(filtered) > limit {
+				filtered = filtered[:limit]
+			}
+			return filtered, next, nil
+		}
+		cursor = next
+	}
+}
+
+// listPage fetches one keyset batch (limit = pageSize, starting at cursor)
+// and converts rows to views. An empty cursor starts at the feed head.
+func (s *serviceImpl) listPage(ctx context.Context, q ListQuery, pageSize int, cursor string) ([]*WorksetView, string, error) {
+	q.Cursor = cursor
+	limit := pageSize
 	if limit <= 0 {
 		limit = DefaultPageLimit
 	}
@@ -265,6 +321,43 @@ func (s *serviceImpl) ListWorksets(ctx context.Context, q ListQuery) ([]*Workset
 		views = append(views, v)
 	}
 	return views, nextCursor, nil
+}
+
+// feedMatches implements the mutually exclusive, error-first classification.
+func feedMatches(feed string, v *WorksetView) bool {
+	if feedErrory(v) {
+		return feed == FeedError
+	}
+	if v.PlanningState == PlanningUnplanned || v.PlanningState == PlanningNeedsPlanning || v.PlanningState == PlanningPlanning {
+		return feed == FeedPending
+	}
+	return feed == FeedNormal
+}
+
+// feedErrory reports whether the workset belongs to the error bucket: orphaned,
+// stale current revision, blocked components/roots, or a failed/interrupted
+// latest generation.
+func feedErrory(v *WorksetView) bool {
+	if v.PlanningState == PlanningOrphaned {
+		return true
+	}
+	if v.CurrentRevision != nil {
+		if v.CurrentRevision.Stale != nil && *v.CurrentRevision.Stale {
+			return true
+		}
+		if v.CurrentRevision.ValidationState == ValidationStale || v.CurrentRevision.ValidationState == ValidationUnavailable {
+			return true
+		}
+		if v.CurrentRevision.BlockedCount > 0 {
+			return true
+		}
+	}
+	if v.LatestGeneration != nil {
+		if v.LatestGeneration.Status == "failed" || v.LatestGeneration.Status == "interrupted" {
+			return true
+		}
+	}
+	return false
 }
 
 // GetWorkset returns the authoritative aggregate detail view.
@@ -846,6 +939,14 @@ func (s *serviceImpl) GetRevision(ctx context.Context, worksetID, planID string)
 		})
 	}
 	out.Roots = roots
+	for _, c := range detail.Components {
+		out.ComponentRoots = append(out.ComponentRoots, ComponentRootRef{
+			StepIndex:      c.StepIndex,
+			ComponentIndex: c.ComponentIndex,
+			ComponentID:    c.ComponentID,
+			RootIndex:      c.RootIndex,
+		})
+	}
 	out.Workflow = toPlanResponse(detail)
 	return out, nil
 }

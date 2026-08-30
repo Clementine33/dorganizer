@@ -154,12 +154,31 @@ type CreateResult struct {
 	Created bool
 }
 
+// Feed filter values for the workset feed. Categories are mutually exclusive
+// and user-facing; error wins over pending, pending wins over normal.
+const (
+	FeedAll     = "all"
+	FeedPending = "pending"
+	FeedNormal  = "normal"
+	FeedError   = "error"
+)
+
+// ValidFeed reports whether s is a recognized feed filter value.
+func ValidFeed(s string) bool {
+	switch s {
+	case FeedAll, FeedPending, FeedNormal, FeedError:
+		return true
+	}
+	return false
+}
+
 // ListQuery is the feed listing input.
 type ListQuery struct {
 	Cursor          string // "<updated_at RFC3339Nano>_<workset_id>"
 	Limit           int
 	LibraryID       string
 	IncludeOrphaned bool
+	Feed            string // "" or "all" means no filtering
 }
 
 // RenameRequest is the PATCH /worksets/{id} payload.
@@ -225,6 +244,18 @@ type RevisionView struct {
 	CreatedAt     time.Time
 	Workflow      planusecase.Response
 	Roots         []RootValidation
+	// ComponentRoots maps each persisted component to its planning root. The
+	// reconcile ComponentOutcome JSON intentionally carries no root identity,
+	// so the HTTP layer exposes this ownership table for batch grouping.
+	ComponentRoots []ComponentRootRef
+}
+
+// ComponentRootRef is the stable component-to-root ownership of a revision.
+type ComponentRootRef struct {
+	StepIndex      int    `json:"step_index"`
+	ComponentIndex int    `json:"component_index"`
+	ComponentID    string `json:"component_id"`
+	RootIndex      int    `json:"root_index"`
 }
 
 // RootValidation is per-root validation of a revision snapshot.

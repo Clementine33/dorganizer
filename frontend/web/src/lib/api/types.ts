@@ -64,52 +64,298 @@ export interface ScanEvent {
   data: ScanEventData
 }
 
-export interface CreatePlanInput {
+// ==================== Workflow presets ====================
+
+export interface QualitySpec {
+  kind: string
+  bitrate?: number
+}
+
+export interface AudioOutputSpec {
+  codec: string
+  quality?: QualitySpec
+}
+
+export interface PolicyProfile {
+  lossless?: AudioOutputSpec | null
+  encoded?: AudioOutputSpec | null
+}
+
+/** Wire shape of a resolved reconcile policy (inline policy sources). */
+export interface ResolvedPolicy {
+  schema_version: number
+  classifier: { name: string; version: number }
+  matched: PolicyProfile
+  unmatched: PolicyProfile
+}
+
+export interface WorkflowPreset {
+  name: string
+  version: number
+  policy: ResolvedPolicy
+}
+
+export interface WorkflowPresetListResponse {
+  presets: WorkflowPreset[]
+}
+
+// ==================== Worksets ====================
+
+export type PlanningState = 'unplanned' | 'planned' | 'needs_planning' | 'planning' | 'orphaned'
+export type MemberState = 'planned' | 'pending' | 'missing'
+export type GenerationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled' | 'interrupted'
+
+export interface LibraryRef {
   library_id: string
-  folder_ids?: string[]
-  source_files?: string[]
-  plan_type?: 'slim' | 'prune' | 'single_delete' | 'single_convert'
-  target_format?: string
-  prune_matched_excluded?: boolean
+  name: string
+  root_path: string
 }
 
-export interface PlanOperation {
-  type: string
-  source_path: string
-  target_path: string
-}
-
-export interface PlanFolderError {
+export interface WorksetMember {
+  folder_id: string
   folder_path: string
-  code: string
-  message: string
-  retryable: boolean
+  folder_name: string
+  rel_path: string
+  state: MemberState
 }
 
-export interface PlanSummary {
+export interface CurrentRevisionSummary {
+  plan_id: string
+  revision_index: number
+  created_at: string
+  status: string
+  summary_reason: string
+  blocked_count: number
+  validation_state: string
+  stale: boolean | null
+}
+
+export interface GenerationProgress {
+  generation_id: string
+  status: GenerationStatus
+  total_roots: number
+  completed_roots: number
+  current_root: string
+  error_count: number
+}
+
+export interface GenerationSummary {
+  generation_id: string
+  status: GenerationStatus
+  error_code: string
+  error_message: string
+  finished_at: string
+}
+
+export interface Workset {
+  workset_id: string
+  title: string
+  version: number
+  library: LibraryRef | null
+  planning_state: PlanningState
+  current_revision: CurrentRevisionSummary | null
+  active_generation: GenerationProgress | null
+  latest_generation: GenerationSummary | null
+  members: WorksetMember[]
+  updated_at: string
+  created_at: string
+}
+
+export interface WorksetListResponse {
+  worksets: Workset[]
+  next_cursor?: string
+}
+
+export interface CreateWorksetInput {
+  library_id: string
+  title: string
+  folder_ids: string[]
+}
+
+export type WorksetFeedFilter = 'all' | 'pending' | 'normal' | 'error'
+
+export interface ListWorksetsParams {
+  library_id?: string
+  feed?: WorksetFeedFilter
+  cursor?: string
+  limit?: number
+}
+
+// ==================== Workflow draft ====================
+
+export type PolicySourceWire =
+  | { kind: 'preset'; name: string; version: number }
+  | { kind: 'inline'; policy: ResolvedPolicy }
+
+export interface WorkflowStepInput {
+  step_type: string
+  policy: PolicySourceWire
+}
+
+export interface WorkflowInput {
+  schema_version: number
+  steps: WorkflowStepInput[]
+}
+
+export interface DraftResponse {
+  workset_id: string
+  version: number
+  workflow_schema_version: number
+  workflow: WorkflowInput
+  updated_at: string
+}
+
+// ==================== Planning sessions ====================
+
+export interface GenerationView {
+  generation_id: string
+  workset_id: string
+  status: GenerationStatus
+  total_roots: number
+  completed_roots: number
+  current_root: string
+  error_count: number
+  revision_id: string
+  error_code: string
+  error_message: string
+  started_at: string
+  finished_at: string
+  created_at: string
+}
+
+export interface RevisionListResponse {
+  revisions: CurrentRevisionSummary[]
+}
+
+export type StartGenerationResponse =
+  | { created: true; generation: GenerationView }
+  | { created: false; revision: CurrentRevisionSummary }
+
+export interface StartGenerationInput {
+  expected_draft_version?: number
+}
+
+// Generation SSE events (session_snapshot payload is a GenerationView).
+export type GenerationEvent =
+  | { type: 'session_snapshot'; data: GenerationView }
+  | { type: 'progress'; data: { generation_id: string; total_roots: number; completed_roots: number; current_root: string; error_count: number } }
+  | { type: 'completed'; data: { generation_id: string; revision_id: string } }
+  | { type: 'failed'; data: { generation_id: string; error_code: string; error_message: string } }
+  | { type: 'canceled'; data: { generation_id: string } }
+  | { type: 'interrupted'; data: { generation_id: string } }
+  | { type: 'error'; data: { code: string; message: string } }
+
+// ==================== Revision detail (immutable review) ====================
+
+export interface RootValidation {
+  root_index: number
+  root_path: string
+  root_status: string
+  root_error_code: string
+  root_error_message: string
+  stale: boolean
+  inventory_fingerprint: string
+  entry_count: number
+}
+
+export interface ComponentRootRef {
+  step_index: number
+  component_index: number
+  component_id: string
+  root_index: number
+}
+
+export interface FileDecision {
+  path: string
+  resolution: string
+  reason_code?: string
+  message?: string
+  target_path?: string
+}
+
+export interface VariantDecision {
+  stem: string
+  decisions: FileDecision[]
+}
+
+export interface LaneDecision {
+  lane: string
+  decision: string
+  reason_code?: string
+  message?: string
+}
+
+export interface WorkflowOperation {
+  kind: string
+  phase: string
+  component_id: string
+  variant_stem: string
+  source_path: string
+  target_path?: string
+  depends_on?: string[]
+}
+
+export interface ComponentOutcome {
+  component_id: string
+  partition: 'matched' | 'unmatched'
+  status: 'ok' | 'blocked'
+  reason_code?: string
+  message?: string
+  lanes: LaneDecision[]
+  variant_decisions: VariantDecision[]
+  operations: WorkflowOperation[]
+  projected_inventory: string[]
+  files: { path: string; size: number; mtime: number }[]
+}
+
+export interface StepSummary {
+  component_count: number
+  blocked_count: number
   operation_count: number
   error_count: number
-  total_count: number
-  actionable_count: number
-  summary_reason: 'ACTIONABLE' | 'NO_MATCH' | 'GLOBAL_SHORT_CIRCUIT'
+  summary_reason: string
 }
 
-export interface PlanResponse {
+export interface ClassifierSnapshot {
+  name: string
+  version: number
+  pattern?: string
+  hash?: string
+}
+
+export interface WorkflowStepDetail {
+  step_type: string
+  step_index: number
+  status: string
+  policy: unknown
+  policy_hash: string
+  classifier: ClassifierSnapshot
+  summary: StepSummary
+  components: ComponentOutcome[]
+}
+
+export interface WorkflowPlanDetail {
   plan_id: string
   snapshot_token: string
   root_path: string
-  summary: PlanSummary
-  operations: PlanOperation[]
-  errors: PlanFolderError[]
-  successful_folders: string[]
+  plan_kind: string
+  summary: {
+    operation_count: number
+    error_count: number
+    total_count: number
+    actionable_count: number
+    summary_reason: string
+  }
+  steps: WorkflowStepDetail[]
 }
 
-export interface PlanInfo {
+export interface RevisionDetailResponse {
   plan_id: string
-  root_path: string
-  plan_type: string
-  status: string
+  revision_index: number
   created_at: string
+  roots: RootValidation[]
+  component_roots: ComponentRootRef[]
+  workflow: WorkflowPlanDetail
 }
 
 export interface ApiClientContract {
@@ -122,7 +368,16 @@ export interface ApiClientContract {
   scanLibrary(id: string, signal: AbortSignal, rootPath?: string): AsyncIterable<ScanEvent>
   listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]>
   getFolderTree(libraryId: string, folderId: string, signal?: AbortSignal): Promise<TreeNode>
-  createPlan(input: CreatePlanInput): Promise<PlanResponse>
-  listPlans(libraryId?: string, limit?: number, signal?: AbortSignal): Promise<PlanInfo[]>
-  getPlan(id: string, signal?: AbortSignal): Promise<PlanResponse>
+  listWorkflowPresets(signal?: AbortSignal): Promise<WorkflowPreset[]>
+  createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }>
+  listWorksets(params?: ListWorksetsParams, signal?: AbortSignal): Promise<WorksetListResponse>
+  getWorkset(id: string, signal?: AbortSignal): Promise<Workset>
+  getWorksetDraft(id: string, signal?: AbortSignal): Promise<DraftResponse>
+  saveWorksetDraft(id: string, workflow: WorkflowInput, ifMatchVersion: number): Promise<Workset>
+  startGeneration(id: string, input: StartGenerationInput, idempotencyKey: string): Promise<StartGenerationResponse>
+  getGeneration(worksetId: string, generationId: string, signal?: AbortSignal): Promise<GenerationView>
+  cancelGeneration(worksetId: string, generationId: string): Promise<GenerationView>
+  streamGenerationEvents(worksetId: string, generationId: string, signal: AbortSignal): AsyncIterable<GenerationEvent>
+  listRevisions(worksetId: string, limit?: number, signal?: AbortSignal): Promise<CurrentRevisionSummary[]>
+  getRevision(worksetId: string, planId: string, signal?: AbortSignal): Promise<RevisionDetailResponse>
 }

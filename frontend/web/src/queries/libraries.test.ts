@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiClientContract, Folder, Library, PlanResponse, TreeNode } from '@/lib/api/types'
+import type { ApiClientContract, Folder, Library, TreeNode } from '@/lib/api/types'
+import { apiStub as sharedApiStub } from '@/test/api-stub'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
 import { createTestQueryClient } from '@/test/query-client'
 import { queryKeys } from './query-keys'
@@ -8,7 +9,6 @@ import {
   deleteLibraryMutationOptions,
   updateLibraryMutationOptions,
 } from './libraries'
-import { createPlanMutationOptions } from './plans'
 
 const libA: Library = {
   id: 'lib-a',
@@ -39,21 +39,7 @@ const treeRoot: TreeNode = {
 }
 
 function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract {
-  return {
-    getHealth: vi.fn(),
-    listLibraries: vi.fn(),
-    getLibrary: vi.fn(),
-    createLibrary: vi.fn(),
-    updateLibrary: vi.fn(),
-    deleteLibrary: vi.fn(),
-    scanLibrary: vi.fn(),
-    listFolders: vi.fn(),
-    getFolderTree: vi.fn(),
-    getPlan: vi.fn(),
-    createPlan: vi.fn(),
-    listPlans: vi.fn(),
-    ...overrides,
-  }
+  return sharedApiStub(overrides)
 }
 
 function seedDerivedCaches(client: ReturnType<typeof createTestQueryClient>) {
@@ -141,11 +127,10 @@ describe('library mutation cache synchronization', () => {
     })
   })
 
-  it('delete removes the row and the library-derived cache subtrees and scoped plan list', async () => {
+  it('delete removes the row and the library-derived cache subtrees', async () => {
     const client = createTestQueryClient()
     client.setQueryData(queryKeys.libraries.list(), [libA, newLibrary])
     seedDerivedCaches(client)
-    client.setQueryData(queryKeys.plans.list('lib-a', 100), [])
     const api = apiStub({ deleteLibrary: vi.fn().mockResolvedValue(undefined) })
     const options = deleteLibraryMutationOptions(api, client)
 
@@ -159,44 +144,5 @@ describe('library mutation cache synchronization', () => {
         client.getQueryData(queryKeys.libraries.tree('lib-a', rootPathIdentityKey(libA.root_path), 'folder-a')),
       ).toBeUndefined()
     })
-    expect(client.getQueryData(queryKeys.plans.list('lib-a', 100))).toBeUndefined()
-  })
-
-  it('delete removes plan details created in-session even when the scoped list cache is gone', async () => {
-    const plan: PlanResponse = {
-      plan_id: 'plan-1',
-      snapshot_token: 'snap-1',
-      root_path: 'D:\\Music',
-      summary: {
-        operation_count: 0,
-        error_count: 0,
-        total_count: 0,
-        actionable_count: 0,
-        summary_reason: 'ACTIONABLE',
-      },
-      operations: [],
-      errors: [],
-      successful_folders: [],
-    }
-    const client = createTestQueryClient()
-    const api = apiStub({
-      deleteLibrary: vi.fn().mockResolvedValue(undefined),
-      createPlan: vi.fn().mockResolvedValue(plan),
-    })
-    // Simulate a session-created plan: the detail is seeded and the scoped
-    // list entry is dropped (no active observer), so the usual
-    // scoped-list sweep cannot find the plan's detail afterwards.
-    const createOptions = createPlanMutationOptions(api, client)
-    await createOptions.mutationFn({ library_id: 'lib-a', folder_ids: ['folder-a'] })
-    createOptions.onSuccess?.({ ...plan }, { library_id: 'lib-a', folder_ids: ['folder-a'] }, undefined)
-    expect(client.getQueryData(queryKeys.plans.detail('plan-1'))).toBeDefined()
-    expect(client.getQueryData(queryKeys.plans.list('lib-a', 100))).toBeUndefined()
-
-    const options = deleteLibraryMutationOptions(api, client)
-    await options.mutationFn('lib-a')
-    options.onSuccess?.(undefined, 'lib-a', undefined)
-
-    // The plan->library mapping must still purge the durable detail cache.
-    expect(client.getQueryData(queryKeys.plans.detail('plan-1'))).toBeUndefined()
   })
 })

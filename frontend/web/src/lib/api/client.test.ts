@@ -53,7 +53,7 @@ describe('ApiClient', () => {
     expect(captured[0].aborted).toBe(true)
   })
 
-  it('passes the signal through listFolders, getFolderTree, listPlans and getPlan', async () => {
+  it('passes the signal through listFolders and getFolderTree', async () => {
     const captured: (AbortSignal | undefined)[] = []
     const fetchMock = mockFetch((_input, init) => {
       captured.push(init?.signal ?? undefined)
@@ -71,19 +71,43 @@ describe('ApiClient', () => {
     const calls = [
       client.listFolders('lib-1', controller.signal),
       client.getFolderTree('lib-1', 'folder-1', controller.signal),
-      client.listPlans('lib-1', 100, controller.signal),
-      client.getPlan('plan-1', controller.signal),
     ]
     controller.abort()
 
     for (const call of calls) {
       await expect(call).rejects.toMatchObject({ name: 'AbortError' })
     }
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const signal of captured) {
       expect(signal).toBeInstanceOf(AbortSignal)
       expect((signal as AbortSignal).aborted).toBe(true)
     }
+  })
+
+  it('sends If-Match and Idempotency-Key headers on workset writes', async () => {
+    const fetchMock = mockFetch(async (input, init) => {
+      const path = String(input)
+      const headers = new Headers(init?.headers)
+      if (path.endsWith('/draft')) {
+        expect(headers.get('If-Match')).toBe('3')
+        return okJson({ workset_id: 'ws-1', version: 4, planning_state: 'planned', members: [] })
+      }
+      if (path.endsWith('/revisions')) {
+        expect(headers.get('Idempotency-Key')).toBe('key-1')
+        return okJson({ created: true, generation: { generation_id: 'gen-1', status: 'queued' } })
+      }
+      if (path.endsWith('/worksets') && init?.method === 'POST') {
+        expect(headers.get('Idempotency-Key')).toBe('create-key')
+        return okJson({ workset: { workset_id: 'ws-1', members: [] }, created: true })
+      }
+      return okJson({})
+    })
+
+    const client = createClient()
+    await client.saveWorksetDraft('ws-1', { schema_version: 1, steps: [] }, 3)
+    await client.startGeneration('ws-1', { expected_draft_version: 3 }, 'key-1')
+    await client.createWorkset({ library_id: 'lib-1', title: 't', folder_ids: ['f-1'] }, 'create-key')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   it('always applies a management signal even when none is provided', async () => {

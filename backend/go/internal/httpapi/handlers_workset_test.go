@@ -162,3 +162,128 @@ func TestWorksetAuthRequired(t *testing.T) {
 		t.Fatalf("no auth status = %d, want 401", w.Code)
 	}
 }
+
+// TestWorkflowPresetsList verifies the read-only preset registry endpoint and
+// the round-trip contract the frontend depends on: a preset policy fetched
+// here, submitted as an inline policy source, must be accepted by SaveDraft.
+func TestWorkflowPresetsList(t *testing.T) {
+	h, repo := newWorksetServer(t)
+	seedLibrary(t, repo)
+	seedFolder(t, repo, "lib-1")
+
+	w := req(t, h, http.MethodGet, "/api/v1/workflow-presets", testToken, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("presets status = %d", w.Code)
+	}
+	var list struct {
+		Presets []struct {
+			Name    string `json:"name"`
+			Version int    `json:"version"`
+			Policy  struct {
+				SchemaVersion int `json:"schema_version"`
+				Classifier    struct {
+					Name    string `json:"name"`
+					Version int    `json:"version"`
+				} `json:"classifier"`
+				Matched struct {
+					Lossless *struct {
+						Codec   string `json:"codec"`
+						Quality *struct {
+							Kind    string `json:"kind"`
+							Bitrate int    `json:"bitrate"`
+						} `json:"quality"`
+					} `json:"lossless"`
+					Encoded *struct {
+						Codec   string `json:"codec"`
+						Quality *struct {
+							Kind    string `json:"kind"`
+							Bitrate int    `json:"bitrate"`
+						} `json:"quality"`
+					} `json:"encoded"`
+				} `json:"matched"`
+			} `json:"policy"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode presets: %v", err)
+	}
+	if len(list.Presets) != 3 {
+		t.Fatalf("presets = %d, want 3 (balanced/compact/archive)", len(list.Presets))
+	}
+	byName := map[string]int{}
+	for i, p := range list.Presets {
+		byName[p.Name] = i
+		if p.Policy.SchemaVersion != 1 {
+			t.Fatalf("preset %s schema_version = %d", p.Name, p.Policy.SchemaVersion)
+		}
+		if p.Policy.Classifier.Name != "effect-direction" || p.Policy.Classifier.Version != 1 {
+			t.Fatalf("preset %s classifier = %+v", p.Name, p.Policy.Classifier)
+		}
+	}
+	if _, ok := byName["balanced"]; !ok {
+		t.Fatalf("balanced preset missing: %+v", byName)
+	}
+
+	// Round-trip: submit the balanced preset's resolved policy as an inline
+	// policy source for a workset draft; the backend must accept it.
+	balanced := list.Presets[byName["balanced"]]
+	inlinePolicy := map[string]any{
+		"schema_version": balanced.Policy.SchemaVersion,
+		"classifier": map[string]any{
+			"name":    balanced.Policy.Classifier.Name,
+			"version": balanced.Policy.Classifier.Version,
+		},
+		"matched":   balancedPolicyProfile(balanced.Policy.Matched),
+		"unmatched": map[string]any{},
+	}
+	// Fetch the full policy JSON generically so unmatched is preserved too.
+	var raw struct {
+		Presets []struct {
+			Name   string          `json:"name"`
+			Policy json.RawMessage `json:"policy"`
+		} `json:"presets"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &raw)
+	var fullPolicy map[string]any
+	for _, p := range raw.Presets {
+		if p.Name == "balanced" {
+			if err := json.Unmarshal(p.Policy, &fullPolicy); err != nil {
+				t.Fatalf("decode balanced policy: %v", err)
+			}
+		}
+	}
+	inlinePolicy = fullPolicy
+
+	ws := req(t, h, http.MethodPost, "/api/v1/worksets", testToken, map[string]any{"library_id": "lib-1", "title": "t", "folder_ids": []string{"f-a"}})
+	if ws.Code != http.StatusCreated {
+		t.Fatalf("create workset: %d", ws.Code)
+	}
+	var created struct {
+		Workset struct {
+			WorksetID string `json:"workset_id"`
+		} `json:"workset"`
+	}
+	_ = json.Unmarshal(ws.Body.Bytes(), &created)
+
+	saveBody := map[string]any{"workflow": map[string]any{
+		"schema_version": 1,
+		"steps": []any{map[string]any{
+			"step_type": "reconcile_audio_outputs",
+			"policy":    map[string]any{"kind": "inline", "policy": inlinePolicy},
+		}},
+	}}
+	save := reqWithIfMatch(t, h, http.MethodPut, "/api/v1/worksets/"+created.Workset.WorksetID+"/draft", testToken, saveBody, "1")
+	if save.Code != http.StatusOK {
+		t.Fatalf("inline preset round-trip save = %d, body=%s", save.Code, save.Body.String())
+	}
+}
+
+// balancedPolicyProfile converts the decoded matched profile back into a
+// generic map for the inline submission.
+func balancedPolicyProfile(p any) map[string]any {
+	m, ok := p.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	return m
+}

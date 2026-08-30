@@ -247,11 +247,17 @@ func (s *Server) listWorksets(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("status") == "active" {
 		includeOrphaned = false
 	}
+	feed := r.URL.Query().Get("feed")
+	if feed != "" && !worksetusecase.ValidFeed(feed) {
+		writeError(w, http.StatusBadRequest, "INVALID_FEED_FILTER", "feed must be one of all|pending|normal|error")
+		return
+	}
 	views, next, err := svc.ListWorksets(r.Context(), worksetusecase.ListQuery{
 		Cursor:          r.URL.Query().Get("cursor"),
 		Limit:           limit,
 		LibraryID:       r.URL.Query().Get("library_id"),
 		IncludeOrphaned: includeOrphaned,
+		Feed:            feed,
 	})
 	if err != nil {
 		writeWorksetError(w, err)
@@ -490,12 +496,13 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		PlanID        string                   `json:"plan_id"`
-		RevisionIndex int                      `json:"revision_index"`
-		CreatedAt     string                   `json:"created_at"`
-		Roots         []rootValidationResponse `json:"roots"`
-		Workflow      workflowPlanResponse     `json:"workflow"`
-	}{PlanID: rv.PlanID, RevisionIndex: rv.RevisionIndex, CreatedAt: rv.CreatedAt.UTC().Format(timeFormatJSON), Roots: toRoots(rv.Roots), Workflow: toWorkflowPlanResponse(rv.Workflow)})
+		PlanID         string                            `json:"plan_id"`
+		RevisionIndex  int                               `json:"revision_index"`
+		CreatedAt      string                            `json:"created_at"`
+		Roots          []rootValidationResponse          `json:"roots"`
+		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
+		Workflow       workflowPlanResponse              `json:"workflow"`
+	}{PlanID: rv.PlanID, RevisionIndex: rv.RevisionIndex, CreatedAt: rv.CreatedAt.UTC().Format(timeFormatJSON), Roots: toRoots(rv.Roots), ComponentRoots: rv.ComponentRoots, Workflow: toWorkflowPlanResponse(rv.Workflow)})
 }
 
 // ==================== helpers ====================
