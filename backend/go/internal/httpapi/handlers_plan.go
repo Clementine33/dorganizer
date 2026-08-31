@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/pathnorm"
@@ -121,6 +122,15 @@ func rawJSON(v any) json.RawMessage {
 	return json.RawMessage(b)
 }
 
+// splitTagSnapshot reverses the persisted NUL-joined tag snapshot into a JSON
+// array. An empty snapshot marshals as [] rather than [""].
+func splitTagSnapshot(snapshot string) []string {
+	if snapshot == "" {
+		return []string{}
+	}
+	return strings.Split(snapshot, "\x00")
+}
+
 // workflow response assembly keeps component outcomes as raw JSON snapshots so
 // create and detail payloads agree byte-for-byte with the persisted outcome.
 
@@ -153,11 +163,9 @@ func toWorkflowPlanResponse(resp planusecase.Response) workflowPlanResponse {
 			Policy:     rawJSON(step.Policy),
 			PolicyHash: step.PolicyHash,
 			Classifier: rawJSON(struct {
-				Name    string `json:"name"`
-				Version int    `json:"version"`
-				Pattern string `json:"pattern"`
-				Hash    string `json:"hash"`
-			}{step.Classifier.Name, step.Classifier.Version, step.Classifier.Pattern, step.Classifier.Hash}),
+				Tags []string `json:"tags"`
+				Hash string   `json:"hash"`
+			}{step.Classifier.Tags, step.Classifier.Hash}),
 			Summary:    rawJSON(step.Summary),
 			Components: components,
 		})
@@ -312,22 +320,16 @@ func resolveStepSummary(steps []sqlite.WorkflowStepRecord) planSummaryResponse {
 	return out
 }
 
-// parsePolicySource decodes the tagged policy source into the usecase shape.
+// parsePolicySource decodes the inline-only policy source into the usecase shape.
 func parsePolicySource(req policySourceRequest) (planusecase.PolicySource, error) {
-	switch req.Kind {
-	case "preset":
-		if req.Name == "" || req.Version <= 0 {
-			return planusecase.PolicySource{}, errors.New("preset policy requires name and version")
-		}
-		return planusecase.PolicySource{Kind: "preset", PresetName: req.Name, PresetVersion: req.Version}, nil
-	case "inline":
-		policy, err := parseInlinePolicy(req.Policy)
-		if err != nil {
-			return planusecase.PolicySource{}, err
-		}
-		return planusecase.PolicySource{Kind: "inline", InlinePolicy: &policy}, nil
+	if req.Kind != "inline" {
+		return planusecase.PolicySource{}, errors.New("unsupported policy source kind; use inline")
 	}
-	return planusecase.PolicySource{}, errors.New("unsupported policy source kind; use preset or inline")
+	policy, err := parseInlinePolicy(req.Policy)
+	if err != nil {
+		return planusecase.PolicySource{}, err
+	}
+	return planusecase.PolicySource{Kind: "inline", InlinePolicy: &policy}, nil
 }
 
 func parseInlinePolicy(raw json.RawMessage) (reconcile.Policy, error) {
@@ -503,11 +505,9 @@ func (s *Server) writeWorkflowPlanDetail(w http.ResponseWriter, planID string) {
 			Policy:     json.RawMessage(step.PolicyJSON),
 			PolicyHash: step.PolicyHash,
 			Classifier: rawJSON(struct {
-				Name    string `json:"name"`
-				Version int    `json:"version"`
-				Pattern string `json:"pattern"`
-				Hash    string `json:"hash"`
-			}{step.ClassifierName, step.ClassifierVersion, step.ClassifierPattern, step.ClassifierHash}),
+				Tags []string `json:"tags"`
+				Hash string   `json:"hash"`
+			}{splitTagSnapshot(step.ClassifierTags), step.ClassifierHash}),
 			Summary:    json.RawMessage(step.StepSummaryJSON),
 			Components: components,
 		})

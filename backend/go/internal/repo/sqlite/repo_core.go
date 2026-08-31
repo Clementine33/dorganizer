@@ -387,17 +387,80 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 // refactor. Plan rows and their per-plan/execute intermediate state are
 // intermediate-state only: every legacy plan and execute session is purged in
 // one transaction, and the plans table is rebuilt with the new plan_kind /
-// workflow_schema_version columns. Libraries, entries, scans, classifiers and
-// error_events are preserved.
+// workflow_schema_version columns. Libraries, entries and error_events are
+// preserved.
 func migratePlansWorkflowSchema(db *sql.DB) error {
 	hasWorkflow, err := tableHasColumn(db, "plans", "workflow_schema_version")
 	if err != nil {
 		return err
 	}
-	if hasWorkflow {
+	if !hasWorkflow {
+		if err := migrateWorkflowSchemaInner(db); err != nil {
+			return err
+		}
+	}
+	return migratePolicySlotsSchema(db)
+}
+
+// migratePolicySlotsSchema converges every schema onto the fixed-three
+// policy_slots table and the trimmed plan_workflow_steps columns. The old
+// named/versioned classifier registry has no successor: legacy databases are
+// rebuilt per the no-compatibility agreement (fresh dev data was accepted).
+func migratePolicySlotsSchema(db *sql.DB) error {
+	// Fresh databases already have the new plan_workflow_steps (no
+	// policy_source_kind column) from initSchema.
+	hasSourceKind, err := tableHasColumn(db, "plan_workflow_steps", "policy_source_kind")
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS policy_slots (
+		slot_index INTEGER PRIMARY KEY CHECK (slot_index BETWEEN 1 AND 3),
+		name TEXT NOT NULL DEFAULT '',
+		policy_json TEXT,
+		updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("policy slots migration: %w", err)
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`); err != nil {
+		return fmt.Errorf("policy slots seed: %w", err)
+	}
+	if !hasSourceKind {
 		return nil
 	}
+	// Legacy workflow schema: plan snapshots carry classifier name/version and
+	// preset-source metadata. Compat was declined; drop and rebuild the table
+	// (snapshots are intermediate state, same rationale as the plans purge).
+	if _, err := db.Exec(`DROP TABLE plan_workflow_steps`); err != nil {
+		return fmt.Errorf("policy slots migration drop: %w", err)
+	}
+	steps := []string{
+		`CREATE TABLE plan_workflow_steps (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			step_type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ok',
+			policy_schema_version INTEGER NOT NULL DEFAULT 0,
+			policy_json TEXT NOT NULL DEFAULT '',
+			policy_hash TEXT NOT NULL DEFAULT '',
+			classifier_pattern TEXT NOT NULL DEFAULT '',
+			classifier_hash TEXT NOT NULL DEFAULT '',
+			step_summary_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, step_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
+		`DROP TABLE IF EXISTS classifiers`,
+		`DROP INDEX IF EXISTS idx_classifiers_version`,
+	}
+	for _, stmt := range steps {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("policy slots migration rebuild: %w", err)
+		}
+	}
+	return nil
+}
 
+func migrateWorkflowSchemaInner(db *sql.DB) error {
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		return err
 	}
@@ -445,28 +508,14 @@ func migratePlansWorkflowSchema(db *sql.DB) error {
 		)`,
 		`DROP TABLE plans`,
 		`ALTER TABLE plans_new RENAME TO plans`,
-		`CREATE TABLE IF NOT EXISTS classifiers (
-			name TEXT NOT NULL,
-			version INTEGER NOT NULL,
-			kind TEXT NOT NULL DEFAULT 'regex',
-			pattern TEXT NOT NULL DEFAULT '',
-			hash TEXT NOT NULL DEFAULT '',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (name, version)
-		)`,
 		`CREATE TABLE IF NOT EXISTS plan_workflow_steps (
 			plan_id TEXT NOT NULL,
 			step_index INTEGER NOT NULL,
 			step_type TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'ok',
-			policy_source_kind TEXT NOT NULL DEFAULT '',
-			policy_source_name TEXT NOT NULL DEFAULT '',
-			policy_source_version INTEGER NOT NULL DEFAULT 0,
 			policy_schema_version INTEGER NOT NULL DEFAULT 0,
 			policy_json TEXT NOT NULL DEFAULT '',
 			policy_hash TEXT NOT NULL DEFAULT '',
-			classifier_name TEXT NOT NULL DEFAULT '',
-			classifier_version INTEGER NOT NULL DEFAULT 0,
 			classifier_pattern TEXT NOT NULL DEFAULT '',
 			classifier_hash TEXT NOT NULL DEFAULT '',
 			step_summary_json TEXT NOT NULL DEFAULT '',
@@ -502,7 +551,6 @@ func migratePlansWorkflowSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_classifiers_version ON classifiers(name, version)`,
 	}
 	for _, stmt := range steps {
 		if _, err := db.Exec(stmt); err != nil {
@@ -752,33 +800,29 @@ CREATE TABLE IF NOT EXISTS execute_sessions (
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
--- Immutable named/versioned classifiers. Editing a rule produces a new
--- version; deleted versions referenced by plans stay in this table.
-CREATE TABLE IF NOT EXISTS classifiers (
-    name TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'regex',
-    pattern TEXT NOT NULL DEFAULT '',
-    hash TEXT NOT NULL DEFAULT '',
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (name, version)
+-- Three fixed global policy slots. The count is an invariant of the storage
+-- itself: rows 1..3 exist from initialization, and there is no insert/delete
+-- API. name is the editable display name; policy_json is NULL while the slot
+-- is unconfigured.
+CREATE TABLE IF NOT EXISTS policy_slots (
+    slot_index INTEGER PRIMARY KEY CHECK (slot_index BETWEEN 1 AND 3),
+    name TEXT NOT NULL DEFAULT '',
+    policy_json TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Workflow plan steps: resolved policy/classifier snapshots plus the step
--- summary. Policy snapshots are immutable per plan.
+-- summary. Policy snapshots are immutable per plan. classifier_pattern stores
+-- the canonical normalized tag snapshot (newline-joined) and classifier_hash
+-- the tag-set hash.
 CREATE TABLE IF NOT EXISTS plan_workflow_steps (
     plan_id TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ok',
-    policy_source_kind TEXT NOT NULL DEFAULT '',
-    policy_source_name TEXT NOT NULL DEFAULT '',
-    policy_source_version INTEGER NOT NULL DEFAULT 0,
     policy_schema_version INTEGER NOT NULL DEFAULT 0,
     policy_json TEXT NOT NULL DEFAULT '',
     policy_hash TEXT NOT NULL DEFAULT '',
-    classifier_name TEXT NOT NULL DEFAULT '',
-    classifier_version INTEGER NOT NULL DEFAULT 0,
     classifier_pattern TEXT NOT NULL DEFAULT '',
     classifier_hash TEXT NOT NULL DEFAULT '',
     step_summary_json TEXT NOT NULL DEFAULT '',
@@ -980,7 +1024,6 @@ CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id);
-CREATE INDEX IF NOT EXISTS idx_classifiers_version ON classifiers(name, version);
 
 -- Error event indexes
 CREATE INDEX IF NOT EXISTS idx_errors_root ON error_events(root_path);
@@ -991,6 +1034,12 @@ CREATE INDEX IF NOT EXISTS idx_exec_plan ON execute_sessions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_exec_status ON execute_sessions(status);
 `
 	_, err := db.Exec(schemaIndexes)
+	if err != nil {
+		return err
+	}
+	// Fixed three policy slots exist from initialization (storage-level
+	// cardinality invariant; there is no insert/delete API).
+	_, err = db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`)
 	return err
 }
 

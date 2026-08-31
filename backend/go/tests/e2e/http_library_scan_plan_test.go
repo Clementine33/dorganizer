@@ -122,10 +122,10 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	if albumFolderID == "" {
 		t.Fatalf("folders response missing albumA: %+v", folders.Folders)
 	}
-	// POST /api/v1/plans with the workflow contract: balanced preset over the
-	// albumA planning root. albumA holds flac+mp3 pairs with unknown bitrates,
-	// so the balanced profile (wav + mp3-320) is actionable (lossless and
-	// encoded lanes rebuild from the observed flac source).
+	// POST /api/v1/plans with the workflow contract: inline literal-tag policy
+	// over the albumA planning root. albumA holds flac+mp3 pairs with unknown
+	// bitrates, so the balanced profile (wav + mp3-320) is actionable (lossless
+	// and encoded lanes rebuild from the observed flac source).
 	planReq := map[string]any{
 		"library_id": lib.ID,
 		"folder_ids": []string{albumFolderID},
@@ -133,7 +133,7 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 			"schema_version": 1,
 			"steps": []any{map[string]any{
 				"step_type": "reconcile_audio_outputs",
-				"policy":    map[string]any{"kind": "preset", "name": "balanced", "version": 1},
+				"policy":    inlineWorkflowPolicy(),
 			}},
 		},
 	}
@@ -214,11 +214,35 @@ type backendProc struct {
 	token    string
 }
 
+// inlineWorkflowPolicy is the inline literal-tag policy payload (matched and
+// unmatched both want wav + mp3@320), replacing the removed balanced preset.
+func inlineWorkflowPolicy() map[string]any {
+	profile := map[string]any{
+		"lossless": map[string]any{"codec": "wav"},
+		"encoded":  map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}},
+	}
+	return map[string]any{
+		"kind": "inline",
+		"policy": map[string]any{
+			"schema_version":  1,
+			"classifier_tags": []string{"SEなし"},
+			"matched":         profile,
+			"unmatched":       profile,
+		},
+	}
+}
+
 // startBackendBinary launches the backend with ONSEI_DATA_DIR set and a
 // never-closed stdin pipe (the backend cancels on stdin EOF, so the pipe keeps
 // it alive for the whole test), then parses the ready handshake.
 func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendProc {
 	t.Helper()
+	// Seed the classifier tag config: no compiled-in defaults remain, so a
+	// fresh data dir gets its literal tags from config.json.
+	cfgPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"prune":{"literal_tags":["SEなし"]}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	stdinR, stdinW := io.Pipe()
 	cmd := exec.Command(binPath)
 	cmd.Env = append(os.Environ(),

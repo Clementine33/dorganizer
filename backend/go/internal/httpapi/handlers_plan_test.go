@@ -18,6 +18,24 @@ import (
 // Helpers
 // =============================================================================
 
+// inlinePolicyFixture is the inline workflow policy payload replacing the
+// removed compiled presets: literal tags + wav/mp3@320 both partitions.
+func inlinePolicyFixture() map[string]any {
+	profile := map[string]any{
+		"lossless": map[string]any{"codec": "wav"},
+		"encoded":  map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}},
+	}
+	return map[string]any{
+		"kind": "inline",
+		"policy": map[string]any{
+			"schema_version":   1,
+			"classifier_tags":  []string{"SEなし"},
+			"matched":          profile,
+			"unmatched":        profile,
+		},
+	}
+}
+
 // stubPlanService is a controllable plan usecase stub for mapping tests.
 type stubPlanService struct {
 	planFn func(ctx context.Context, req planusecase.Request) (planusecase.Response, error)
@@ -148,11 +166,7 @@ func TestCreateWorkflowPlanWithFolderIDs(t *testing.T) {
 			"schema_version": 1,
 			"steps": []any{map[string]any{
 				"step_type": "reconcile_audio_outputs",
-				"policy": map[string]any{
-					"kind":    "preset",
-					"name":    "balanced",
-					"version": 1,
-				},
+				"policy": inlinePolicyFixture(),
 			}},
 		},
 	}, nil)
@@ -220,7 +234,7 @@ func TestCreateWorkflowPlanSchemaErrors(t *testing.T) {
 			name: "bad schema version",
 			body: map[string]any{
 				"library_id": libID, "folder_ids": []string{folder.ID},
-				"workflow": map[string]any{"schema_version": 99, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}}},
+				"workflow": map[string]any{"schema_version": 99, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}}},
 			},
 			code: "INVALID_WORKFLOW_SCHEMA", status: http.StatusBadRequest,
 		},
@@ -228,17 +242,17 @@ func TestCreateWorkflowPlanSchemaErrors(t *testing.T) {
 			name: "unsupported step",
 			body: map[string]any{
 				"library_id": libID, "folder_ids": []string{folder.ID},
-				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "rename_files", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}}},
+				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "rename_files", "policy": inlinePolicyFixture()}}},
 			},
 			code: "UNSUPPORTED_STEP", status: http.StatusBadRequest,
 		},
 		{
-			name: "unknown preset",
+			name: "unsupported policy source",
 			body: map[string]any{
 				"library_id": libID, "folder_ids": []string{folder.ID},
 				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "nope", "version": 1}}}},
 			},
-			code: "UNKNOWN_PRESET", status: http.StatusBadRequest,
+			code: "INVALID_POLICY_SOURCE", status: http.StatusBadRequest,
 		},
 	}
 	for _, tc := range cases {
@@ -265,7 +279,7 @@ func TestCreateWorkflowPlanRequiresScope(t *testing.T) {
 		"library_id": libID,
 		"workflow": map[string]any{
 			"schema_version": 1,
-			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}},
+			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}},
 		},
 	}, nil)
 	if w.Code != http.StatusBadRequest {
@@ -328,7 +342,7 @@ func TestCreatePlanServiceNotConfigured(t *testing.T) {
 		"library_id": libID,
 		"workflow": map[string]any{
 			"schema_version": 1,
-			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "balanced", "version": 1}}},
+			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}},
 		},
 	}, nil)
 	if w.Code != http.StatusInternalServerError {
@@ -350,7 +364,7 @@ func TestGetWorkflowPlanDetailRoundTrip(t *testing.T) {
 			"schema_version": 1,
 			"steps": []any{map[string]any{
 				"step_type": "reconcile_audio_outputs",
-				"policy":    map[string]any{"kind": "preset", "name": "balanced", "version": 1},
+				"policy":    inlinePolicyFixture(),
 			}},
 		},
 	}

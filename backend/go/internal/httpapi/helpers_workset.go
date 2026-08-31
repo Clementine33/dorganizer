@@ -108,82 +108,21 @@ type workflowResponse struct {
 func toWorkflow(req workflowRequest) planusecase.Workflow {
 	steps := make([]planusecase.WorkflowStep, 0, len(req.Steps))
 	for _, s := range req.Steps {
-		var inline *reconcilePolicy
-		if s.Policy.Kind == "inline" {
-			var p reconcilePolicy
-			if len(s.Policy.Policy) > 0 {
-				_ = json.Unmarshal(s.Policy.Policy, &p)
-			}
+		var inline *reconcile.Policy
+		if s.Policy.Kind == "inline" && len(s.Policy.Policy) > 0 {
+			var p reconcile.Policy
+			_ = json.Unmarshal(s.Policy.Policy, &p)
 			inline = &p
 		}
 		steps = append(steps, planusecase.WorkflowStep{
 			StepType: s.StepType,
 			Policy: planusecase.PolicySource{
-				Kind:          s.Policy.Kind,
-				PresetName:    s.Policy.Name,
-				PresetVersion: s.Policy.Version,
-				InlinePolicy:  inlineToReconcile(inline),
+				Kind:         s.Policy.Kind,
+				InlinePolicy: inline,
 			},
 		})
 	}
 	return planusecase.Workflow{SchemaVersion: req.SchemaVersion, Steps: steps}
-}
-
-// reconcilePolicy mirrors reconcile.Policy for JSON round-trips.
-type reconcilePolicy struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Classifier    reconcilePolicyClassifier `json:"classifier"`
-	Matched       reconcilePolicyProfile    `json:"matched"`
-	Unmatched     reconcilePolicyProfile    `json:"unmatched"`
-}
-
-type reconcilePolicyClassifier struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
-}
-
-type reconcilePolicyProfile struct {
-	Lossless *reconcileOutputSpec `json:"lossless,omitempty"`
-	Encoded  *reconcileOutputSpec `json:"encoded,omitempty"`
-}
-
-type reconcileOutputSpec struct {
-	Codec   string       `json:"codec"`
-	Quality *qualitySpec `json:"quality,omitempty"`
-}
-
-type qualitySpec struct {
-	Kind    string `json:"kind"`
-	Bitrate int    `json:"bitrate,omitempty"`
-}
-
-func inlineToReconcile(p *reconcilePolicy) *reconcile.Policy {
-	if p == nil {
-		return nil
-	}
-	return &reconcile.Policy{
-		SchemaVersion: p.SchemaVersion,
-		Classifier:    reconcile.ClassifierRef{Name: p.Classifier.Name, Version: p.Classifier.Version},
-		Matched: reconcile.DesiredProfile{
-			Lossless: specToReconcile(p.Matched.Lossless),
-			Encoded:  specToReconcile(p.Matched.Encoded),
-		},
-		Unmatched: reconcile.DesiredProfile{
-			Lossless: specToReconcile(p.Unmatched.Lossless),
-			Encoded:  specToReconcile(p.Unmatched.Encoded),
-		},
-	}
-}
-
-func specToReconcile(s *reconcileOutputSpec) *reconcile.AudioOutputSpec {
-	if s == nil {
-		return nil
-	}
-	out := &reconcile.AudioOutputSpec{Codec: reconcile.Codec(s.Codec)}
-	if s.Quality != nil {
-		out.Quality = &reconcile.Quality{Kind: reconcile.QualityKind(s.Quality.Kind), Bitrate: s.Quality.Bitrate}
-	}
-	return out
 }
 
 // toWorkflowResponse converts the persisted draft workflow to its JSON shape.
@@ -191,7 +130,7 @@ func toWorkflowResponse(wf planusecase.Workflow) workflowResponse {
 	steps := make([]workflowStepRequest, 0, len(wf.Steps))
 	for _, s := range wf.Steps {
 		req := workflowStepRequest{StepType: s.StepType}
-		req.Policy = policySourceRequest{Kind: s.Policy.Kind, Name: s.Policy.PresetName, Version: s.Policy.PresetVersion}
+		req.Policy = policySourceRequest{Kind: s.Policy.Kind}
 		if s.Policy.InlinePolicy != nil {
 			b, _ := json.Marshal(s.Policy.InlinePolicy)
 			req.Policy.Policy = b

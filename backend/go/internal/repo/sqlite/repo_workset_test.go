@@ -247,7 +247,6 @@ func TestWorksetRevisionLifecycle(t *testing.T) {
 		WorksetsVersion: 1,
 		Steps: []WorkflowStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
-			PolicySourceKind: "preset", PolicySourceName: "balanced", PolicySourceVersion: 1,
 		}},
 		Roots: []WorkflowRootRecord{
 			{RootIndex: 0, RootPath: "/music/albumA", RootIdentity: "albumA", InventoryFingerprint: "fp-a", EntryCount: 2},

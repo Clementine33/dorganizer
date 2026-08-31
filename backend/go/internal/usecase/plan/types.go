@@ -33,14 +33,11 @@ type WorkflowStep struct {
 	Policy   PolicySource `json:"policy"`
 }
 
-// PolicySource addresses an immutable named/versioned preset or an inline
-// policy. Both forms resolve to the same reconcile.Policy; overrides are
-// never merged.
+// PolicySource is the workflow step's policy payload. Only the inline form is
+// valid: policies are complete snapshots, never references to global state.
 type PolicySource struct {
-	Kind          string            `json:"kind"` // "preset" | "inline"
-	PresetName    string            `json:"name,omitempty"`
-	PresetVersion int               `json:"version,omitempty"`
-	InlinePolicy  *reconcile.Policy `json:"policy,omitempty"`
+	Kind         string            `json:"kind"` // "inline"
+	InlinePolicy *reconcile.Policy `json:"policy,omitempty"`
 }
 
 // SingleAction is the retained explicit single-file path (independent from

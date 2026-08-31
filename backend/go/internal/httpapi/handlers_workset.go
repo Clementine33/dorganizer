@@ -128,9 +128,12 @@ type generationViewResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
-// revisionListResponse is revision history payload.
+// revisionListResponse is revision history payload. NextBeforeIndex is the
+// keyset cursor for the next (older) page; 0 means the oldest revision is
+// included in this page.
 type revisionListResponse struct {
-	Revisions []currentRevisionResponse `json:"revisions"`
+	Revisions       []currentRevisionResponse `json:"revisions"`
+	NextBeforeIndex int                       `json:"next_before_index"`
 }
 
 func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
@@ -485,16 +488,16 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 		limit = 200
 	}
 	before := queryInt(r, "before_index", 0)
-	revs, err := svc.ListRevisions(r.Context(), r.PathValue("id"), before, limit)
+	result, err := svc.ListRevisions(r.Context(), r.PathValue("id"), before, limit)
 	if err != nil {
 		writeWorksetError(w, err)
 		return
 	}
-	out := make([]currentRevisionResponse, 0, len(revs))
-	for _, rv := range revs {
+	out := make([]currentRevisionResponse, 0, len(result.Revisions))
+	for _, rv := range result.Revisions {
 		out = append(out, *toCurrentRevisionResponse(rv))
 	}
-	writeJSON(w, http.StatusOK, revisionListResponse{Revisions: out})
+	writeJSON(w, http.StatusOK, revisionListResponse{Revisions: out, NextBeforeIndex: result.NextBeforeIndex})
 }
 
 // getRevision handles GET /api/v1/worksets/{id}/revisions/{planId}.

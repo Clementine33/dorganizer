@@ -55,8 +55,8 @@ func Reconcile(in ReconcileInput) (ReconcileResult, error) {
 	if err := ValidatePolicy(in.Policy); err != nil {
 		return ReconcileResult{}, err
 	}
-	if in.Classifier.Regex == nil {
-		return ReconcileResult{}, fmt.Errorf("classifier %s@%d is not resolved", in.Policy.Classifier.Name, in.Policy.Classifier.Version)
+	if in.Classifier.Matcher == nil {
+		return ReconcileResult{}, fmt.Errorf("classifier is not resolved")
 	}
 	root := strings.TrimSuffix(in.RootPath, "/")
 	if root == "" || root == "." {

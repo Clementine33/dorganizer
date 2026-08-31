@@ -7,44 +7,102 @@ import (
 	"time"
 )
 
-// ==================== Classifiers ====================
+// ==================== Policy slots ====================
 
-// ClassifierRow is one immutable named/versioned classifier definition.
-type ClassifierRow struct {
-	Name      string
-	Version   int
-	Kind      string
-	Pattern   string
-	Hash      string
-	CreatedAt time.Time
+// PolicySlotRow is one of the three fixed global policy slots. PolicyJSON is
+// empty while the slot is unconfigured.
+type PolicySlotRow struct {
+	SlotIndex  int
+	Name       string
+	PolicyJSON string
+	UpdatedAt  time.Time
 }
 
-// EnsureClassifier inserts a classifier definition when the version does not
-// already exist. Existing versions are never mutated.
-func (r *Repository) EnsureClassifier(row ClassifierRow) error {
-	_, err := r.db.Exec(`
-		INSERT OR IGNORE INTO classifiers (name, version, kind, pattern, hash, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, row.Name, row.Version, row.Kind, row.Pattern, row.Hash, row.CreatedAt.Format(timeFormat))
-	return err
+// GetPolicySlots returns slots 1..3 in order; missing rows materialize as
+// empty slots so the fixed cardinality holds even against a hand-truncated
+// table.
+func (r *Repository) GetPolicySlots() ([]*PolicySlotRow, error) {
+	rows, err := r.db.Query(`
+		SELECT slot_index, name, COALESCE(policy_json, ''), COALESCE(updated_at, '')
+		FROM policy_slots ORDER BY slot_index
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byIndex := map[int]*PolicySlotRow{}
+	var maxSeen int
+	for rows.Next() {
+		var slot PolicySlotRow
+		var updatedAt string
+		if err := rows.Scan(&slot.SlotIndex, &slot.Name, &slot.PolicyJSON, &updatedAt); err != nil {
+			return nil, err
+		}
+		slot.UpdatedAt = parseTimestamp(updatedAt)
+		byIndex[slot.SlotIndex] = &slot
+		if slot.SlotIndex > maxSeen {
+			maxSeen = slot.SlotIndex
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if maxSeen < 3 {
+		maxSeen = 3
+	}
+	out := make([]*PolicySlotRow, 0, maxSeen)
+	for i := 1; i <= maxSeen; i++ {
+		if s, ok := byIndex[i]; ok {
+			out = append(out, s)
+		} else {
+			out = append(out, &PolicySlotRow{SlotIndex: i})
+		}
+	}
+	return out, nil
 }
 
-// LoadClassifier fetches an immutable classifier definition.
-func (r *Repository) LoadClassifier(name string, version int) (*ClassifierRow, error) {
-	var row ClassifierRow
-	var createdAt string
+// GetPolicySlot fetches one slot by index; nil when out of range.
+func (r *Repository) GetPolicySlot(slotIndex int) (*PolicySlotRow, error) {
+	if slotIndex < 1 || slotIndex > 3 {
+		return nil, nil
+	}
+	var slot PolicySlotRow
+	var updatedAt string
 	err := r.db.QueryRow(`
-		SELECT name, version, kind, pattern, hash, created_at
-		FROM classifiers WHERE name = ? AND version = ?
-	`, name, version).Scan(&row.Name, &row.Version, &row.Kind, &row.Pattern, &row.Hash, &createdAt)
+		SELECT slot_index, name, COALESCE(policy_json, ''), COALESCE(updated_at, '')
+		FROM policy_slots WHERE slot_index = ?
+	`, slotIndex).Scan(&slot.SlotIndex, &slot.Name, &slot.PolicyJSON, &updatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+			return &PolicySlotRow{SlotIndex: slotIndex}, nil
 		}
 		return nil, err
 	}
-	row.CreatedAt = parseTimestamp(createdAt)
-	return &row, nil
+	slot.UpdatedAt = parseTimestamp(updatedAt)
+	return &slot, nil
+}
+
+// UpdatePolicySlot overwrites an existing slot's name and policy. Rows.Count
+// must be exactly 1; a zero affected count means the slot row is missing,
+// which violates the storage invariant and surfaces as an error.
+func (r *Repository) UpdatePolicySlot(slotIndex int, name, policyJSON string) error {
+	if slotIndex < 1 || slotIndex > 3 {
+		return fmt.Errorf("policy slot index %d outside 1..3", slotIndex)
+	}
+	res, err := r.db.Exec(`
+		UPDATE policy_slots SET name = ?, policy_json = ?, updated_at = ? WHERE slot_index = ?
+	`, name, policyJSON, time.Now().Format(timeFormat), slotIndex)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("policy slot %d row missing (storage invariant violated)", slotIndex)
+	}
+	return nil
 }
 
 // ==================== Workflow plan persistence ====================
@@ -54,15 +112,10 @@ type WorkflowStepRecord struct {
 	StepIndex           int
 	StepType            string
 	Status              string
-	PolicySourceKind    string
-	PolicySourceName    string
-	PolicySourceVersion int
 	PolicySchemaVersion int
 	PolicyJSON          string
 	PolicyHash          string
-	ClassifierName      string
-	ClassifierVersion   int
-	ClassifierPattern   string
+	ClassifierTags      string // canonical normalized tags snapshot, "\x00"-joined
 	ClassifierHash      string
 	StepSummaryJSON     string
 }
@@ -162,13 +215,11 @@ func InsertWorkflowPlanTx(
 	for _, s := range steps {
 		if _, err := tx.Exec(`
 			INSERT INTO plan_workflow_steps
-			(plan_id, step_index, step_type, status, policy_source_kind, policy_source_name, policy_source_version,
-			 policy_schema_version, policy_json, policy_hash, classifier_name, classifier_version,
-			 classifier_pattern, classifier_hash, step_summary_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, planID, s.StepIndex, s.StepType, s.Status, s.PolicySourceKind, s.PolicySourceName, s.PolicySourceVersion,
-			s.PolicySchemaVersion, s.PolicyJSON, s.PolicyHash, s.ClassifierName, s.ClassifierVersion,
-			s.ClassifierPattern, s.ClassifierHash, s.StepSummaryJSON); err != nil {
+			(plan_id, step_index, step_type, status,
+			 policy_schema_version, policy_json, policy_hash, classifier_pattern, classifier_hash, step_summary_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, planID, s.StepIndex, s.StepType, s.Status,
+			s.PolicySchemaVersion, s.PolicyJSON, s.PolicyHash, s.ClassifierTags, s.ClassifierHash, s.StepSummaryJSON); err != nil {
 			return fmt.Errorf("insert workflow step: %w", err)
 		}
 	}
@@ -235,9 +286,8 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	detail := &WorkflowPlanDetail{Plan: p}
 
 	stepRows, err := r.db.Query(`
-		SELECT step_index, step_type, status, policy_source_kind, policy_source_name, policy_source_version,
-		       policy_schema_version, policy_json, policy_hash, classifier_name, classifier_version,
-		       classifier_pattern, classifier_hash, step_summary_json
+		SELECT step_index, step_type, status,
+		       policy_schema_version, policy_json, policy_hash, classifier_pattern, classifier_hash, step_summary_json
 		FROM plan_workflow_steps WHERE plan_id = ? ORDER BY step_index
 	`, planID)
 	if err != nil {
@@ -246,9 +296,8 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	defer stepRows.Close()
 	for stepRows.Next() {
 		var s WorkflowStepRecord
-		if err := stepRows.Scan(&s.StepIndex, &s.StepType, &s.Status, &s.PolicySourceKind, &s.PolicySourceName, &s.PolicySourceVersion,
-			&s.PolicySchemaVersion, &s.PolicyJSON, &s.PolicyHash, &s.ClassifierName, &s.ClassifierVersion,
-			&s.ClassifierPattern, &s.ClassifierHash, &s.StepSummaryJSON); err != nil {
+		if err := stepRows.Scan(&s.StepIndex, &s.StepType, &s.Status,
+			&s.PolicySchemaVersion, &s.PolicyJSON, &s.PolicyHash, &s.ClassifierTags, &s.ClassifierHash, &s.StepSummaryJSON); err != nil {
 			return nil, err
 		}
 		detail.Steps = append(detail.Steps, s)

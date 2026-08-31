@@ -106,6 +106,14 @@ type RevisionSummary struct {
 	Stale           *bool  // nil when validation_state == unavailable
 }
 
+// RevisionListResult is one page of revision history plus its keyset cursor.
+// NextBeforeIndex is the revision_index of the last row of this page; a value
+// of 0 means the page reached the oldest revision (no more pages).
+type RevisionListResult struct {
+	Revisions       []*RevisionSummary
+	NextBeforeIndex int
+}
+
 // GenerationProgress is root-level progress of an active session.
 type GenerationProgress struct {
 	GenerationID   string
@@ -292,7 +300,7 @@ type Service interface {
 	GetGeneration(ctx context.Context, worksetID, generationID string) (*GenerationView, error)
 	CancelGeneration(ctx context.Context, worksetID, generationID string) (*GenerationView, error)
 	Subscribe(ctx context.Context, worksetID, generationID string, emit func(event string, data any) error) error
-	ListRevisions(ctx context.Context, worksetID string, beforeIndex, limit int) ([]*RevisionSummary, error)
+	ListRevisions(ctx context.Context, worksetID string, beforeIndex, limit int) (*RevisionListResult, error)
 	GetRevision(ctx context.Context, worksetID, planID string) (*RevisionView, error)
 }
 

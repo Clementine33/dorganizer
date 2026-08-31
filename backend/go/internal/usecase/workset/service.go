@@ -7,10 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -110,7 +113,7 @@ func (s *serviceImpl) CreateWorkset(ctx context.Context, req CreateRequest) (*Cr
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	draft := seedDraft(ws.ID, now)
+	draft := s.seedDraft(ws.ID, now)
 	rows := make([]sqlite.WorksetMember, 0, len(members))
 	for i, m := range members {
 		rows = append(rows, sqlite.WorksetMember{
@@ -203,8 +206,32 @@ func validateIdemKey(key string) error {
 	return nil
 }
 
-func seedDraft(worksetID string, now time.Time) sqlite.WorksetDraft {
-	wfJSON := `{"schema_version":1,"steps":[{"step_type":"reconcile_audio_outputs","policy":{"kind":"preset","name":"balanced","version":1}}]}`
+// seedDraft builds the initial editable draft: one reconcile step with a
+// complete inline policy snapshot. Tag literals are copied from config.json's
+// prune.literal_tags (empty when unconfigured); output profiles default to
+// wav + mp3@320 so a new workset is immediately usable. The snapshot is
+// self-contained: later config or slot changes never alter this draft.
+func (s *serviceImpl) seedDraft(worksetID string, now time.Time) sqlite.WorksetDraft {
+	policy := reconcile.Policy{
+		SchemaVersion:  1,
+		ClassifierTags: loadPruneLiteralTags(s.configDir),
+		Matched: reconcile.DesiredProfile{
+			Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
+			Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+		},
+		Unmatched: reconcile.DesiredProfile{
+			Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
+			Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+		},
+	}
+	wf := planusecase.Workflow{
+		SchemaVersion: planusecase.WorkflowSchemaVersion,
+		Steps: []planusecase.WorkflowStep{{
+			StepType: planusecase.StepTypeReconcileAudio,
+			Policy:   planusecase.PolicySource{Kind: "inline", InlinePolicy: &policy},
+		}},
+	}
+	wfJSON := mustJSON(wf)
 	return sqlite.WorksetDraft{
 		WorksetID:             worksetID,
 		WorkflowSchemaVersion: 1,
@@ -212,6 +239,22 @@ func seedDraft(worksetID string, now time.Time) sqlite.WorksetDraft {
 		DraftHash:             hashJSON([]byte(wfJSON)),
 		UpdatedAt:             now,
 	}
+}
+
+// loadPruneLiteralTags reads the maintained initial literal tag list from
+// config.json (prune.literal_tags). A missing/unreadable file yields an empty
+// editable set — there is deliberately no compiled-in fallback.
+func loadPruneLiteralTags(configDir string) []string {
+	cfgPath := filepath.Join(configDir, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return nil
+	}
+	var cfg appconfig.AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	return reconcile.NormalizeTags(cfg.Prune.LiteralTags)
 }
 
 // newToken produces a sortable, collision-resistant identifier: a nanosecond
@@ -655,7 +698,10 @@ func workflowToJSON(wf planusecase.Workflow) planusecase.Workflow {
 	return wf
 }
 
-// validateWorkflow accepts only schema v1 with exactly the supported step.
+// validateWorkflow accepts only schema v1 with exactly the supported step and
+// a complete inline policy. The full reconcile.ValidatePolicy check applies
+// here: both draft save and generation reject incomplete policies, because a
+// draft is only saveable when it is an executable configuration.
 func validateWorkflow(wf planusecase.Workflow) error {
 	if wf.SchemaVersion != planusecase.WorkflowSchemaVersion {
 		return NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW_SCHEMA", fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion), nil)
@@ -663,10 +709,12 @@ func validateWorkflow(wf planusecase.Workflow) error {
 	if len(wf.Steps) != 1 || wf.Steps[0].StepType != planusecase.StepTypeReconcileAudio {
 		return NewError(ErrKindInvalidArgument, "UNSUPPORTED_STEP", "schema v1 supports only the reconcile_audio_outputs step", nil)
 	}
-	switch wf.Steps[0].Policy.Kind {
-	case "preset", "inline":
-	default:
-		return NewError(ErrKindInvalidArgument, "INVALID_POLICY_SOURCE", fmt.Sprintf("unsupported policy source kind %q", wf.Steps[0].Policy.Kind), nil)
+	policy := wf.Steps[0].Policy
+	if policy.Kind != "inline" || policy.InlinePolicy == nil {
+		return NewError(ErrKindInvalidArgument, "INVALID_POLICY_SOURCE", "workflow policy must be a complete inline policy", nil)
+	}
+	if err := reconcile.ValidatePolicy(*policy.InlinePolicy); err != nil {
+		return NewError(ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), nil)
 	}
 	return nil
 }
@@ -855,9 +903,9 @@ func (s *serviceImpl) CancelGeneration(ctx context.Context, worksetID, generatio
 
 // ==================== Revisions ====================
 
-// ListRevisions returns revision summaries newest-first with keyset on
-// revision_index.
-func (s *serviceImpl) ListRevisions(ctx context.Context, worksetID string, beforeIndex, limit int) ([]*RevisionSummary, error) {
+// ListRevisions returns one page of revision summaries newest-first with a
+// keyset on revision_index plus the next-page cursor.
+func (s *serviceImpl) ListRevisions(ctx context.Context, worksetID string, beforeIndex, limit int) (*RevisionListResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -896,7 +944,11 @@ func (s *serviceImpl) ListRevisions(ctx context.Context, worksetID string, befor
 			Stale:           stale,
 		})
 	}
-	return out, nil
+	next := 0
+	if len(revs) > 0 && len(revs) == limit {
+		next = revs[len(revs)-1].RevisionIndex
+	}
+	return &RevisionListResult{Revisions: out, NextBeforeIndex: next}, nil
 }
 
 // GetRevision returns the immutable nested review detail.
@@ -984,9 +1036,10 @@ func toPlanResponse(detail *sqlite.WorkflowPlanDetail) planusecase.Response {
 			Summary:    sum,
 		}
 		_ = json.Unmarshal([]byte(st.PolicyJSON), &step.Policy)
-		step.Classifier.Name = st.ClassifierName
-		step.Classifier.Version = st.ClassifierVersion
-		step.Classifier.Pattern = st.ClassifierPattern
+		step.Classifier.Tags = strings.Split(st.ClassifierTags, "\x00")
+		if step.Classifier.Tags[0] == "" && len(step.Classifier.Tags) == 1 {
+			step.Classifier.Tags = []string{}
+		}
 		step.Classifier.Hash = st.ClassifierHash
 		for _, c := range detail.Components {
 			if c.StepIndex != st.StepIndex {

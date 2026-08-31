@@ -173,9 +173,8 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	err = CreateWorkflowPlanTx(repo.DB(), "wf-1", "workflow", "/new", "snap-wf", lib.ID,
 		[]WorkflowStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
-			PolicySourceKind: "preset", PolicySourceName: "balanced", PolicySourceVersion: 1,
 			PolicySchemaVersion: 1, PolicyJSON: `{"schema_version":1}`, PolicyHash: "h",
-			ClassifierName: "effect-direction", ClassifierVersion: 1, ClassifierPattern: "x", ClassifierHash: "ch",
+			ClassifierTags: "se\xe3\x81\xaa\xe3\x81\x97", ClassifierHash: "ch",
 			StepSummaryJSON: `{"summary_reason":"NO_MATCH"}`,
 		}},
 		[]WorkflowRootRecord{{RootIndex: 0, RootPath: "/new", RootIdentity: "/new", InventoryFingerprint: "fp", EntryCount: 0}},

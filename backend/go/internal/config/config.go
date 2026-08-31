@@ -1,8 +1,10 @@
 package config
 
-// PruneConfig defines prune-related settings in config.json.
+// PruneConfig defines prune-related settings in config.json. LiteralTags is
+// the maintained initial classifier tag list (matched as case-insensitive
+// literal substrings); it seeds new workset drafts only.
 type PruneConfig struct {
-	RegexPattern string `json:"regex_pattern"`
+	LiteralTags []string `json:"literal_tags"`
 }
 
 // ToolsConfig defines encoder tool settings in config.json.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -138,7 +139,7 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 		"schema_version": 1,
 		"steps": []any{map[string]any{
 			"step_type": "reconcile_audio_outputs",
-			"policy":    map[string]any{"kind": "preset", "name": "compact", "version": 1},
+			"policy":    inlinePolicyFixture(),
 		}},
 	}}
 	p2 := reqWithIfMatch(t, h, http.MethodPut, "/api/v1/worksets/"+createResp.Workset.WorksetID+"/draft", testToken, saveBody, "1")
@@ -163,127 +164,79 @@ func TestWorksetAuthRequired(t *testing.T) {
 	}
 }
 
-// TestWorkflowPresetsList verifies the read-only preset registry endpoint and
-// the round-trip contract the frontend depends on: a preset policy fetched
-// here, submitted as an inline policy source, must be accepted by SaveDraft.
-func TestWorkflowPresetsList(t *testing.T) {
+// TestPolicySlotsListAndUpdate verifies the fixed-three slot endpoints: fresh
+// databases list exactly three empty slots in order, PUT validates name and
+// policy, and the saved policy round-trips.
+func TestPolicySlotsListAndUpdate(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	seedLibrary(t, repo)
 	seedFolder(t, repo, "lib-1")
 
-	w := req(t, h, http.MethodGet, "/api/v1/workflow-presets", testToken, nil)
+	w := req(t, h, http.MethodGet, "/api/v1/policy-slots", testToken, nil)
 	if w.Code != http.StatusOK {
-		t.Fatalf("presets status = %d", w.Code)
+		t.Fatalf("slots status = %d", w.Code)
 	}
 	var list struct {
-		Presets []struct {
-			Name    string `json:"name"`
-			Version int    `json:"version"`
-			Policy  struct {
-				SchemaVersion int `json:"schema_version"`
-				Classifier    struct {
-					Name    string `json:"name"`
-					Version int    `json:"version"`
-				} `json:"classifier"`
-				Matched struct {
-					Lossless *struct {
-						Codec   string `json:"codec"`
-						Quality *struct {
-							Kind    string `json:"kind"`
-							Bitrate int    `json:"bitrate"`
-						} `json:"quality"`
-					} `json:"lossless"`
-					Encoded *struct {
-						Codec   string `json:"codec"`
-						Quality *struct {
-							Kind    string `json:"kind"`
-							Bitrate int    `json:"bitrate"`
-						} `json:"quality"`
-					} `json:"encoded"`
-				} `json:"matched"`
-			} `json:"policy"`
-		} `json:"presets"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
-		t.Fatalf("decode presets: %v", err)
-	}
-	if len(list.Presets) != 3 {
-		t.Fatalf("presets = %d, want 3 (balanced/compact/archive)", len(list.Presets))
-	}
-	byName := map[string]int{}
-	for i, p := range list.Presets {
-		byName[p.Name] = i
-		if p.Policy.SchemaVersion != 1 {
-			t.Fatalf("preset %s schema_version = %d", p.Name, p.Policy.SchemaVersion)
-		}
-		if p.Policy.Classifier.Name != "effect-direction" || p.Policy.Classifier.Version != 1 {
-			t.Fatalf("preset %s classifier = %+v", p.Name, p.Policy.Classifier)
-		}
-	}
-	if _, ok := byName["balanced"]; !ok {
-		t.Fatalf("balanced preset missing: %+v", byName)
-	}
-
-	// Round-trip: submit the balanced preset's resolved policy as an inline
-	// policy source for a workset draft; the backend must accept it.
-	balanced := list.Presets[byName["balanced"]]
-	inlinePolicy := map[string]any{
-		"schema_version": balanced.Policy.SchemaVersion,
-		"classifier": map[string]any{
-			"name":    balanced.Policy.Classifier.Name,
-			"version": balanced.Policy.Classifier.Version,
-		},
-		"matched":   balancedPolicyProfile(balanced.Policy.Matched),
-		"unmatched": map[string]any{},
-	}
-	// Fetch the full policy JSON generically so unmatched is preserved too.
-	var raw struct {
-		Presets []struct {
+		Slots []struct {
+			Slot   int             `json:"slot"`
 			Name   string          `json:"name"`
 			Policy json.RawMessage `json:"policy"`
-		} `json:"presets"`
+		} `json:"slots"`
 	}
-	_ = json.Unmarshal(w.Body.Bytes(), &raw)
-	var fullPolicy map[string]any
-	for _, p := range raw.Presets {
-		if p.Name == "balanced" {
-			if err := json.Unmarshal(p.Policy, &fullPolicy); err != nil {
-				t.Fatalf("decode balanced policy: %v", err)
-			}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode slots: %v", err)
+	}
+	if len(list.Slots) != 3 {
+		t.Fatalf("slots = %d, want 3", len(list.Slots))
+	}
+	for i, s := range list.Slots {
+		if s.Slot != i+1 || s.Name != "" || string(s.Policy) != "null" {
+			t.Fatalf("fresh slot %d = %+v, want empty slot", i+1, s)
 		}
 	}
-	inlinePolicy = fullPolicy
 
-	ws := req(t, h, http.MethodPost, "/api/v1/worksets", testToken, map[string]any{"library_id": "lib-1", "title": "t", "folder_ids": []string{"f-a"}})
-	if ws.Code != http.StatusCreated {
-		t.Fatalf("create workset: %d", ws.Code)
+	// PUT out-of-range slot is rejected.
+	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/4", testToken, map[string]any{"name": "x", "policy": map[string]any{}})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_SLOT") {
+		t.Fatalf("slot 4 = %d %s, want 400 INVALID_SLOT", w.Code, w.Body.String())
 	}
-	var created struct {
-		Workset struct {
-			WorksetID string `json:"workset_id"`
-		} `json:"workset"`
-	}
-	_ = json.Unmarshal(ws.Body.Bytes(), &created)
 
-	saveBody := map[string]any{"workflow": map[string]any{
-		"schema_version": 1,
-		"steps": []any{map[string]any{
-			"step_type": "reconcile_audio_outputs",
-			"policy":    map[string]any{"kind": "inline", "policy": inlinePolicy},
-		}},
-	}}
-	save := reqWithIfMatch(t, h, http.MethodPut, "/api/v1/worksets/"+created.Workset.WorksetID+"/draft", testToken, saveBody, "1")
-	if save.Code != http.StatusOK {
-		t.Fatalf("inline preset round-trip save = %d, body=%s", save.Code, save.Body.String())
+	// PUT invalid regex policy is rejected.
+	badPolicy := map[string]any{
+		"schema_version":  1,
+		"classifier_tags": []string{},
+		"matched":         map[string]any{"lossless": map[string]any{"codec": "wav"}},
+		"unmatched":       map[string]any{"lossless": map[string]any{"codec": "wav"}},
 	}
-}
+	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/1", testToken, map[string]any{"name": "s1", "policy": badPolicy})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_POLICY") {
+		t.Fatalf("empty tags = %d %s, want 400 INVALID_POLICY", w.Code, w.Body.String())
+	}
 
-// balancedPolicyProfile converts the decoded matched profile back into a
-// generic map for the inline submission.
-func balancedPolicyProfile(p any) map[string]any {
-	m, ok := p.(map[string]any)
-	if !ok {
-		return map[string]any{}
+	// PUT a valid slot then verify the round-trip.
+	goodPolicy := map[string]any{
+		"schema_version":  1,
+		"classifier_tags": []string{"SEなし", "se_nashi"},
+		"matched":         map[string]any{"lossless": map[string]any{"codec": "wav"}},
+		"unmatched":       map[string]any{"encoded": map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}}},
 	}
-	return m
+	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/1", testToken, map[string]any{"name": "默认", "policy": goodPolicy})
+	if w.Code != http.StatusOK {
+		t.Fatalf("put slot 1 = %d, body=%s", w.Code, w.Body.String())
+	}
+	w = req(t, h, http.MethodGet, "/api/v1/policy-slots", testToken, nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode slots 2: %v", err)
+	}
+	if list.Slots[0].Name != "默认" || len(list.Slots[0].Policy) == 0 || string(list.Slots[0].Policy) == "null" {
+		t.Fatalf("slot 1 after PUT = %+v", list.Slots[0])
+	}
+	if list.Slots[1].Name != "" || string(list.Slots[1].Policy) != "null" {
+		t.Fatalf("slot 2 must stay empty: %+v", list.Slots[1])
+	}
+
+	// The seeded workset draft must be a complete inline policy (self-contained).
+	if _, err := repo.GetPolicySlot(1); err != nil {
+		t.Fatalf("get slot: %v", err)
+	}
 }

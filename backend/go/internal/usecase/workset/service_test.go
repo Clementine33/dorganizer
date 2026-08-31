@@ -2,16 +2,20 @@ package workset
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 const timeFmt = "2006-01-02T15:04:05.999999999Z07:00"
 
 // newSvc builds a repo + workset service on a temp DB with a config dir.
+// A minimal config.json is written so seeded drafts carry a classifier tag.
 func newSvc(t *testing.T, concurrency int) *serviceImpl {
 	t.Helper()
 	tmp := t.TempDir()
@@ -21,6 +25,10 @@ func newSvc(t *testing.T, concurrency int) *serviceImpl {
 		t.Fatalf("new repo: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
+	cfg := `{"prune":{"literal_tags":["SEなし"]}}`
+	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	return NewService(repo, tmp, concurrency).(*serviceImpl)
 }
 
@@ -123,12 +131,22 @@ func TestCreateWorksetValidation(t *testing.T) {
 }
 
 func planWorkflowFixture() planusecase.Workflow {
+	profile := reconcile.DesiredProfile{
+		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
+		Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+	}
 	return planusecase.Workflow{
 		SchemaVersion: 1,
 		Steps: []planusecase.WorkflowStep{{
 			StepType: planusecase.StepTypeReconcileAudio,
 			Policy: planusecase.PolicySource{
-				Kind: "preset", PresetName: "balanced", PresetVersion: 1,
+				Kind: "inline",
+				InlinePolicy: &reconcile.Policy{
+					SchemaVersion:  1,
+					ClassifierTags: []string{"SEなし"},
+					Matched:        profile,
+					Unmatched:      profile,
+				},
 			},
 		}},
 	}

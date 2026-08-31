@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // seedWorkflowEntries writes an RJ-like tree into the entries table: two
@@ -57,9 +58,24 @@ func balancedWorkflowRequest() Request {
 			SchemaVersion: 1,
 			Steps: []WorkflowStep{{
 				StepType: StepTypeReconcileAudio,
-				Policy:   PolicySource{Kind: "preset", PresetName: "balanced", PresetVersion: 1},
+				Policy:   PolicySource{Kind: "inline", InlinePolicy: inlinePolicyPtr("SEなし")},
 			}},
 		},
+	}
+}
+
+// inlinePolicyPtr builds a complete inline policy with the given classifier
+// tags and the balanced output shape (wav + mp3@320 both partitions).
+func inlinePolicyPtr(tags ...string) *reconcile.Policy {
+	profile := reconcile.DesiredProfile{
+		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
+		Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+	}
+	return &reconcile.Policy{
+		SchemaVersion:  1,
+		ClassifierTags: tags,
+		Matched:        profile,
+		Unmatched:      profile,
 	}
 }
 
@@ -111,17 +127,8 @@ func TestWorkflowPlanBalancedSatisfied(t *testing.T) {
 	if detail.Roots[0].InventoryFingerprint == "" {
 		t.Fatal("inventory fingerprint must be persisted")
 	}
-	if detail.Steps[0].ClassifierName != EffectClassifierName {
-		t.Fatalf("classifier name = %q", detail.Steps[0].ClassifierName)
-	}
-
-	// Classifier v1 was bootstrapped from the default seed.
-	classifier, err := repo.LoadClassifier(EffectClassifierName, EffectClassifierVersion)
-	if err != nil || classifier == nil {
-		t.Fatalf("classifier %s@%d not bootstrapped (err=%v)", EffectClassifierName, EffectClassifierVersion, err)
-	}
-	if classifier.Pattern != DefaultEffectClassifierPattern {
-		t.Fatalf("classifier pattern = %q, want default seed", classifier.Pattern)
+	if detail.Steps[0].ClassifierTags == "" {
+		t.Fatal("classifier tag snapshot must be persisted")
 	}
 
 	// Execute boundary guard rejects workflow plans.

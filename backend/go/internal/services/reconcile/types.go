@@ -90,20 +90,12 @@ type StemGroup struct {
 	Files []GroupedFile
 }
 
-// ClassifierRef references an immutable named/versioned classifier.
-type ClassifierRef struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
-}
-
-// Classifier is the resolved classifier: a versioned definition with a
-// canonical pattern and hash snapshot. Classifier versions are immutable.
+// Classifier is the resolved literal-tag classifier: the normalized tag set,
+// a hash over that canonical set, and the compiled case-insensitive matcher.
 type Classifier struct {
-	Name    string
-	Version int
-	Pattern string
+	Tags    []string
 	Hash    string
-	Regex   *regexp.Regexp
+	Matcher *regexp.Regexp
 }
 
 // QualityKind discriminates the quality specification.
@@ -136,13 +128,13 @@ type DesiredProfile struct {
 }
 
 // Policy maps each classifier partition to a complete DesiredProfile. The
-// user declares desired outputs only; conversion/cleanup mechanics are
-// derived by the planner.
+// user declares desired outputs and a set of literal content tags only;
+// conversion/cleanup mechanics are derived by the planner.
 type Policy struct {
-	SchemaVersion int            `json:"schema_version"`
-	Classifier    ClassifierRef  `json:"classifier"`
-	Matched       DesiredProfile `json:"matched"`
-	Unmatched     DesiredProfile `json:"unmatched"`
+	SchemaVersion   int            `json:"schema_version"`
+	ClassifierTags  []string       `json:"classifier_tags,omitempty"`
+	Matched         DesiredProfile `json:"matched"`
+	Unmatched       DesiredProfile `json:"unmatched"`
 }
 
 // Component states.

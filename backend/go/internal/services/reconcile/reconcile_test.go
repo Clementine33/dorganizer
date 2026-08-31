@@ -47,8 +47,8 @@ func num2(i int) string {
 
 func wavMp3Profile() Policy {
 	return Policy{
-		SchemaVersion: 1,
-		Classifier:    ClassifierRef{Name: "effect-direction", Version: 1},
+		SchemaVersion:  1,
+		ClassifierTags: []string{"SEなし"},
 		Matched: DesiredProfile{
 			Lossless: &AudioOutputSpec{Codec: CodecWav},
 			Encoded:  &AudioOutputSpec{Codec: CodecMp3, Quality: &Quality{Kind: QualityBitrate, Bitrate: 320}},
@@ -69,7 +69,7 @@ func mp3OnlyProfile() Policy {
 }
 
 func effectClassifier() Classifier {
-	c, err := NewRegexClassifier("effect-direction", 1, `(?i)SEなし`)
+	c, err := ResolveClassifier([]string{"SEなし"})
 	if err != nil {
 		panic(err)
 	}

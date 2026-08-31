@@ -72,7 +72,7 @@ func RunWorkflow(ctx context.Context, repo *sqlite.Repository, configDir string,
 		planCfg = defaultPlanConfig()
 	}
 
-	policy, classifier, err := s.resolvePolicy(configDir, step.Policy)
+	policy, classifier, err := s.resolvePolicy(step.Policy)
 	if err != nil {
 		return nil, err
 	}
@@ -214,15 +214,10 @@ func RunWorkflow(ctx context.Context, repo *sqlite.Repository, configDir string,
 		StepIndex:           0,
 		StepType:            StepTypeReconcileAudio,
 		Status:              stepStatus(aggregated),
-		PolicySourceKind:    step.Policy.Kind,
-		PolicySourceName:    step.Policy.PresetName,
-		PolicySourceVersion: step.Policy.PresetVersion,
 		PolicySchemaVersion: policy.SchemaVersion,
 		PolicyJSON:          string(policyJSON),
 		PolicyHash:          policyHash,
-		ClassifierName:      classifier.Name,
-		ClassifierVersion:   classifier.Version,
-		ClassifierPattern:   classifier.Pattern,
+		ClassifierTags:      normalizeTagSnapshot(policy.ClassifierTags),
 		ClassifierHash:      classifier.Hash,
 		StepSummaryJSON:     mustJSON(aggregated),
 	}}
