@@ -27,6 +27,8 @@ const props = defineProps<{
   /** Slot save mutation state. */
   slotSaving: boolean
   slotError: string | null
+  /** Draft save failure shown inline (validation/network, non-conflict). */
+  saveError: string | null
   conflict: boolean
   conflictMessage: string | null
   dirty: boolean
@@ -453,10 +455,22 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
       </div>
     </div>
 
+    <!-- Draft save failure (non-conflict) -->
+    <div
+      v-if="saveError"
+      class="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[11px] text-destructive"
+      data-testid="draft-save-error"
+    >
+      <AlertTriangle class="mr-1 inline size-3.5" />
+      {{ saveError }}
+    </div>
+
     <!-- Actions -->
     <div class="sticky bottom-0 mt-4 flex items-center gap-2 border-t border-border bg-background pt-3">
       <p class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
-        {{ dirty ? '有未保存修改' : '配置已与服务器同步' }}
+        <template v-if="dirty">有未保存修改</template>
+        <template v-else-if="!localComplete">配置不完整（需要至少一个标签和两个输出档位）</template>
+        <template v-else>配置已与服务器同步</template>
       </p>
       <Button data-testid="save-draft" variant="outline" size="sm" :disabled="saving || generating || readOnly" @click="onSave">
         保存配置
@@ -465,7 +479,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
         data-testid="save-and-generate"
         size="sm"
         class="bg-[var(--brand)] text-white hover:bg-[var(--brand)]"
-        :disabled="saving || generating || readOnly"
+        :disabled="saving || generating || readOnly || !localComplete"
         @click="onSaveAndGenerate"
       >
         {{ generating ? '生成中…' : '保存并生成新计划版本' }}

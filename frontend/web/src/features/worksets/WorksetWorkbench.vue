@@ -86,12 +86,17 @@ const readOnly = computed(() => props.workset?.planning_state === 'orphaned' || 
 
 const worksetId = computed(() => props.workset?.workset_id ?? null)
 
+// Non-conflict save failures (validation, network) surface inline instead of
+// rejecting the event handler: the form stays editable and the user sees why.
+const saveError = ref<string | null>(null)
+
 watch(
   () => props.workset?.workset_id,
   () => {
     dirty.value = false
     conflict.value = false
     conflictMessage.value = null
+    saveError.value = null
     stage.value = props.workset?.current_revision ? 'review' : 'configure'
   },
   { immediate: true },
@@ -106,9 +111,21 @@ watch(
   },
 )
 
+function captureSaveError(error: unknown) {
+  if (error instanceof ApiError && (error.code === 'VERSION_CONFLICT' || error.code === 'DRAFT_VERSION_CONFLICT')) {
+    conflict.value = true
+    conflictMessage.value = errorDetails(error).message
+    void syncAfterDraftConflict(queryClient, worksetId.value!)
+    return true
+  }
+  saveError.value = errorDetails(error).message
+  return false
+}
+
 async function onSave(input: { workflow: WorkflowInput }) {
   if (!worksetId.value || !props.draftQueryData) return
   conflict.value = false
+  saveError.value = null
   try {
     await saveMutation.mutateAsync({
       worksetId: worksetId.value,
@@ -117,11 +134,7 @@ async function onSave(input: { workflow: WorkflowInput }) {
     })
     dirty.value = false
   } catch (error) {
-    if (error instanceof ApiError && (error.code === 'VERSION_CONFLICT' || error.code === 'DRAFT_VERSION_CONFLICT')) {
-      conflict.value = true
-      conflictMessage.value = errorDetails(error).message
-      await syncAfterDraftConflict(queryClient, worksetId.value)
-    }
+    captureSaveError(error)
   }
 }
 
@@ -133,6 +146,7 @@ async function onSaveAndGenerate(input: { workflow: WorkflowInput }) {
   let expectedVersion: number | undefined
   if (saved) {
     conflict.value = false
+    saveError.value = null
     try {
       const view = await saveMutation.mutateAsync({
         worksetId: worksetId.value,
@@ -142,13 +156,10 @@ async function onSaveAndGenerate(input: { workflow: WorkflowInput }) {
       dirty.value = false
       expectedVersion = view.version
     } catch (error) {
-      if (error instanceof ApiError && (error.code === 'VERSION_CONFLICT' || error.code === 'DRAFT_VERSION_CONFLICT')) {
-        conflict.value = true
-        conflictMessage.value = errorDetails(error).message
-        await syncAfterDraftConflict(queryClient, worksetId.value)
-        return
-      }
-      throw error
+      // Save failed (conflict → banner; anything else → inline). Generation
+      // must not start with the server's previous draft, so stop here.
+      captureSaveError(error)
+      return
     }
   }
   if (expectedVersion === undefined) expectedVersion = props.draftQueryData?.version
@@ -347,6 +358,7 @@ const detailErrorDetails = computed(() =>
         :generating="generating"
         :slot-saving="slotSaveMutation.isPending.value"
         :slot-error="slotError"
+        :save-error="saveError"
         :conflict="conflict"
         :conflict-message="conflictMessage"
         :dirty="dirty"

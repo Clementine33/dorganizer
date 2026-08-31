@@ -55,6 +55,7 @@ function mountEditor(props: Record<string, unknown> = {}) {
       generating: false,
       slotSaving: false,
       slotError: null,
+      saveError: null,
       conflict: false,
       conflictMessage: null,
       dirty: false,
@@ -137,5 +138,23 @@ describe('PolicyEditor', () => {
   it('shows slot save errors from the backend', () => {
     const wrapper = mountEditor({ slotError: 'INVALID_POLICY: policy requires at least one non-empty classifier tag' })
     expect(wrapper.get('[data-testid="slot-error"]').text()).toContain('INVALID_POLICY')
+  })
+
+  it('disables save-and-generate while the policy is locally incomplete', async () => {
+    const wrapper = mountEditor({ draft: emptyDraft })
+    expect(wrapper.get('[data-testid="save-and-generate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('配置不完整')
+
+    // Completing the policy enables generation.
+    await wrapper.get('[data-testid="tag-input"]').setValue('SEなし')
+    await wrapper.get('[data-testid="tag-input"]').trigger('keydown', { key: 'Enter' })
+    await wrapper.get('[data-testid="codec-matched-lossless"]').setValue('wav')
+    await wrapper.get('[data-testid="codec-unmatched-encoded"]').setValue('mp3')
+    expect(wrapper.get('[data-testid="save-and-generate"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders inline draft save failures', () => {
+    const wrapper = mountEditor({ saveError: 'policy requires at least one non-empty classifier tag' })
+    expect(wrapper.get('[data-testid="draft-save-error"]').text()).toContain('classifier tag')
   })
 })

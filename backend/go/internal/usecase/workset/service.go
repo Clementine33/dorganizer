@@ -699,9 +699,10 @@ func workflowToJSON(wf planusecase.Workflow) planusecase.Workflow {
 }
 
 // validateWorkflow accepts only schema v1 with exactly the supported step and
-// a complete inline policy. The full reconcile.ValidatePolicy check applies
-// here: both draft save and generation reject incomplete policies, because a
-// draft is only saveable when it is an executable configuration.
+// an inline policy snapshot. This is the *structural* check shared by draft
+// save: an incomplete policy (empty tags, empty profiles) is a normal,
+// saveable editing state — the full reconcile.ValidatePolicy authority is
+// applied only when the draft must run.
 func validateWorkflow(wf planusecase.Workflow) error {
 	if wf.SchemaVersion != planusecase.WorkflowSchemaVersion {
 		return NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW_SCHEMA", fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion), nil)
@@ -713,7 +714,17 @@ func validateWorkflow(wf planusecase.Workflow) error {
 	if policy.Kind != "inline" || policy.InlinePolicy == nil {
 		return NewError(ErrKindInvalidArgument, "INVALID_POLICY_SOURCE", "workflow policy must be a complete inline policy", nil)
 	}
-	if err := reconcile.ValidatePolicy(*policy.InlinePolicy); err != nil {
+	return nil
+}
+
+// validateExecutableWorkflow runs the structural check plus the full policy
+// validation for the generation boundary: a draft that cannot produce a plan
+// is rejected synchronously instead of failing the async worker.
+func validateExecutableWorkflow(wf planusecase.Workflow) error {
+	if err := validateWorkflow(wf); err != nil {
+		return err
+	}
+	if err := reconcile.ValidatePolicy(*wf.Steps[0].Policy.InlinePolicy); err != nil {
 		return NewError(ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), nil)
 	}
 	return nil
@@ -750,7 +761,7 @@ func (s *serviceImpl) StartGeneration(ctx context.Context, id string, req StartG
 	if err != nil {
 		return nil, NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW", "stored draft is invalid", err)
 	}
-	if err := validateWorkflow(wf); err != nil {
+	if err := validateExecutableWorkflow(wf); err != nil {
 		return nil, err
 	}
 

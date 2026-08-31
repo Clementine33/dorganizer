@@ -176,6 +176,38 @@ func TestDraftSaveAndNeedsPlanning(t *testing.T) {
 	}
 }
 
+// incompletePolicyFixture keeps the output profiles but leaves the classifier
+// tags empty — the normal "just created, not yet configured" draft state.
+func incompletePolicyFixture() planusecase.Workflow {
+	wf := planWorkflowFixture()
+	policy := *wf.Steps[0].Policy.InlinePolicy
+	policy.ClassifierTags = []string{}
+	wf.Steps[0].Policy.InlinePolicy = &policy
+	return wf
+}
+
+func TestDraftSaveAllowsIncompleteButGenerationRejects(t *testing.T) {
+	svc := newSvc(t, 1)
+	repo := svc.repo
+	insertLibraryRow(t, repo, "lib-1", "Onsei", "/music")
+	insertFolder(t, repo, "lib-1", "f-a", "/music/albumA", "albumA", "albumA")
+	ctx := context.Background()
+
+	res, _ := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "lib-1", Title: "t", FolderIDs: []string{"f-a"}})
+	id := res.Workset.WorksetID
+
+	// An incomplete policy is a legal editing state: saving it must succeed.
+	if _, err := svc.SaveDraft(ctx, id, SaveDraftRequest{Workflow: incompletePolicyFixture(), IfMatchVersion: 1}); err != nil {
+		t.Fatalf("SaveDraft of incomplete policy should be allowed: %v", err)
+	}
+	// But it cannot produce a revision: generation rejects synchronously.
+	if _, err := svc.StartGeneration(ctx, id, StartGenerationRequest{}); err == nil {
+		t.Fatal("StartGeneration with incomplete policy should fail")
+	} else if werr, ok := AsError(err); !ok || werr.Code != "INVALID_POLICY" {
+		t.Fatalf("want INVALID_POLICY, got %v", err)
+	}
+}
+
 func TestStartGenerationRejectsScanAndActive(t *testing.T) {
 	svc := newSvc(t, 1)
 	repo := svc.repo
