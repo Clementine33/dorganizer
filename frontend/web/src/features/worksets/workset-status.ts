@@ -105,8 +105,8 @@ export const operationKindLabel: Record<string, string> = {
 }
 
 export const partitionLabel: Record<string, string> = {
-  matched: '有音效',
-  unmatched: '无音效',
+  matched: '无音效',
+  unmatched: '有音效',
 }
 
 export const toneClass: Record<BadgeTone, string> = {

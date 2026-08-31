@@ -146,7 +146,7 @@ function bucketTone(bucket: 'pending' | 'normal' | 'error') {
             class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
             :class="toneClass[bucketTone(worksetBucket(ws))]"
           >
-            v{{ ws.current_revision.revision_index + 1 }}
+            v{{ ws.current_revision.revision_index }}
             <template v-if="ws.current_revision.summary_reason">
               · {{ summaryReasonLabel[ws.current_revision.summary_reason] ?? ws.current_revision.summary_reason }}
             </template>

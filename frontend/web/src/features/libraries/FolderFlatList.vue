@@ -57,7 +57,7 @@ function statusLabel(status: string): string {
 <template>
   <div class="flex h-full min-w-[680px] flex-col" role="table" aria-label="音频文件夹">
     <div
-      class="grid h-9 shrink-0 grid-cols-[38px_minmax(220px,1.6fr)_minmax(180px,1fr)_110px_92px_28px] items-center border-y border-border bg-muted/35 px-3 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+      class="grid h-9 shrink-0 grid-cols-[38px_minmax(220px,1fr)_110px_92px_28px] items-center border-y border-border bg-muted/35 px-3 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
       role="row"
       :aria-rowindex="1"
       :aria-setsize="totalRows"
@@ -73,7 +73,6 @@ function statusLabel(status: string): string {
         />
       </div>
       <div role="columnheader">文件夹</div>
-      <div role="columnheader">相对路径</div>
       <div role="columnheader" class="text-right">音频</div>
       <div role="columnheader" class="text-right">上次扫描</div>
       <div />
@@ -97,7 +96,7 @@ function statusLabel(status: string): string {
           :aria-rowindex="virtualItem.index + 2"
           :aria-setsize="totalRows"
           role="row"
-          class="group grid h-14 grid-cols-[38px_minmax(220px,1.6fr)_minmax(180px,1fr)_110px_92px_28px] items-center border-b border-border px-3 transition-colors hover:bg-accent/45"
+          class="group absolute left-0 top-0 grid h-14 w-full grid-cols-[38px_minmax(220px,1fr)_110px_92px_28px] items-center border-b border-border px-3 transition-colors hover:bg-accent/45"
         >
           <div role="cell">
             <input
@@ -118,11 +117,6 @@ function statusLabel(status: string): string {
             <Folder class="size-4 shrink-0 text-muted-foreground" />
             <span class="truncate font-heading text-sm font-semibold">{{ folderAt(virtualItem.index).name }}</span>
           </button>
-          <div role="cell" class="min-w-0">
-            <span class="inline-block max-w-full truncate rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-              {{ folderAt(virtualItem.index).relative_path }}
-            </span>
-          </div>
           <div role="cell" class="text-right font-mono text-xs text-muted-foreground">
             {{ folderAt(virtualItem.index).audio_file_count }} 个音频文件
           </div>
