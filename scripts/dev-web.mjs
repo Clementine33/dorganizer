@@ -17,7 +17,7 @@
  * acts as a second safety net on top of the explicit kill below.
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,6 +29,16 @@ const dataDir = path.join(repoRoot, '.dev_data')
 const isWin = process.platform === 'win32'
 
 mkdirSync(dataDir, { recursive: true })
+
+// Seed the dev config from config.json.template when absent so the backend's
+// classifier seed (prune.literal_tags) is available to new workset drafts.
+// An existing .dev_data/config.json is never overwritten.
+const devConfig = path.join(dataDir, 'config.json')
+const configTemplate = path.join(repoRoot, 'config.json.template')
+if (!existsSync(devConfig) && existsSync(configTemplate)) {
+  copyFileSync(configTemplate, devConfig)
+  console.log(`[dev-web] seeded ${devConfig} from config.json.template`)
+}
 
 const backend = spawn('go', ['run', './cmd/onsei-organizer-backend'], {
   cwd: backendDir,

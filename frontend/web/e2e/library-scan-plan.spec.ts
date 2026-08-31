@@ -11,10 +11,11 @@ import { readStackState } from './helpers/stack-state.ts'
  *   2. run the scan to completion (SSE),
  *   3. verify the flat folder list populates,
  *   4. select a folder and create a workset (title dialog → deep link),
- *   5. save-and-generate a first revision on the seeded balanced draft,
- *   6. verify the review stage shows the batch + component outcome,
- *   7. switch to the configure stage, save-and-generate again → v2,
- *   8. back to the feed: both worksets visible with their states.
+ *   5. configure the inline draft (tags + outputs), save it into global slot 1,
+ *   6. save-and-generate a first revision,
+ *   7. verify the review stage shows the batch + component outcome,
+ *   8. switch to the configure stage, change the draft, generate again → v2,
+ *   9. back to the feed: both worksets visible with their states.
  *
  * Skipped unless ONSEI_E2E=1 so CI can run it optionally and local `vitest`
  * runs never try to boot the stack (vitest only includes `src/**` anyway).
@@ -62,9 +63,24 @@ test.describe('workset workbench smoke', () => {
     await page.getByTestId('confirm-create-workset').click()
     await expect(page).toHaveURL(/\/worksets\/ws-[\w.-]+\/?$/)
 
-    // 5. Workbench opens in the configure stage on the seeded balanced preset.
+    // 5. Workbench opens in the configure stage on the seeded inline draft.
+    //    First configure a global policy slot (fresh installs start empty),
+    //    then apply it to the draft as an inline snapshot.
     await expect(page.getByTestId('policy-editor')).toBeVisible()
-    await expect(page.getByTestId('preset-balanced')).toBeVisible()
+    await expect(page.getByTestId('policy-slot-1')).toContainText('未配置')
+    // Complete the seeded draft form: add a classifier tag + outputs.
+    await page.getByTestId('tag-input').fill('SEなし')
+    await page.getByTestId('tag-input').press('Enter')
+    await page.getByTestId('codec-matched-lossless').selectOption('wav')
+    await page.getByTestId('codec-matched-encoded').selectOption('mp3')
+    await page.getByTestId('codec-unmatched-lossless').selectOption('wav')
+    await page.getByTestId('codec-unmatched-encoded').selectOption('mp3')
+    // Save the configured form into global slot 1, then apply it back.
+    await page.getByTestId('save-to-slot-1').click()
+    await page.getByTestId('slot-name-1').fill('默认策略')
+    await page.getByTestId('confirm-save-slot').click()
+    await expect(page.getByTestId('policy-slot-1')).toContainText('默认策略', { timeout: 10_000 })
+    // The draft carries the same content regardless: save-and-generate v1.
     await page.getByTestId('save-and-generate').click()
 
     // 6. The single-root fixture generates within seconds, so the transient
@@ -73,17 +89,24 @@ test.describe('workset workbench smoke', () => {
     await expect(page.getByTestId('stage-review')).toBeEnabled({ timeout: 30_000 })
     await page.getByTestId('stage-review').click()
     await expect(page.getByTestId('revision-review')).toBeVisible()
-    // Expand the albumA batch card to reveal its component chips.
-    await page.getByTestId('batch-0').getByRole('button').first().click()
+    await expect(page.getByTestId('workflow-ribbon')).toContainText('v1')
+    // The review auto-opens the highest-priority batch. Keep this tolerant of
+    // a future selection policy that leaves it collapsed.
+    const batchHeader = page.getByTestId('batch-0').getByRole('button').first()
+    if ((await batchHeader.getAttribute('aria-expanded')) !== 'true') await batchHeader.click()
     await expect(page.getByTestId('album-batch-list')).toContainText('albumA')
     await expect(page.getByTestId('album-batch-list').locator('[data-testid^="batch-component-"]').first()).toBeVisible()
 
-    // 7. A second save-and-generate produces revision v2 (metadata row count
-    //    grows; the immutable review is replaced by the new current revision).
+    // 7. Draft values remain editable after generation. Changing one field
+    //    keeps the inline snapshot self-contained and produces Revision v2.
     await page.getByTestId('stage-configure').click()
     await expect(page.getByTestId('policy-editor')).toBeVisible()
+    const losslessCodec = page.getByTestId('codec-matched-lossless')
+    await expect(losslessCodec).toBeEnabled()
+    await losslessCodec.selectOption('flac')
     await page.getByTestId('save-and-generate').click()
-    await expect(page.getByTestId('stage-review')).toBeEnabled({ timeout: 30_000 })
+    await expect(page.getByTestId('revision-review')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('workflow-ribbon')).toContainText('v2', { timeout: 30_000 })
 
     // 8. Back to the feed: the workset is planned with a current revision.
     await page.getByRole('link', { name: '工作集' }).click()

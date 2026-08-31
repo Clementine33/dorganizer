@@ -13,8 +13,16 @@ read-only and no longer plans. See `docs/adr/0002-workset-plan-revision.md`.
 
 The server-persisted mutable configuration of a Workset: a schema-v1 linear
 workflow whose only persisted step is `reconcile_audio_outputs`, backed by a
-preset reference or a complete inline policy. Draft replacement is
-full-replacement and guarded by the Workset version.
+complete inline policy snapshot. Draft replacement is full-replacement and
+guarded by the Workset version.
+
+## Policy Slot
+
+One of exactly three global, persisted policy templates (`policy_slots`). A
+slot has an editable display name and either no policy (unconfigured, fresh
+installations) or one complete inline policy. Applying a slot copies its
+policy into a Workset Draft as an independent snapshot; later slot edits never
+alter saved Drafts or Plan Revisions. Slot count is fixed — no create/delete.
 
 ## Plan Revision
 
@@ -47,7 +55,11 @@ Observed properties of a media file, such as codec, container, bitrate state, an
 
 ## Filter Match
 
-Whether a file matches the configured content-classification rule.
+Whether a file matches the configured content-classification rule. The rule
+is a set of literal tags (`classifier_tags`): each tag is matched
+case-insensitively as a substring of the Album Root-relative path; tag input
+is plain text (never regex syntax), normalized (trimmed, deduped) by the
+backend.
 
 - **matched**: displayed to users as “无音效”.
 - **unmatched**: displayed to users as “有音效”.

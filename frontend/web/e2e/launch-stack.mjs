@@ -59,6 +59,12 @@ const fixtureRoot = createFixtureTree()
 
 // --- Backend ----------------------------------------------------------------
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'onsei-e2e-data-'))
+// Seed the classifier tag config: no compiled-in defaults remain, so fresh
+// data dirs get their literal tags from config.json.
+writeFileSync(
+  path.join(dataDir, 'config.json'),
+  JSON.stringify({ prune: { literal_tags: ['SEなし'] } }),
+)
 const backend = spawn('go', ['run', './cmd/onsei-organizer-backend'], {
   cwd: backendDir,
   env: { ...process.env, ONSEI_DATA_DIR: dataDir },
