@@ -16,7 +16,12 @@ export function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientCo
     scanLibrary: vi.fn(),
     listFolders: vi.fn().mockResolvedValue([]),
     getFolderTree: vi.fn(),
-    listWorkflowPresets: vi.fn().mockResolvedValue([]),
+    listPolicySlots: vi.fn().mockResolvedValue([
+      { slot: 1, name: '', policy: null },
+      { slot: 2, name: '', policy: null },
+      { slot: 3, name: '', policy: null },
+    ]),
+    savePolicySlot: vi.fn(),
     createWorkset: vi.fn(),
     listWorksets: vi.fn().mockResolvedValue({ worksets: [], next_cursor: undefined }),
     getWorkset: vi.fn(),

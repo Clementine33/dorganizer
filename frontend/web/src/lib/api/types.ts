@@ -64,7 +64,7 @@ export interface ScanEvent {
   data: ScanEventData
 }
 
-// ==================== Workflow presets ====================
+// ==================== Policy slots ====================
 
 export interface QualitySpec {
   kind: string
@@ -81,22 +81,33 @@ export interface PolicyProfile {
   encoded?: AudioOutputSpec | null
 }
 
-/** Wire shape of a resolved reconcile policy (inline policy sources). */
+/**
+ * Wire shape of a resolved reconcile policy. classifier_tags are literal
+ * content tags matched case-insensitively as substrings of each Album
+ * Root-relative path (a hit → matched / 无音效).
+ */
 export interface ResolvedPolicy {
   schema_version: number
-  classifier: { name: string; version: number }
+  classifier_tags: string[]
   matched: PolicyProfile
   unmatched: PolicyProfile
 }
 
-export interface WorkflowPreset {
+/** One of the three fixed global policy slots. policy is null while unconfigured. */
+export interface PolicySlot {
+  slot: number
   name: string
-  version: number
-  policy: ResolvedPolicy
+  policy: ResolvedPolicy | null
+  updated_at?: string
 }
 
-export interface WorkflowPresetListResponse {
-  presets: WorkflowPreset[]
+export interface PolicySlotListResponse {
+  slots: PolicySlot[]
+}
+
+export interface SavePolicySlotInput {
+  name: string
+  policy: ResolvedPolicy
 }
 
 // ==================== Worksets ====================
@@ -183,9 +194,7 @@ export interface ListWorksetsParams {
 
 // ==================== Workflow draft ====================
 
-export type PolicySourceWire =
-  | { kind: 'preset'; name: string; version: number }
-  | { kind: 'inline'; policy: ResolvedPolicy }
+export type PolicySourceWire = { kind: 'inline'; policy: ResolvedPolicy }
 
 export interface WorkflowStepInput {
   step_type: string
@@ -225,6 +234,8 @@ export interface GenerationView {
 
 export interface RevisionListResponse {
   revisions: CurrentRevisionSummary[]
+  /** Keyset cursor for the next (older) page; 0 when the oldest is included. */
+  next_before_index?: number
 }
 
 export type StartGenerationResponse =
@@ -321,9 +332,7 @@ export interface StepSummary {
 }
 
 export interface ClassifierSnapshot {
-  name: string
-  version: number
-  pattern?: string
+  tags?: string[]
   hash?: string
 }
 
@@ -372,7 +381,8 @@ export interface ApiClientContract {
   scanLibrary(id: string, signal: AbortSignal, rootPath?: string): AsyncIterable<ScanEvent>
   listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]>
   getFolderTree(libraryId: string, folderId: string, signal?: AbortSignal): Promise<TreeNode>
-  listWorkflowPresets(signal?: AbortSignal): Promise<WorkflowPreset[]>
+  listPolicySlots(signal?: AbortSignal): Promise<PolicySlot[]>
+  savePolicySlot(slot: number, input: SavePolicySlotInput): Promise<PolicySlot>
   createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }>
   listWorksets(params?: ListWorksetsParams, signal?: AbortSignal): Promise<WorksetListResponse>
   getWorkset(id: string, signal?: AbortSignal): Promise<Workset>
@@ -382,6 +392,6 @@ export interface ApiClientContract {
   getGeneration(worksetId: string, generationId: string, signal?: AbortSignal): Promise<GenerationView>
   cancelGeneration(worksetId: string, generationId: string): Promise<GenerationView>
   streamGenerationEvents(worksetId: string, generationId: string, signal: AbortSignal): AsyncIterable<GenerationEvent>
-  listRevisions(worksetId: string, limit?: number, signal?: AbortSignal): Promise<CurrentRevisionSummary[]>
+  listRevisions(worksetId: string, limit?: number, beforeIndex?: number, signal?: AbortSignal): Promise<RevisionListResponse>
   getRevision(worksetId: string, planId: string, signal?: AbortSignal): Promise<RevisionDetailResponse>
 }

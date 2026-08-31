@@ -13,8 +13,10 @@ import type {
   HealthResponse,
   Library,
   ListWorksetsParams,
+  PolicySlot,
   RevisionDetailResponse,
   RevisionListResponse,
+  SavePolicySlotInput,
   ScanEvent,
   StartGenerationInput,
   StartGenerationResponse,
@@ -23,8 +25,6 @@ import type {
   WorkflowInput,
   Workset,
   WorksetListResponse,
-  WorkflowPreset,
-  CurrentRevisionSummary,
 } from './types'
 
 interface ErrorEnvelope {
@@ -112,10 +112,14 @@ export class ApiClient implements ApiClientContract {
     return result.tree
   }
 
-  // ==================== Workflow presets ====================
+  // ==================== Policy slots ====================
 
-  listWorkflowPresets(signal?: AbortSignal): Promise<WorkflowPreset[]> {
-    return this.request<{ presets: WorkflowPreset[] }>('/workflow-presets', { signal }).then((r) => r.presets)
+  listPolicySlots(signal?: AbortSignal): Promise<PolicySlot[]> {
+    return this.request<{ slots: PolicySlot[] }>('/policy-slots', { signal }).then((r) => r.slots)
+  }
+
+  savePolicySlot(slot: number, input: SavePolicySlotInput): Promise<PolicySlot> {
+    return this.request(`/policy-slots/${slot}`, { method: 'PUT', body: input })
   }
 
   // ==================== Worksets ====================
@@ -182,11 +186,13 @@ export class ApiClient implements ApiClientContract {
     )
   }
 
-  listRevisions(worksetId: string, limit = 50, signal?: AbortSignal): Promise<CurrentRevisionSummary[]> {
+  listRevisions(worksetId: string, limit = 20, beforeIndex?: number, signal?: AbortSignal): Promise<RevisionListResponse> {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (beforeIndex) query.set('before_index', String(beforeIndex))
     return this.request<RevisionListResponse>(
-      `/worksets/${encodeURIComponent(worksetId)}/revisions?limit=${limit}`,
+      `/worksets/${encodeURIComponent(worksetId)}/revisions?${query.toString()}`,
       { signal },
-    ).then((r) => r.revisions)
+    )
   }
 
   getRevision(worksetId: string, planId: string, signal?: AbortSignal): Promise<RevisionDetailResponse> {

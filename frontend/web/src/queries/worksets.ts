@@ -3,6 +3,8 @@ import type {
   ApiClientContract,
   CreateWorksetInput,
   ListWorksetsParams,
+  ResolvedPolicy,
+  RevisionListResponse,
   Workset,
   WorksetListResponse,
   WorkflowInput,
@@ -14,6 +16,9 @@ import { queryKeys } from './query-keys'
 // the workset domain live here — pages never touch the QueryClient directly.
 
 const WORKSET_PAGE_SIZE = 50
+// Revision history renders in the inspector; a small page keeps the initial
+// payload and DOM bounded for worksets with many generations.
+const REVISION_PAGE_SIZE = 10
 
 // The global feed is a cursor-paginated list, filter + library scoped. The
 // page size mirrors the backend default so "load more" appends one page at a
@@ -57,13 +62,19 @@ export function worksetDraftQueryOptions(api: ApiClientContract, worksetId: stri
   })
 }
 
-// Immutable revision history summaries. Refreshed on generation terminals.
-export function worksetRevisionListQueryOptions(api: ApiClientContract, worksetId: string | null | undefined) {
-  return queryOptions({
+// Immutable revision history summaries, one bounded page at a time (keyset on
+// revision_index). Refreshed on generation terminals; "load earlier" pages
+// extend the same cache entry.
+export function worksetRevisionListInfiniteQueryOptions(api: ApiClientContract, worksetId: string | null | undefined) {
+  return infiniteQueryOptions({
     queryKey: queryKeys.worksets.revisionList(worksetId ?? ''),
     enabled: Boolean(worksetId),
     staleTime: Infinity,
-    queryFn: ({ signal }: { signal?: AbortSignal }) => api.listRevisions(worksetId as string, 50, signal),
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam, signal }: { pageParam: number | undefined; signal?: AbortSignal }) =>
+      api.listRevisions(worksetId as string, REVISION_PAGE_SIZE, pageParam, signal),
+    getNextPageParam: (lastPage: RevisionListResponse) =>
+      lastPage.next_before_index ? lastPage.next_before_index : undefined,
   })
 }
 
@@ -84,12 +95,24 @@ export function worksetRevisionDetailQueryOptions(
   })
 }
 
-export function workflowPresetListQueryOptions(api: ApiClientContract) {
+// The three global policy slots. Global templates: loaded once, refreshed
+// after a slot save.
+export function policySlotListQueryOptions(api: ApiClientContract) {
   return queryOptions({
-    queryKey: queryKeys.workflowPresets.list(),
+    queryKey: queryKeys.policySlots.list(),
     staleTime: Infinity,
-    queryFn: ({ signal }: { signal?: AbortSignal }) => api.listWorkflowPresets(signal),
+    queryFn: ({ signal }: { signal?: AbortSignal }) => api.listPolicySlots(signal),
   })
+}
+
+export function savePolicySlotMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
+  return {
+    mutationFn: (input: { slot: number; name: string; policy: ResolvedPolicy }) =>
+      api.savePolicySlot(input.slot, { name: input.name, policy: input.policy }),
+    onSuccess: () => {
+      void refreshOrRemoveQueries(queryClient, queryKeys.policySlots.list())
+    },
+  }
 }
 
 // ==================== Mutations ====================

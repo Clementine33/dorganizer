@@ -1,27 +1,32 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { AlertTriangle, ChevronDown, ChevronRight, Plus, RotateCcw, Sparkles } from '@lucide/vue'
+import { AlertTriangle, Download, Plus, RotateCcw, Upload, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import type {
   DraftResponse,
   ResolvedPolicy,
-  WorkflowPreset,
+  PolicySlot,
   WorkflowInput,
-  PolicySourceWire,
   AudioOutputSpec,
 } from '@/lib/api/types'
 
-// Workflow composer: preset templates convert to editable inline policies;
-// output controls are constrained to backend-valid codec/quality shapes;
-// the classifier lives in an advanced section with free-form name/version.
+// Workflow composer: the three global policy slots act as reusable templates.
+// "应用" copies a slot policy into the current draft as an inline snapshot;
+// "存入槽位" overwrites a slot from the current form. All workset drafts are
+// inline policies — slot edits never alter saved drafts or revisions.
+// Classifier is a literal tag set (one tag per row); matching is
+// case-insensitive substring against the root-relative path.
 // Schema v1 supports a single reconcile_audio_outputs step — the multi-step
 // structure is reserved UI with the add-step entry visibly disabled.
 
 const props = defineProps<{
   draft: DraftResponse | null
-  presets: WorkflowPreset[]
+  slots: PolicySlot[]
   saving: boolean
   generating: boolean
+  /** Slot save mutation state. */
+  slotSaving: boolean
+  slotError: string | null
   conflict: boolean
   conflictMessage: string | null
   dirty: boolean
@@ -32,6 +37,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   save: [{ workflow: WorkflowInput }]
   'save-and-generate': [{ workflow: WorkflowInput }]
+  'save-slot': [{ slot: number; name: string; policy: ResolvedPolicy }]
   'load-server-version': []
   discard: []
   'update:dirty': [dirty: boolean]
@@ -39,33 +45,29 @@ const emit = defineEmits<{
 
 // Local editable policy model. null until the draft loads.
 const localPolicy = ref<ResolvedPolicy | null>(null)
-const activePreset = ref<{ name: string; version: number } | null>(null)
-const advancedOpen = ref(false)
 
-// Seed the local model from the loaded draft (preset or inline). Re-seeds
-// when the presets registry arrives: a preset draft seeded before the
-// presets fetch resolved would otherwise sit on an empty form, and editing
-// it would save an empty inline policy over the preset.
+// Slot save form state: which slot receives the current form, with its name.
+const slotTarget = ref<number | null>(null)
+const slotName = ref('')
+
+// Seed the local model from the loaded inline draft. The draft prop changes
+// identity on every background refetch (generation terminals, save cache
+// sync); re-seeding on those would clobber a just-made edit (dirty is still
+// false at that instant). Seed once per draft *version*: the only time the
+// form must adopt server state is an actual server-side draft replacement.
+const seededVersion = ref<number | undefined>(undefined)
+
 watch(
-  [() => props.draft, () => props.presets],
-  ([draft, presets]) => {
+  [() => props.draft?.workset_id, () => props.draft?.version],
+  ([, version]) => {
+    const draft = props.draft
     if (!draft) return
-    const step = draft.workflow.steps[0]
-    if (!step) return
-    if (step.policy.kind === 'preset') {
-      const source = step.policy as { kind: 'preset'; name: string; version: number }
-      // While dirty, a re-seed would clobber the user's unsaved edits with
-      // the server draft; leave the local model alone until they settle.
-      if (props.dirty) return
-      activePreset.value = { name: source.name, version: source.version }
-      const preset = presets.find((p) => p.name === source.name && p.version === source.version)
-      // Resolve the preset's policy through the presets API so the form can
-      // show it; until presets load, show an empty form.
-      localPolicy.value = preset ? clonePolicy(preset.policy) : emptyPolicy()
-    } else {
-      activePreset.value = null
-      localPolicy.value = normalizePolicy((step.policy as { kind: 'inline'; policy: ResolvedPolicy }).policy)
-    }
+    if (localPolicy.value !== null && version === seededVersion.value) return
+    // While dirty, a re-seed would clobber the user's unsaved edits with the
+    // server draft; leave the local model alone until they settle.
+    if (props.dirty && localPolicy.value !== null) return
+    localPolicy.value = seedFromDraft(draft)
+    seededVersion.value = version
   },
   { immediate: true },
 )
@@ -73,7 +75,7 @@ watch(
 function emptyPolicy(): ResolvedPolicy {
   return {
     schema_version: 1,
-    classifier: { name: 'effect-direction', version: 1 },
+    classifier_tags: [],
     matched: {},
     unmatched: {},
   }
@@ -88,23 +90,58 @@ function normalizePolicy(p: ResolvedPolicy | undefined): ResolvedPolicy {
   if (!p) return base
   return {
     schema_version: p.schema_version || 1,
-    classifier: p.classifier ?? base.classifier,
+    classifier_tags: Array.isArray(p.classifier_tags) ? [...p.classifier_tags] : [],
     matched: p.matched ?? {},
     unmatched: p.unmatched ?? {},
   }
+}
+
+// Seed the local editable copy from the server draft. The draft object comes
+// from the vue-query cache, whose objects are readonly reactive proxies —
+// seeding without a deep clone aliases the proxy and silently drops every
+// later form mutation.
+function seedFromDraft(draft: DraftResponse): ResolvedPolicy {
+  const step = draft.workflow.steps[0]
+  if (!step) return emptyPolicy()
+  if (step.policy.kind === 'inline') {
+    return clonePolicy(normalizePolicy(step.policy.policy))
+  }
+  return emptyPolicy()
 }
 
 function markDirty() {
   emit('update:dirty', true)
 }
 
-function applyPreset(name: string, version: number) {
-  if (props.dirty && !window.confirm('切换模板将覆盖当前未保存的自定义配置，继续？')) return
-  const preset = props.presets.find((p) => p.name === name && p.version === version)
-  if (!preset) return
-  localPolicy.value = clonePolicy(preset.policy)
-  activePreset.value = { name, version }
-  emit('update:dirty', false)
+// Snapshot-on-apply: the slot policy is deep-cloned into the draft; later slot
+// edits cannot reach this draft.
+function applySlot(slot: PolicySlot) {
+  if (!slot.policy) return
+  if (props.dirty && !window.confirm('应用槽位策略将覆盖当前未保存的修改，继续？')) return
+  localPolicy.value = clonePolicy(slot.policy)
+  emit('update:dirty', true)
+}
+
+function beginSaveSlot(index: number) {
+  if (slotTarget.value === index) {
+    slotTarget.value = null
+    return
+  }
+  slotTarget.value = index
+  slotName.value = props.slots[index]?.name ?? ''
+}
+
+function confirmSaveSlot() {
+  if (
+    slotTarget.value === null ||
+    !localPolicy.value ||
+    !localComplete.value ||
+    !slotName.value.trim()
+  ) {
+    return
+  }
+  emit('save-slot', { slot: slotTarget.value + 1, name: slotName.value.trim(), policy: clonePolicy(localPolicy.value) })
+  slotTarget.value = null
 }
 
 function updateSpec(profile: 'matched' | 'unmatched', side: 'lossless' | 'encoded', spec: AudioOutputSpec | null) {
@@ -114,22 +151,56 @@ function updateSpec(profile: 'matched' | 'unmatched', side: 'lossless' | 'encode
   } else {
     localPolicy.value[profile][side] = spec
   }
-  // Any direct edit leaves preset-template mode.
-  activePreset.value = null
   markDirty()
 }
 
-const isCustom = computed(() => activePreset.value === null)
+// Tag editor helpers. Tags are literal text — no regex validation anywhere;
+// the backend normalizes (trims/dedupes) and is the sole authority.
+const tagInput = ref('')
 
-// Build the wire workflow from the local model.
+function addTag() {
+  if (!localPolicy.value) return
+  const tag = tagInput.value.trim()
+  if (!tag) return
+  tagInput.value = ''
+  if (!localPolicy.value.classifier_tags) localPolicy.value.classifier_tags = []
+  // Local duplicate guard (case-insensitive) keeps the chips clean; the
+  // backend dedupes authoritatively on save.
+  if (localPolicy.value.classifier_tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return
+  localPolicy.value.classifier_tags.push(tag)
+  markDirty()
+}
+
+function removeTag(index: number) {
+  if (!localPolicy.value) return
+  localPolicy.value.classifier_tags?.splice(index, 1)
+  markDirty()
+}
+
+function onTagKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    addTag()
+  }
+}
+
+// Locally obvious incompleteness: at least one tag and one output per profile.
+// The backend remains the authority for full validation.
+const localComplete = computed(() => {
+  const p = localPolicy.value
+  if (!p) return false
+  if (!p.classifier_tags || p.classifier_tags.length === 0) return false
+  const hasOutput = (profile: 'matched' | 'unmatched') =>
+    Boolean(p[profile]?.lossless || p[profile]?.encoded)
+  return hasOutput('matched') && hasOutput('unmatched')
+})
+
+// Build the wire workflow from the local model — always an inline snapshot.
 function buildWorkflow(): WorkflowInput | null {
   if (!localPolicy.value) return null
-  const policy: PolicySourceWire = isCustom.value
-    ? { kind: 'inline', policy: localPolicy.value }
-    : { kind: 'preset', name: activePreset.value!.name, version: activePreset.value!.version }
   return {
     schema_version: 1,
-    steps: [{ step_type: 'reconcile_audio_outputs', policy }],
+    steps: [{ step_type: 'reconcile_audio_outputs', policy: { kind: 'inline', policy: localPolicy.value } }],
   }
 }
 
@@ -173,7 +244,7 @@ function onCodecChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'enc
   const existing = specFor(profile, side)
   const next: AudioOutputSpec = { codec: value }
   if (side === 'encoded') {
-    // Encoded outputs require a positive bitrate; default to the preset norm.
+    // Encoded outputs require a positive bitrate; default to the common norm.
     next.quality = { kind: 'bitrate', bitrate: existing?.quality?.bitrate ?? 320 }
   }
   updateSpec(profile, side, next)
@@ -206,46 +277,56 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
       当前 Workflow schema v1 仅支持上述单个步骤；后续版本将开放更多步骤类型与编排。
     </p>
 
-    <!-- Preset templates -->
-    <div class="mt-4">
-      <p class="text-xs font-medium">策略模板</p>
-      <div class="mt-1.5 flex flex-wrap gap-1.5">
-        <button
-          v-for="preset in presets"
-          :key="`${preset.name}@${preset.version}`"
-          type="button"
-          class="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-left text-[11px]"
-          :class="
-            activePreset?.name === preset.name && activePreset?.version === preset.version
-              ? 'border-foreground/30 bg-foreground/10'
-              : 'border-border hover:bg-accent'
-          "
-          :data-testid="`preset-${preset.name}`"
-          :disabled="readOnly"
-          @click="applyPreset(preset.name, preset.version)"
-        >
-          <Sparkles class="size-3 text-[var(--ring)]" />
-          <span class="font-semibold">{{ preset.name }}@{{ preset.version }}</span>
-        </button>
-        <span
-          v-if="isCustom"
-          class="flex items-center gap-1.5 rounded-md border border-[var(--ring)]/40 bg-[var(--ring)]/10 px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ring)]"
-          data-testid="custom-policy-badge"
-        >
-          自定义策略
-        </span>
-      </div>
-    </div>
-
-    <!-- Output policy form -->
+    <!-- Content classifier: literal tags -->
     <div v-if="localPolicy" class="mt-4 space-y-3" data-testid="policy-form">
+      <div class="rounded-md border border-border bg-card/60 p-3" data-testid="tag-editor">
+        <p class="text-xs font-semibold">内容分类标签</p>
+        <p class="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+          命中任一标签（不区分大小写，匹配专辑内相对路径的子串）的文件归入「无音效」分区，其余归入「有音效」。标签按普通文本处理，无需正则语法。
+        </p>
+        <div v-if="localPolicy.classifier_tags?.length" class="mt-2 flex flex-wrap gap-1.5" data-testid="tag-chips">
+          <span
+            v-for="(tag, index) in localPolicy.classifier_tags"
+            :key="`${tag}-${index}`"
+            class="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[10px]"
+          >
+            {{ tag }}
+            <button
+              type="button"
+              class="text-muted-foreground hover:text-destructive"
+              :aria-label="`删除标签 ${tag}`"
+              :data-testid="`remove-tag-${index}`"
+              :disabled="readOnly"
+              @click="removeTag(index)"
+            >
+              <X class="size-3" />
+            </button>
+          </span>
+        </div>
+        <div class="mt-2 flex items-center gap-2">
+          <input
+            v-model="tagInput"
+            type="text"
+            placeholder="输入标签后回车添加，例如 SEなし"
+            class="h-7 min-w-0 flex-1 rounded border border-input bg-background px-2 font-mono text-[11px]"
+            data-testid="tag-input"
+            :disabled="readOnly"
+            @keydown="onTagKeydown"
+          />
+          <Button variant="outline" size="sm" data-testid="add-tag" :disabled="readOnly || !tagInput.trim()" @click="addTag">
+            添加
+          </Button>
+        </div>
+      </div>
+
+      <!-- Output policy form -->
       <div
         v-for="profile in (['matched', 'unmatched'] as const)"
         :key="profile"
         class="rounded-md border border-border bg-card/60 p-3"
       >
         <p class="text-xs font-semibold">
-          {{ profile === 'matched' ? '有音效（matched）输出' : '无音效（unmatched）输出' }}
+          {{ profile === 'matched' ? '无音效（matched）输出' : '有音效（unmatched）输出' }}
         </p>
         <div class="mt-2 grid grid-cols-2 gap-3">
           <div
@@ -261,7 +342,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
                 :value="codecOf(profile, side)"
                 class="h-7 min-w-0 flex-1 rounded border border-input bg-background px-1.5 text-[11px]"
                 :data-testid="`codec-${profile}-${side}`"
-                :disabled="!isCustom || readOnly"
+                :disabled="readOnly"
                 @change="onCodecChange(profile, side, $event)"
               >
                 <option v-for="opt in codecOptions[side]" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -273,7 +354,7 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
                   :value="specFor(profile, side)?.quality?.bitrate"
                   class="h-7 w-16 rounded border border-input bg-background px-1.5 text-[11px]"
                   :data-testid="`bitrate-${profile}-${side}`"
-                  :disabled="!isCustom || readOnly"
+                  :disabled="readOnly"
                   @change="onBitrateChange(profile, side, $event)"
                 />
                 <span class="text-[10px] text-muted-foreground">kbps</span>
@@ -282,43 +363,68 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- Classifier (advanced, free-form; backend validates support) -->
-      <div class="rounded-md border border-border bg-card/60">
-        <button
-          type="button"
-          class="flex w-full items-center gap-1.5 px-3 py-2 text-left"
-          @click="advancedOpen = !advancedOpen"
+    <!-- Global policy slots -->
+    <div class="mt-4">
+      <p class="text-xs font-medium">全局策略槽位</p>
+      <p class="mt-0.5 text-[10px] text-muted-foreground">
+        槽位是可复用的模板：应用会把槽位当前策略复制为本工作集配置的独立快照，之后修改槽位不影响已保存的工作集或历史版本。
+      </p>
+      <div class="mt-1.5 space-y-1.5" data-testid="policy-slots">
+        <div
+          v-for="(slot, index) in slots"
+          :key="slot.slot"
+          class="rounded-md border px-3 py-2"
+          :class="slotTarget === index ? 'border-[var(--ring)]/60 bg-[var(--ring)]/5' : 'border-border bg-card/60'"
+          :data-testid="`policy-slot-${slot.slot}`"
         >
-          <component :is="advancedOpen ? ChevronDown : ChevronRight" class="size-3.5" />
-          <span class="text-xs font-semibold">高级 · 内容分类器</span>
-        </button>
-        <div v-if="advancedOpen" class="grid grid-cols-2 gap-3 px-3 pb-3">
-          <label class="block">
-            <span class="text-[10px] font-medium text-muted-foreground">分类器名称</span>
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="grid size-5 shrink-0 place-items-center rounded bg-foreground/10 font-mono text-[9px] font-semibold">{{ slot.slot }}</span>
+            <span class="min-w-0 flex-1 truncate text-[11px] font-semibold">
+              {{ slot.name || `槽位 ${slot.slot}（空）` }}
+            </span>
+            <span v-if="!slot.policy" class="shrink-0 text-[10px] text-muted-foreground">未配置</span>
+            <Button
+              v-if="slot.policy"
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[10px]"
+              :data-testid="`apply-slot-${slot.slot}`"
+              :disabled="readOnly"
+              @click="applySlot(slot)"
+            >
+              <Download class="size-3" />
+              应用
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-6 px-2 text-[10px]"
+              :data-testid="`save-to-slot-${slot.slot}`"
+              :disabled="readOnly || !localComplete"
+              @click="beginSaveSlot(index)"
+            >
+              <Upload class="size-3" />
+              存入槽位
+            </Button>
+          </div>
+          <div v-if="slotTarget === index" class="mt-2 flex items-center gap-2" :data-testid="`slot-save-form-${slot.slot}`">
             <input
-              v-model="localPolicy.classifier.name"
+              v-model="slotName"
               type="text"
-              class="mt-0.5 h-7 w-full rounded border border-input bg-background px-2 font-mono text-[11px]"
-              data-testid="classifier-name"
-              :disabled="!isCustom || readOnly"
-              @change="markDirty"
+              placeholder="槽位名称"
+              class="h-7 min-w-0 flex-1 rounded border border-input bg-background px-2 text-[11px]"
+              :data-testid="`slot-name-${slot.slot}`"
             />
-          </label>
-          <label class="block">
-            <span class="text-[10px] font-medium text-muted-foreground">版本（正整数）</span>
-            <input
-              v-model.number="localPolicy.classifier.version"
-              type="number"
-              min="1"
-              class="mt-0.5 h-7 w-full rounded border border-input bg-background px-2 font-mono text-[11px]"
-              data-testid="classifier-version"
-              :disabled="!isCustom || readOnly"
-              @change="markDirty"
-            />
-          </label>
+            <Button size="sm" class="h-7 px-2 text-[10px]" data-testid="confirm-save-slot" :disabled="!slotName.trim()" @click="confirmSaveSlot">
+              保存
+            </Button>
+            <Button variant="ghost" size="sm" class="h-7 px-2 text-[10px]" @click="slotTarget = null">取消</Button>
+          </div>
         </div>
       </div>
+      <p v-if="slotError" class="mt-1.5 text-[10px] text-destructive" data-testid="slot-error">{{ slotError }}</p>
     </div>
 
     <!-- Version conflict resolution -->

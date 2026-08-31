@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { AlertTriangle } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -7,9 +7,10 @@ import { ApiError, useApiClient } from '@/lib/api/client'
 import { errorDetails } from '@/lib/api/error'
 import type { DraftResponse, Workset, WorkflowInput } from '@/lib/api/types'
 import {
+  policySlotListQueryOptions,
   saveDraftMutationOptions,
+  savePolicySlotMutationOptions,
   syncAfterDraftConflict,
-  workflowPresetListQueryOptions,
 } from '@/queries/worksets'
 import { useWorksetGeneration } from '@/composables/use-workset-generation'
 import PolicyEditor from './PolicyEditor.vue'
@@ -27,6 +28,12 @@ const props = defineProps<{
   detailLoading: boolean
   draftQueryData: DraftResponse | null
   revisionList: { plan_id: string; revision_index: number; created_at: string; status: string; summary_reason: string; validation_state: string; stale: boolean | null; blocked_count: number }[]
+  hasMoreRevisions: boolean
+  loadingMoreRevisions: boolean
+}>()
+
+const emit = defineEmits<{
+  'load-earlier-revisions': []
 }>()
 
 const api = useApiClient()
@@ -38,24 +45,34 @@ const dirty = ref(false)
 const conflict = ref(false)
 const conflictMessage = ref<string | null>(null)
 
-const presetsQuery = useQuery(workflowPresetListQueryOptions(api))
-const presets = computed(() => presetsQuery.data.value ?? [])
+const slotsQuery = useQuery(policySlotListQueryOptions(api))
+const slots = computed(() => slotsQuery.data.value ?? [])
 
 const saveMutation = useMutation(saveDraftMutationOptions(api, queryClient))
+const slotSaveMutation = useMutation(savePolicySlotMutationOptions(api, queryClient))
 
-const activeGeneration = computed(() => props.workset?.active_generation ?? null)
+const activeGeneration = computed(() => {
+  const generation = props.workset?.active_generation ?? null
+  return generation && (generation.status === 'queued' || generation.status === 'running') ? generation : null
+})
 
 // Attach the SSE stream for an already-running session (page reload while a
 // generation is active on the backend). Idempotent: the store refuses a new
 // attach while streaming.
 watch(
   [activeGeneration, () => props.workset?.workset_id],
-  ([gen, wsId]) => {
+  ([gen, wsId], [, previousWsId]) => {
+    // The generation stream store is a singleton. Detach from the previous
+    // Workset before attaching the newly selected one so Feed and route changes
+    // never inherit a stale stream or refuse the new attachment.
+    if (previousWsId && wsId !== previousWsId) generation.stop()
     if (!gen || !wsId || !props.workset) return
     generation.attach(wsId, gen.generation_id)
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => generation.stop())
 
 // Terminal SSE outcome: decide the follow-up cache sync. The composable's
 // attach already syncs on settle; the flags below drive the inline banner.
@@ -78,6 +95,15 @@ watch(
     stage.value = props.workset?.current_revision ? 'review' : 'configure'
   },
   { immediate: true },
+)
+
+watch(
+  () => props.workset?.current_revision?.plan_id,
+  (planId, previousPlanId) => {
+    if (planId && previousPlanId && planId !== previousPlanId && !dirty.value) {
+      stage.value = 'review'
+    }
+  },
 )
 
 async function onSave(input: { workflow: WorkflowInput }) {
@@ -139,7 +165,7 @@ async function onSaveAndGenerate(input: { workflow: WorkflowInput }) {
       // returns created:false with the generation payload — handled the same
       // way, via the caches the mutation options refresh.)
       if ('revision' in result) {
-        unchangedNotice.value = `配置与文件库存未变化，继续使用 Revision v${result.revision.revision_index + 1}`
+        unchangedNotice.value = `配置与文件库存未变化，继续使用 Revision v${result.revision.revision_index}`
       } else {
         unchangedNotice.value = '该生成请求已在进行中，正在展示其进度。'
       }
@@ -158,6 +184,17 @@ async function onCancelGeneration() {
   if (!gen || !worksetId.value) return
   await generation.cancel(worksetId.value, gen.generation_id)
 }
+
+async function onSaveSlot(input: { slot: number; name: string; policy: import('@/lib/api/types').ResolvedPolicy }) {
+  slotError.value = null
+  try {
+    await slotSaveMutation.mutateAsync(input)
+  } catch (error) {
+    slotError.value = error instanceof ApiError ? `${errorDetails(error).code}: ${errorDetails(error).message}` : '槽位保存失败'
+  }
+}
+
+const slotError = ref<string | null>(null)
 
 function loadServerVersion() {
   conflict.value = false
@@ -305,15 +342,18 @@ const detailErrorDetails = computed(() =>
       <PolicyEditor
         v-if="stage === 'configure'"
         :draft="draftQueryData"
-        :presets="presets"
+        :slots="slots"
         :saving="saveMutation.isPending.value"
         :generating="generating"
+        :slot-saving="slotSaveMutation.isPending.value"
+        :slot-error="slotError"
         :conflict="conflict"
         :conflict-message="conflictMessage"
         :dirty="dirty"
         :read-only="readOnly"
         @save="onSave"
         @save-and-generate="onSaveAndGenerate"
+        @save-slot="onSaveSlot"
         @load-server-version="loadServerVersion"
         @discard="discardChanges"
         @update:dirty="dirty = $event"
@@ -324,6 +364,9 @@ const detailErrorDetails = computed(() =>
         v-else-if="stage === 'review'"
         :workset="workset"
         :revision-list="revisionList"
+        :has-more="hasMoreRevisions"
+        :loading-more="loadingMoreRevisions"
+        @load-earlier-revisions="emit('load-earlier-revisions')"
       />
     </template>
   </div>

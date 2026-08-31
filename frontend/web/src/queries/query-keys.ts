@@ -17,8 +17,8 @@ export const queryKeys = {
     list: (libraryId: string, limit = 100) => ['plans', 'list', libraryId, limit] as const,
     detail: (planId: string) => ['plans', 'detail', planId] as const,
   },
-  workflowPresets: {
-    list: () => ['workflow-presets', 'list'] as const,
+  policySlots: {
+    list: () => ['policy-slots', 'list'] as const,
   },
   worksets: {
     all: () => ['worksets'] as const,
