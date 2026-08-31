@@ -12,9 +12,10 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     openBatchIndexes: markRaw(new Set<number>()),
     batchSearch: '' as string,
     batchFilter: 'all' as 'all' | 'change' | 'blocked' | 'pending',
-    // 0 = current revision; >0 = index into the workset's revision list
-    // (metadata-only historical read-back).
-    historyIndex: 0,
+    // null = current revision; otherwise the selected historical revision's
+    // plan_id (stable: loading earlier pages or generating a new revision
+    // cannot shift the selection).
+    historyPlanId: null as string | null,
   }),
   actions: {
     selectWorkset(id: string | null) {
@@ -29,8 +30,8 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     selectComponent(componentId: string | null) {
       this.selectedComponentId = componentId
     },
-    selectHistory(index: number) {
-      this.historyIndex = index
+    selectHistoryPlan(planId: string | null) {
+      this.historyPlanId = planId
     },
     toggleBatchOpen(index: number) {
       const next = new Set(this.openBatchIndexes)
@@ -38,13 +39,17 @@ export const useWorksetUiStore = defineStore('workset-ui', {
       else next.add(index)
       this.openBatchIndexes = markRaw(next)
     },
+    openBatch(index: number) {
+      if (this.openBatchIndexes.has(index)) return
+      this.openBatchIndexes = markRaw(new Set([...this.openBatchIndexes, index]))
+    },
     resetBatchSelection() {
       this.selectedBatchIndex = null
       this.selectedComponentId = null
       this.openBatchIndexes = markRaw(new Set())
       this.batchSearch = ''
       this.batchFilter = 'all'
-      this.historyIndex = 0
+      this.historyPlanId = null
     },
   },
 })

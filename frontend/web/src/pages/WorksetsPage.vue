@@ -9,7 +9,7 @@ import {
   worksetDetailQueryOptions,
   worksetDraftQueryOptions,
   worksetFeedInfiniteQueryOptions,
-  worksetRevisionListQueryOptions,
+  worksetRevisionListInfiniteQueryOptions,
 } from '@/queries/worksets'
 import { useWorksetUiStore } from '@/stores/workset-ui'
 import WorksetFeed from '@/features/worksets/WorksetFeed.vue'
@@ -46,14 +46,22 @@ watchEffect(() => {
   }
   if (!feedQuery.data.value) return
   const first = worksets.value[0]
-  if (first && first.workset_id !== ui.selectedWorksetId) {
+  if (first) {
     void router.replace({ path: `/worksets/${encodeURIComponent(first.workset_id)}`, query: route.query })
   }
 })
 
 const detailQuery = useQuery(computed(() => worksetDetailQueryOptions(api, selectedId.value)))
 const draftQuery = useQuery(computed(() => worksetDraftQueryOptions(api, selectedId.value)))
-const revisionListQuery = useQuery(computed(() => worksetRevisionListQueryOptions(api, selectedId.value)))
+const revisionListQuery = useInfiniteQuery(
+  computed(() => worksetRevisionListInfiniteQueryOptions(api, selectedId.value)),
+)
+const revisionList = computed(() => revisionListQuery.data.value?.pages.flatMap((page) => page.revisions) ?? [])
+const hasMoreRevisions = computed(() => revisionListQuery.hasNextPage.value)
+
+function loadEarlierRevisions() {
+  void revisionListQuery.fetchNextPage()
+}
 
 const selectedWorkset = computed(() => detailQuery.data.value ?? null)
 
@@ -117,7 +125,10 @@ function retryFeed() {
         :detail-error="detailQuery.error.value as Error | null"
         :detail-loading="detailQuery.isPending.value"
         :draft-query-data="draftQuery.data.value ?? null"
-        :revision-list="revisionListQuery.data.value ?? []"
+        :revision-list="revisionList"
+        :has-more-revisions="hasMoreRevisions"
+        :loading-more-revisions="revisionListQuery.isFetchingNextPage.value"
+        @load-earlier-revisions="loadEarlierRevisions"
       />
     </div>
     <div v-else class="grid min-w-0 flex-1 place-items-center" data-testid="workset-none-selected">

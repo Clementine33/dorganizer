@@ -51,11 +51,16 @@ function apiStubFor(overrides: Partial<ApiClientContract> = {}): ApiClientContra
     getWorkset: vi.fn().mockResolvedValue(worksetA),
     getWorksetDraft: vi.fn().mockResolvedValue({
       workset_id: 'ws-a', version: 3, workflow_schema_version: 1,
-      workflow: { schema_version: 1, steps: [{ step_type: 'reconcile_audio_outputs', policy: { kind: 'preset', name: 'balanced', version: 1 } }] },
+      workflow: {
+        schema_version: 1,
+        steps: [{
+          step_type: 'reconcile_audio_outputs',
+          policy: { kind: 'inline', policy: { schema_version: 1, classifier_tags: ['SEなし'], matched: { lossless: { codec: 'wav' } }, unmatched: { encoded: { codec: 'mp3', quality: { kind: 'bitrate', bitrate: 320 } } } } },
+        }],
+      },
       updated_at: '',
     }),
-    listRevisions: vi.fn().mockResolvedValue([]),
-    listWorkflowPresets: vi.fn().mockResolvedValue([]),
+    listRevisions: vi.fn().mockResolvedValue({ revisions: [], next_before_index: 0 }),
     ...overrides,
   })
 }
