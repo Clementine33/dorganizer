@@ -66,15 +66,9 @@ func formatTime(t time.Time) string {
 // fallback when no SSE transport is available.
 func (s *serviceImpl) Subscribe(ctx context.Context, worksetID, generationID string, emit func(event string, data any) error) error {
 	// Scoped access check first: a session belonging to another workset is 404.
-	g, err := s.repo.GetGeneration(generationID)
+	g, err := s.loadGeneration(worksetID, generationID)
 	if err != nil {
-		if err == sqlite.ErrGenerationNotFound {
-			return NewError(ErrKindNotFound, "GENERATION_NOT_FOUND", "generation not found", nil)
-		}
-		return NewError(ErrKindInternal, "INTERNAL", "failed to load generation", err)
-	}
-	if g.WorksetID != worksetID {
-		return NewError(ErrKindNotFound, "GENERATION_NOT_FOUND", "generation not found", nil)
+		return err
 	}
 
 	// Initial snapshot: the authoritative current state, always first.

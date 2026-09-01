@@ -19,7 +19,6 @@ type dispatcher struct {
 	svc     *serviceImpl
 	workers int
 
-	mu    sync.Mutex
 	wakeC chan struct{}
 	done  chan struct{}
 	stop  sync.Once
@@ -40,13 +39,8 @@ func newDispatcher(svc *serviceImpl, workers int) *dispatcher {
 // Start launches the worker pool. It is called once at process startup after
 // InterruptStaleGenerations, so the queue is always clean.
 func (d *dispatcher) Start() {
-	var wg sync.WaitGroup
-	for i := 0; i < d.workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			d.run()
-		}()
+	for range d.workers {
+		go d.run()
 	}
 }
 
