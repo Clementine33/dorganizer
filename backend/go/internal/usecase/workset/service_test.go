@@ -280,3 +280,154 @@ func TestOrphanedWorksetReadOnly(t *testing.T) {
 		t.Fatalf("expected ORPHANED_WORKSET, got %v", err)
 	}
 }
+
+func insertTestAudioEntry(t *testing.T, repo *sqlite.Repository, path, root string, size, mtime int64) {
+	t.Helper()
+	now := time.Now().Format(timeFmt)
+	parent := "/"
+	if len(path) > 1 {
+		parent = filepath.Dir(path)
+	}
+	_, err := repo.DB().Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 0, ?, ?, 'mp3', ?, ?)
+	`, path, root, parent, filepath.Base(path), size, mtime, now, now)
+	if err != nil {
+		t.Fatalf("insert audio entry: %v", err)
+	}
+}
+
+func insertNonAudioEntry(t *testing.T, repo *sqlite.Repository, path, root string, size, mtime int64) {
+	t.Helper()
+	now := time.Now().Format(timeFmt)
+	parent := "/"
+	if len(path) > 1 {
+		parent = filepath.Dir(path)
+	}
+	_, err := repo.DB().Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 0, ?, ?, 'txt', ?, ?)
+	`, path, root, parent, filepath.Base(path), size, mtime, now, now)
+	if err != nil {
+		t.Fatalf("insert non-audio entry: %v", err)
+	}
+}
+
+func TestStaleValidationBlockedAndSidecarIndependence(t *testing.T) {
+	svc := newSvc(t, 1)
+	repo := svc.repo
+	insertLibraryRow(t, repo, "lib-1", "Onsei", "/music")
+	insertFolder(t, repo, "lib-1", "f-a", "/music/albumA", "albumA", "albumA")
+	insertTestAudioEntry(t, repo, "/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
+	insertNonAudioEntry(t, repo, "/music/albumA/cover.jpg", "/music/albumA", 2048, 1000)
+
+	ctx := context.Background()
+	res, err := svc.CreateWorkset(ctx, CreateRequest{
+		LibraryID: "lib-1", Title: "测试正交", FolderIDs: []string{"f-a"}, IdempotencyKey: "idem-stale-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkset: %v", err)
+	}
+	id := res.Workset.WorksetID
+
+	// 1. Generate revision v1.
+	genRes, err := svc.StartGeneration(ctx, id, StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-stale-1"})
+	if err != nil {
+		t.Fatalf("StartGeneration: %v", err)
+	}
+	gen, err := repo.GetGeneration(genRes.Generation.GenerationID)
+	if err != nil {
+		t.Fatalf("GetGeneration: %v", err)
+	}
+	svc.dispatcher.execute(gen)
+
+	view, err := svc.GetWorkset(ctx, id)
+	if err != nil {
+		t.Fatalf("GetWorkset: %v", err)
+	}
+	if view.CurrentRevision == nil {
+		t.Fatal("expected current revision")
+	}
+	if view.CurrentRevision.ValidationState != ValidationValid || view.CurrentRevision.Stale == nil || *view.CurrentRevision.Stale != false {
+		t.Fatalf("expected valid non-stale revision, got state=%q stale=%v", view.CurrentRevision.ValidationState, view.CurrentRevision.Stale)
+	}
+
+	// 2. Modifying non-audio sidecar (cover.jpg mtime or add txt) does NOT mark stale.
+	_, err = repo.DB().Exec("UPDATE entries SET mtime = mtime + 500 WHERE path = '/music/albumA/cover.jpg'")
+	if err != nil {
+		t.Fatalf("update sidecar mtime: %v", err)
+	}
+	insertNonAudioEntry(t, repo, "/music/albumA/notes.txt", "/music/albumA", 500, 1000)
+
+	viewAfterSidecar, err := svc.GetWorkset(ctx, id)
+	if err != nil {
+		t.Fatalf("GetWorkset after sidecar change: %v", err)
+	}
+	if viewAfterSidecar.CurrentRevision.ValidationState != ValidationValid || *viewAfterSidecar.CurrentRevision.Stale != false {
+		t.Fatalf("non-audio file change should NOT make revision stale, got state=%q stale=%v", viewAfterSidecar.CurrentRevision.ValidationState, viewAfterSidecar.CurrentRevision.Stale)
+	}
+
+	// 3. Modifying audio file (size/mtime) DOES mark stale.
+	_, err = repo.DB().Exec("UPDATE entries SET mtime = mtime + 100 WHERE path = '/music/albumA/01.mp3'")
+	if err != nil {
+		t.Fatalf("update audio mtime: %v", err)
+	}
+	viewAfterAudio, err := svc.GetWorkset(ctx, id)
+	if err != nil {
+		t.Fatalf("GetWorkset after audio change: %v", err)
+	}
+	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale || *viewAfterAudio.CurrentRevision.Stale != true {
+		t.Fatalf("audio file change MUST make revision stale, got state=%q stale=%v", viewAfterAudio.CurrentRevision.ValidationState, viewAfterAudio.CurrentRevision.Stale)
+	}
+}
+
+func TestMissingRootRemainsMissingAndNotStaleUntilAudioAppears(t *testing.T) {
+	svc := newSvc(t, 1)
+	repo := svc.repo
+	insertLibraryRow(t, repo, "lib-1", "Onsei", "/music")
+	insertFolder(t, repo, "lib-1", "f-missing", "/music/albumMissing", "albumMissing", "albumMissing")
+
+	ctx := context.Background()
+	res, err := svc.CreateWorkset(ctx, CreateRequest{
+		LibraryID: "lib-1", Title: "缺失根测试", FolderIDs: []string{"f-missing"}, IdempotencyKey: "idem-missing-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkset: %v", err)
+	}
+	id := res.Workset.WorksetID
+
+	genRes, err := svc.StartGeneration(ctx, id, StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-missing-1"})
+	if err != nil {
+		t.Fatalf("StartGeneration: %v", err)
+	}
+	gen, err := repo.GetGeneration(genRes.Generation.GenerationID)
+	if err != nil {
+		t.Fatalf("GetGeneration: %v", err)
+	}
+	svc.dispatcher.execute(gen)
+
+	view, err := svc.GetWorkset(ctx, id)
+	if err != nil {
+		t.Fatalf("GetWorkset: %v", err)
+	}
+	if view.CurrentRevision == nil {
+		t.Fatal("expected current revision")
+	}
+	// Missing root is blocked/SOURCE_MISSING, but since no inventory changed, it is NOT stale.
+	if view.CurrentRevision.BlockedCount == 0 {
+		t.Fatalf("expected blocked count > 0, got %d", view.CurrentRevision.BlockedCount)
+	}
+	if view.CurrentRevision.ValidationState != ValidationValid || *view.CurrentRevision.Stale != false {
+		t.Fatalf("missing root with unchanged inventory must not be stale, got state=%q stale=%v", view.CurrentRevision.ValidationState, view.CurrentRevision.Stale)
+	}
+
+	// When audio is scanned/added under that root, it becomes stale.
+	insertTestAudioEntry(t, repo, "/music/albumMissing/01.mp3", "/music/albumMissing", 1024, 1000)
+	viewAfterAudio, err := svc.GetWorkset(ctx, id)
+	if err != nil {
+		t.Fatalf("GetWorkset after audio appears: %v", err)
+	}
+	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale || *viewAfterAudio.CurrentRevision.Stale != true {
+		t.Fatalf("after audio appears, revision should become stale, got state=%q stale=%v", viewAfterAudio.CurrentRevision.ValidationState, viewAfterAudio.CurrentRevision.Stale)
+	}
+}

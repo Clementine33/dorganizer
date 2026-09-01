@@ -110,6 +110,17 @@ export interface SavePolicySlotInput {
   policy: ResolvedPolicy
 }
 
+export interface ClassifierCustomTag {
+  id: number
+  tag: string
+  created_at?: string
+}
+
+export interface ClassifierTagLibraryResponse {
+  default_tags: string[]
+  custom_tags: ClassifierCustomTag[]
+}
+
 // ==================== Worksets ====================
 
 export type PlanningState = 'unplanned' | 'planned' | 'needs_planning' | 'planning' | 'orphaned'
@@ -383,6 +394,9 @@ export interface ApiClientContract {
   getFolderTree(libraryId: string, folderId: string, signal?: AbortSignal): Promise<TreeNode>
   listPolicySlots(signal?: AbortSignal): Promise<PolicySlot[]>
   savePolicySlot(slot: number, input: SavePolicySlotInput): Promise<PolicySlot>
+  listClassifierTags(signal?: AbortSignal): Promise<ClassifierTagLibraryResponse>
+  addClassifierTag(tag: string): Promise<ClassifierCustomTag>
+  deleteClassifierTag(id: number): Promise<void>
   createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }>
   listWorksets(params?: ListWorksetsParams, signal?: AbortSignal): Promise<WorksetListResponse>
   getWorkset(id: string, signal?: AbortSignal): Promise<Workset>

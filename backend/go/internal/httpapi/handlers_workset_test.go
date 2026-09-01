@@ -3,8 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,6 +25,10 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 		t.Fatalf("repo: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
+	cfg := `{"prune":{"literal_tags":["SEなし"]}}`
+	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	svc := worksetusecase.NewService(repo, tmp, 1)
 	handler := NewServer(Dependencies{
 		Repo:           repo,
@@ -238,5 +245,77 @@ func TestPolicySlotsListAndUpdate(t *testing.T) {
 	// The seeded workset draft must be a complete inline policy (self-contained).
 	if _, err := repo.GetPolicySlot(1); err != nil {
 		t.Fatalf("get slot: %v", err)
+	}
+}
+
+func TestClassifierTagsHTTPAPI(t *testing.T) {
+	h, _ := newWorksetServer(t)
+
+	// 1. Initial list: has default tags from temp config, 0 custom tags
+	w := req(t, h, http.MethodGet, "/api/v1/classifier-tags", testToken, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list tags status = %d", w.Code)
+	}
+	var res struct {
+		DefaultTags []string `json:"default_tags"`
+		CustomTags  []struct {
+			ID        int64  `json:"id"`
+			Tag       string `json:"tag"`
+			CreatedAt string `json:"created_at"`
+		} `json:"custom_tags"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode tag library: %v", err)
+	}
+	if len(res.DefaultTags) == 0 || res.DefaultTags[0] != "SEなし" {
+		t.Fatalf("expected default tags [SEなし], got %+v", res.DefaultTags)
+	}
+	if len(res.CustomTags) != 0 {
+		t.Fatalf("expected 0 custom tags initially, got %d", len(res.CustomTags))
+	}
+
+	// 2. Add custom tag
+	w = req(t, h, http.MethodPost, "/api/v1/classifier-tags", testToken, map[string]any{"tag": "  效果音なし  "})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create tag status = %d: %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		ID  int64  `json:"id"`
+		Tag string `json:"tag"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created tag: %v", err)
+	}
+	if created.Tag != "效果音なし" || created.ID <= 0 {
+		t.Fatalf("unexpected created tag: %+v", created)
+	}
+
+	// 3. Duplicate is idempotent
+	w = req(t, h, http.MethodPost, "/api/v1/classifier-tags", testToken, map[string]any{"tag": "效果音なし"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create duplicate tag status = %d", w.Code)
+	}
+
+	// 4. Verify in list
+	w = req(t, h, http.MethodGet, "/api/v1/classifier-tags", testToken, nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode tag library 2: %v", err)
+	}
+	if len(res.CustomTags) != 1 || res.CustomTags[0].Tag != "效果音なし" {
+		t.Fatalf("expected 1 custom tag, got %+v", res.CustomTags)
+	}
+
+	// 5. Delete custom tag
+	delURL := fmt.Sprintf("/api/v1/classifier-tags/%d", created.ID)
+	w = req(t, h, http.MethodDelete, delURL, testToken, nil)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. Verify list is empty
+	w = req(t, h, http.MethodGet, "/api/v1/classifier-tags", testToken, nil)
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if len(res.CustomTags) != 0 {
+		t.Fatalf("expected 0 custom tags after delete, got %d", len(res.CustomTags))
 	}
 }

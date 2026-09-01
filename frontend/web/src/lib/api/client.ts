@@ -4,6 +4,8 @@ import { parseSSEStream } from './sse'
 import type {
   ApiClientContract,
   ApiConfig,
+  ClassifierCustomTag,
+  ClassifierTagLibraryResponse,
   CreateLibraryInput,
   CreateWorksetInput,
   DraftResponse,
@@ -120,6 +122,20 @@ export class ApiClient implements ApiClientContract {
 
   savePolicySlot(slot: number, input: SavePolicySlotInput): Promise<PolicySlot> {
     return this.request(`/policy-slots/${slot}`, { method: 'PUT', body: input })
+  }
+
+  // ==================== Classifier tag library ====================
+
+  listClassifierTags(signal?: AbortSignal): Promise<ClassifierTagLibraryResponse> {
+    return this.request<ClassifierTagLibraryResponse>('/classifier-tags', { signal })
+  }
+
+  addClassifierTag(tag: string): Promise<ClassifierCustomTag> {
+    return this.request<ClassifierCustomTag>('/classifier-tags', { method: 'POST', body: { tag } })
+  }
+
+  deleteClassifierTag(id: number): Promise<void> {
+    return this.request(`/classifier-tags/${id}`, { method: 'DELETE' })
   }
 
   // ==================== Worksets ====================

@@ -7,6 +7,9 @@ import { ApiError, useApiClient } from '@/lib/api/client'
 import { errorDetails } from '@/lib/api/error'
 import type { DraftResponse, Workset, WorkflowInput } from '@/lib/api/types'
 import {
+  addClassifierTagMutationOptions,
+  classifierTagLibraryQueryOptions,
+  deleteClassifierTagMutationOptions,
   policySlotListQueryOptions,
   saveDraftMutationOptions,
   savePolicySlotMutationOptions,
@@ -48,8 +51,14 @@ const conflictMessage = ref<string | null>(null)
 const slotsQuery = useQuery(policySlotListQueryOptions(api))
 const slots = computed(() => slotsQuery.data.value ?? [])
 
+const tagLibraryQuery = useQuery(classifierTagLibraryQueryOptions(api))
+const defaultTags = computed(() => tagLibraryQuery.data.value?.default_tags ?? [])
+const customTags = computed(() => tagLibraryQuery.data.value?.custom_tags ?? [])
+
 const saveMutation = useMutation(saveDraftMutationOptions(api, queryClient))
 const slotSaveMutation = useMutation(savePolicySlotMutationOptions(api, queryClient))
+const addTagMutation = useMutation(addClassifierTagMutationOptions(api, queryClient))
+const deleteTagMutation = useMutation(deleteClassifierTagMutationOptions(api, queryClient))
 
 const activeGeneration = computed(() => {
   const generation = props.workset?.active_generation ?? null
@@ -206,6 +215,25 @@ async function onSaveSlot(input: { slot: number; name: string; policy: import('@
 }
 
 const slotError = ref<string | null>(null)
+const tagLibraryError = ref<string | null>(null)
+
+async function onAddTagToLibrary(tag: string) {
+  tagLibraryError.value = null
+  try {
+    await addTagMutation.mutateAsync(tag)
+  } catch (error) {
+    tagLibraryError.value = error instanceof ApiError ? `${errorDetails(error).code}: ${errorDetails(error).message}` : '标签库保存失败'
+  }
+}
+
+async function onDeleteTagFromLibrary(id: number) {
+  tagLibraryError.value = null
+  try {
+    await deleteTagMutation.mutateAsync(id)
+  } catch (error) {
+    tagLibraryError.value = error instanceof ApiError ? `${errorDetails(error).code}: ${errorDetails(error).message}` : '标签删除失败'
+  }
+}
 
 function loadServerVersion() {
   conflict.value = false
@@ -354,10 +382,13 @@ const detailErrorDetails = computed(() =>
         v-if="stage === 'configure'"
         :draft="draftQueryData"
         :slots="slots"
+        :default-tags="defaultTags"
+        :custom-tags="customTags"
         :saving="saveMutation.isPending.value"
         :generating="generating"
         :slot-saving="slotSaveMutation.isPending.value"
         :slot-error="slotError"
+        :tag-library-error="tagLibraryError"
         :save-error="saveError"
         :conflict="conflict"
         :conflict-message="conflictMessage"
@@ -366,6 +397,8 @@ const detailErrorDetails = computed(() =>
         @save="onSave"
         @save-and-generate="onSaveAndGenerate"
         @save-slot="onSaveSlot"
+        @add-library-tag="onAddTagToLibrary"
+        @delete-library-tag="onDeleteTagFromLibrary"
         @load-server-version="loadServerVersion"
         @discard="discardChanges"
         @update:dirty="dirty = $event"

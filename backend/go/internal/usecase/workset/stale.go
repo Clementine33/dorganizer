@@ -27,13 +27,11 @@ func (s *serviceImpl) validateRevision(w *sqlite.Workset, detail *sqlite.Workflo
 }
 
 // rootIsStale compares one persisted root fingerprint against the current
-// scanned inventory under the same normalized entry collection used at
-// planning time. Missing roots are always stale. A collection failure is
-// never "valid": fail closed toward stale.
+// scanned inventory using only audio entries (same normalized collection and
+// filtering used at planning time). A missing root whose inventory remains
+// empty is not stale (it is represented by root_status/SOURCE_MISSING).
+// A collection failure is never "valid": fail closed toward stale.
 func rootIsStale(repo *sqlite.Repository, r sqlite.WorkflowRootRecord) bool {
-	if r.RootStatus == "missing" {
-		return true
-	}
 	if r.RootPath == "" {
 		return false
 	}
@@ -41,6 +39,7 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.WorkflowRootRecord) bool {
 	if err != nil {
 		return true
 	}
-	digest, count := reconcile.InventoryFingerprint(entries)
+	audio := reconcile.AudioEntries(entries)
+	digest, count := reconcile.InventoryFingerprint(audio)
 	return digest != r.InventoryFingerprint || count != r.EntryCount
 }

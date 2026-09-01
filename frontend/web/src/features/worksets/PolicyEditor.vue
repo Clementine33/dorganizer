@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { AlertTriangle, Download, Plus, RotateCcw, Upload, X } from '@lucide/vue'
+import { AlertTriangle, Bookmark, Download, Plus, RotateCcw, Trash2, Upload, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import type {
   DraftResponse,
@@ -8,6 +8,7 @@ import type {
   PolicySlot,
   WorkflowInput,
   AudioOutputSpec,
+  ClassifierCustomTag,
 } from '@/lib/api/types'
 
 // Workflow composer: the three global policy slots act as reusable templates.
@@ -22,11 +23,14 @@ import type {
 const props = defineProps<{
   draft: DraftResponse | null
   slots: PolicySlot[]
+  defaultTags?: string[]
+  customTags?: ClassifierCustomTag[]
   saving: boolean
   generating: boolean
   /** Slot save mutation state. */
   slotSaving: boolean
   slotError: string | null
+  tagLibraryError?: string | null
   /** Draft save failure shown inline (validation/network, non-conflict). */
   saveError: string | null
   conflict: boolean
@@ -40,6 +44,8 @@ const emit = defineEmits<{
   save: [{ workflow: WorkflowInput }]
   'save-and-generate': [{ workflow: WorkflowInput }]
   'save-slot': [{ slot: number; name: string; policy: ResolvedPolicy }]
+  'add-library-tag': [tag: string]
+  'delete-library-tag': [id: number]
   'load-server-version': []
   discard: []
   'update:dirty': [dirty: boolean]
@@ -168,8 +174,31 @@ function addTag() {
   if (!localPolicy.value.classifier_tags) localPolicy.value.classifier_tags = []
   // Local duplicate guard (case-insensitive) keeps the chips clean; the
   // backend dedupes authoritatively on save.
+  if (!localPolicy.value.classifier_tags.some((t) => t.toLowerCase() === tag.toLowerCase())) {
+    localPolicy.value.classifier_tags.push(tag)
+    markDirty()
+  }
+  // Auto-save user input to global library for reuse.
+  emit('add-library-tag', tag)
+}
+
+function selectLibraryTag(tag: string) {
+  if (!localPolicy.value) return
+  if (!localPolicy.value.classifier_tags) localPolicy.value.classifier_tags = []
   if (localPolicy.value.classifier_tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return
   localPolicy.value.classifier_tags.push(tag)
+  markDirty()
+}
+
+function restoreDefaultTags() {
+  if (!localPolicy.value || !props.defaultTags?.length) return
+  if (props.dirty && !window.confirm('恢复默认标签将合并默认标签库，继续？')) return
+  if (!localPolicy.value.classifier_tags) localPolicy.value.classifier_tags = []
+  for (const def of props.defaultTags) {
+    if (!localPolicy.value.classifier_tags.some((t) => t.toLowerCase() === def.toLowerCase())) {
+      localPolicy.value.classifier_tags.push(def)
+    }
+  }
   markDirty()
 }
 
@@ -318,6 +347,57 @@ function onBitrateChange(profile: 'matched' | 'unmatched', side: 'lossless' | 'e
           <Button variant="outline" size="sm" data-testid="add-tag" :disabled="readOnly || !tagInput.trim()" @click="addTag">
             添加
           </Button>
+          <Button
+            v-if="defaultTags?.length"
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-[10px]"
+            data-testid="restore-default-tags"
+            :disabled="readOnly"
+            title="将 config 预设的初始标签库合并到当前策略"
+            @click="restoreDefaultTags"
+          >
+            <Bookmark class="mr-1 size-3" />
+            恢复默认标签
+          </Button>
+        </div>
+
+        <!-- Global tag library suggestions / quick-select -->
+        <div v-if="defaultTags?.length || customTags?.length" class="mt-3 border-t border-border/50 pt-2" data-testid="tag-library-suggestions">
+          <p class="text-[10px] font-semibold text-muted-foreground">全局标签库（点击快速加入当前策略）：</p>
+          <div class="mt-1 flex flex-wrap items-center gap-1.5">
+            <span
+              v-for="def in defaultTags"
+              :key="`def-${def}`"
+              class="inline-flex cursor-pointer items-center rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              :title="`预设默认标签: ${def}`"
+              :data-testid="`lib-tag-${def}`"
+              @click="selectLibraryTag(def)"
+            >
+              + {{ def }}
+            </span>
+            <span
+              v-for="cust in customTags"
+              :key="`cust-${cust.id}`"
+              class="inline-flex items-center gap-1 rounded bg-[var(--brand)]/10 px-1.5 py-0.5 font-mono text-[10px] text-foreground transition-colors"
+              :data-testid="`lib-tag-${cust.tag}`"
+            >
+              <span class="cursor-pointer hover:underline" :title="`自定义全局标签: ${cust.tag}`" @click="selectLibraryTag(cust.tag)">
+                + {{ cust.tag }}
+              </span>
+              <button
+                type="button"
+                class="text-muted-foreground hover:text-destructive"
+                :title="`从全局库中删除标签 ${cust.tag}`"
+                :data-testid="`delete-lib-tag-${cust.id}`"
+                :disabled="readOnly"
+                @click="emit('delete-library-tag', cust.id)"
+              >
+                <Trash2 class="size-2.5" />
+              </button>
+            </span>
+          </div>
+          <p v-if="tagLibraryError" class="mt-1 text-[10px] text-destructive" data-testid="tag-library-error">{{ tagLibraryError }}</p>
         </div>
       </div>
 

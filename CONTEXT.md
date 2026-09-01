@@ -30,8 +30,19 @@ An immutable workflow snapshot generated from a frozen Draft + ordered member
 set, owned by exactly one Workset. Backed by the existing `plans`/
 `plan_workflow_steps`/`plan_roots`/`plan_components` rows; `workset_revisions`
 is the single source of revision association and ordering. Revision
-`validation_state` (`valid | stale | unavailable`) is derived on read from
-stored per-root inventory fingerprints; `summary_reason` is immutable.
+`validation_state` (`valid | stale | unavailable`) is derived on read by
+comparing stored per-root audio inventory fingerprints with live entries;
+non-audio changes or missing roots do not falsely mark a plan stale.
+`summary_reason` is immutable and represents policy evaluation outcomes
+(such as `BLOCKED` or `SOURCE_MISSING`).
+
+## Classifier Tag Library
+
+A global repository of literal tags (`classifier_tag_library` table in SQLite)
+and deployment-level defaults from `config.json` (`prune.literal_tags`).
+New Workset Drafts materialize default tags into self-contained inline snapshots.
+Users can save custom tags into the SQLite global library for cross-workset
+reuse without modifying deployment configuration files or breaking draft isolation.
 
 ## Planning Session
 

@@ -993,6 +993,16 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_workset_status
     ON plan_generations(workset_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
     ON plan_generations(status, created_at, generation_id);
+
+-- Global custom classifier tag library. Holds user-entered literal tags for
+-- cross-workset reuse. Case-insensitively unique normalized_tag prevents duplicates.
+CREATE TABLE IF NOT EXISTS classifier_tag_library (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag TEXT NOT NULL,
+    normalized_tag TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_classifier_tag_norm ON classifier_tag_library(normalized_tag);
 `
 	if _, err := db.Exec(schemaTables); err != nil {
 		return err

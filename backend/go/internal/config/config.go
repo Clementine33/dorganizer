@@ -1,10 +1,57 @@
 package config
 
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
 // PruneConfig defines prune-related settings in config.json. LiteralTags is
 // the maintained initial classifier tag list (matched as case-insensitive
 // literal substrings); it seeds new workset drafts only.
 type PruneConfig struct {
 	LiteralTags []string `json:"literal_tags"`
+}
+
+// LoadPruneLiteralTags reads the maintained initial literal tag list from
+// config.json (prune.literal_tags). A missing/unreadable file yields an empty
+// set — there is deliberately no compiled-in fallback.
+func LoadPruneLiteralTags(configDir string) []string {
+	if configDir == "" {
+		return nil
+	}
+	cfgPath := filepath.Join(configDir, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return nil
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	return normalizeTags(cfg.Prune.LiteralTags)
+}
+
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]string, len(tags))
+	for _, raw := range tags {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; !ok {
+			seen[key] = trimmed
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for _, t := range seen {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ToolsConfig defines encoder tool settings in config.json.

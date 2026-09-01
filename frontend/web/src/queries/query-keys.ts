@@ -20,6 +20,9 @@ export const queryKeys = {
   policySlots: {
     list: () => ['policy-slots', 'list'] as const,
   },
+  classifierTags: {
+    list: () => ['classifier-tags', 'list'] as const,
+  },
   worksets: {
     all: () => ['worksets'] as const,
     feedPrefix: () => ['worksets', 'feed'] as const,

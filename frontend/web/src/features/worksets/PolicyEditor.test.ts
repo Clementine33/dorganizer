@@ -111,6 +111,29 @@ describe('PolicyEditor', () => {
     const saved = payload.workflow.steps[0]?.policy.policy
     expect(saved.classifier_tags).toEqual(['無音效'])
     expect(saved.matched.lossless?.codec).toBe('flac')
+    expect(wrapper.emitted('add-library-tag')?.[0]).toEqual(['無音效'])
+  })
+
+  it('restores default tags from library and allows selecting suggestions', async () => {
+    const wrapper = mountEditor({
+      draft: emptyDraft,
+      defaultTags: ['seなし', '反転'],
+      customTags: [{ id: 10, tag: '效果音なし' }],
+    })
+    // Check suggestions render
+    expect(wrapper.get('[data-testid="lib-tag-seなし"]').text()).toContain('seなし')
+    expect(wrapper.get('[data-testid="lib-tag-效果音なし"]').text()).toContain('效果音なし')
+
+    // Click single suggestion
+    await wrapper.get('[data-testid="lib-tag-效果音なし"] span').trigger('click')
+    expect(wrapper.findAll('[data-testid^="remove-tag-"]').length).toBe(1)
+    expect(wrapper.text()).toContain('效果音なし')
+
+    // Click restore default tags
+    await wrapper.get('[data-testid="restore-default-tags"]').trigger('click')
+    expect(wrapper.findAll('[data-testid^="remove-tag-"]').length).toBe(3)
+    expect(wrapper.text()).toContain('seなし')
+    expect(wrapper.text()).toContain('反転')
   })
 
   it('saves the current form back into a named slot', async () => {

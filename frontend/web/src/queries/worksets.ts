@@ -115,6 +115,33 @@ export function savePolicySlotMutationOptions(api: ApiClientContract, queryClien
   }
 }
 
+// Global classifier tag library (defaults from config + custom from DB).
+export function classifierTagLibraryQueryOptions(api: ApiClientContract) {
+  return queryOptions({
+    queryKey: queryKeys.classifierTags.list(),
+    staleTime: Infinity,
+    queryFn: ({ signal }: { signal?: AbortSignal }) => api.listClassifierTags(signal),
+  })
+}
+
+export function addClassifierTagMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
+  return {
+    mutationFn: (tag: string) => api.addClassifierTag(tag),
+    onSuccess: () => {
+      void refreshOrRemoveQueries(queryClient, queryKeys.classifierTags.list())
+    },
+  }
+}
+
+export function deleteClassifierTagMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
+  return {
+    mutationFn: (id: number) => api.deleteClassifierTag(id),
+    onSuccess: () => {
+      void refreshOrRemoveQueries(queryClient, queryKeys.classifierTags.list())
+    },
+  }
+}
+
 // ==================== Mutations ====================
 
 export function createWorksetMutationOptions(api: ApiClientContract, queryClient: QueryClient) {

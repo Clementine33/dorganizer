@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -241,20 +239,8 @@ func (s *serviceImpl) seedDraft(worksetID string, now time.Time) sqlite.WorksetD
 	}
 }
 
-// loadPruneLiteralTags reads the maintained initial literal tag list from
-// config.json (prune.literal_tags). A missing/unreadable file yields an empty
-// editable set — there is deliberately no compiled-in fallback.
 func loadPruneLiteralTags(configDir string) []string {
-	cfgPath := filepath.Join(configDir, "config.json")
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return nil
-	}
-	var cfg appconfig.AppConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil
-	}
-	return reconcile.NormalizeTags(cfg.Prune.LiteralTags)
+	return appconfig.LoadPruneLiteralTags(configDir)
 }
 
 // newToken produces a sortable, collision-resistant identifier: a nanosecond
@@ -1087,7 +1073,8 @@ func (s *serviceImpl) rootFingerprints(ctx context.Context, members []*sqlite.Wo
 		if err != nil {
 			return nil, NewError(ErrKindInternal, "INTERNAL", fmt.Sprintf("failed to fingerprint %s: %v", m.FolderPath, err), err)
 		}
-		digest, count := reconcile.InventoryFingerprint(entries)
+		audio := reconcile.AudioEntries(entries)
+		digest, count := reconcile.InventoryFingerprint(audio)
 		out[m.FolderPath] = reconcile.ReconcileResult{Digest: digest, Count: count}
 	}
 	return out, nil
