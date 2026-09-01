@@ -1,4 +1,4 @@
-package scan //nolint:testpackage // white-box tests exercise unexported internals
+package scan_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 func newTestRepo(t *testing.T, dir string) *sqlite.Repository {
@@ -27,26 +28,30 @@ func newTestRepo(t *testing.T, dir string) *sqlite.Repository {
 func TestScanServiceValidatesRoot(t *testing.T) {
 	dir := t.TempDir()
 	repo := newTestRepo(t, dir)
-	svc := NewService(repo)
+	svc := scan.NewService(repo)
 
-	_, err := svc.Scan(context.Background(), Request{RootPath: ""}, func(Event) {})
-	var scanErr *Error
+	_, err := svc.Scan(context.Background(), scan.Request{RootPath: ""}, func(scan.Event) {})
+	var scanErr *scan.Error
 	if !errors.As(err, &scanErr) {
 		t.Fatalf("expected *scan.Error for empty root, got %T: %v", err, err)
 	}
-	if scanErr.Kind != ErrKindInvalidArgument {
-		t.Errorf("expected Kind=%q, got %q", ErrKindInvalidArgument, scanErr.Kind)
+	if scanErr.Kind != scan.ErrKindInvalidArgument {
+		t.Errorf("expected Kind=%q, got %q", scan.ErrKindInvalidArgument, scanErr.Kind)
 	}
 	if scanErr.Code != "ROOT_PATH_REQUIRED" {
 		t.Errorf("expected Code=ROOT_PATH_REQUIRED, got %q", scanErr.Code)
 	}
 
-	_, err = svc.Scan(context.Background(), Request{RootPath: filepath.Join(dir, "does-not-exist")}, func(Event) {})
+	_, err = svc.Scan(
+		context.Background(),
+		scan.Request{RootPath: filepath.Join(dir, "does-not-exist")},
+		func(scan.Event) {},
+	)
 	if !errors.As(err, &scanErr) {
 		t.Fatalf("expected *scan.Error for nonexistent root, got %T: %v", err, err)
 	}
-	if scanErr.Kind != ErrKindInvalidArgument {
-		t.Errorf("expected Kind=%q, got %q", ErrKindInvalidArgument, scanErr.Kind)
+	if scanErr.Kind != scan.ErrKindInvalidArgument {
+		t.Errorf("expected Kind=%q, got %q", scan.ErrKindInvalidArgument, scanErr.Kind)
 	}
 	if scanErr.Code != "ROOT_PATH_NOT_FOUND" {
 		t.Errorf("expected Code=ROOT_PATH_NOT_FOUND, got %q", scanErr.Code)
@@ -59,7 +64,7 @@ func TestScanServiceValidatesRoot(t *testing.T) {
 func TestScanServiceEmitsErrorEventForInvalidRoots(t *testing.T) {
 	dir := t.TempDir()
 	repo := newTestRepo(t, dir)
-	svc := NewService(repo)
+	svc := scan.NewService(repo)
 
 	filePath := filepath.Join(dir, "somefile.txt")
 	if err := os.WriteFile(filePath, []byte("x"), 0644); err != nil {
@@ -77,11 +82,11 @@ func TestScanServiceEmitsErrorEventForInvalidRoots(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var events []Event
-			_, err := svc.Scan(context.Background(), Request{RootPath: tc.root}, func(ev Event) {
+			var events []scan.Event
+			_, err := svc.Scan(context.Background(), scan.Request{RootPath: tc.root}, func(ev scan.Event) {
 				events = append(events, ev)
 			})
-			var scanErr *Error
+			var scanErr *scan.Error
 			if !errors.As(err, &scanErr) {
 				t.Fatalf("expected *scan.Error, got %T: %v", err, err)
 			}
@@ -102,7 +107,7 @@ func TestScanServiceEmitsEventsAndResult(t *testing.T) {
 	const n = 10
 	dir := t.TempDir()
 	repo := newTestRepo(t, dir)
-	svc := NewService(repo)
+	svc := scan.NewService(repo)
 
 	musicDir := filepath.Join(dir, "music")
 	for i := range n {
@@ -115,8 +120,8 @@ func TestScanServiceEmitsEventsAndResult(t *testing.T) {
 		}
 	}
 
-	var events []Event
-	result, err := svc.Scan(context.Background(), Request{RootPath: musicDir}, func(ev Event) {
+	var events []scan.Event
+	result, err := svc.Scan(context.Background(), scan.Request{RootPath: musicDir}, func(ev scan.Event) {
 		events = append(events, ev)
 	})
 	if err != nil {

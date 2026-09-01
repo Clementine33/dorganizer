@@ -14,6 +14,14 @@
 - **Line limits (guidelines)**: Functions ≤100 lines; files ≤400 lines (comfortable) / >600 (should split).
 - **Linter & CI gate**: `task lint:go` runs `golangci-lint` (based on maratori config, in `backend/go/.golangci.yml`). Gated in CI (`ci:quality`). Mechanical fixes: `task lint:go:fix`.
 
+### Go test rules (enforced)
+- New test files default to `package <pkg>_test`; same-package tests are allowed only where the test really exercises internals, and must keep the `//nolint:testpackage` note explaining why.
+- No dedicated tests for unexported helpers/fields — cover behavior through the exported API. When an internal seam must be exposed to tests, funnel it through an `export_test.go`; never bulk re-export.
+- Never generate mocks for interfaces defined in this repo; prefer real dependencies or small handwritten fakes.
+- Don't assert call counts or call order unless the count/order is itself the contract (retry cap, idempotency, fail-fast).
+- Use `testing/synctest` for time/concurrency; never `time.Sleep` to synchronize tests.
+- Coverage is a diagnostic signal, not a KPI. Test deletion and production refactors never land in the same commit.
+
 ## Versions: mise is the single source
 - node/go/pnpm/task are pinned in `mise.toml`; CI provisions from the same file via `jdx/mise-action`. Bump versions in `mise.toml` only — `package.json` intentionally has no `packageManager` (pnpm's self-download once corrupted the store).
 - Keep `go.mod`'s `go` directive aligned with the mise pin. After editing `mise.toml` run `mise install`; a fresh checkout needs `mise trust` once.

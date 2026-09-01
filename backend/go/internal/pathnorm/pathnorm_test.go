@@ -1,4 +1,4 @@
-package pathnorm //nolint:testpackage // white-box tests exercise unexported internals
+package pathnorm_test
 
 import (
 	"os"
@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
 func TestNormalizeToPOSIX(t *testing.T) {
-	got := NormalizeToPOSIX(`C:\music\A\B.mp3`)
+	got := pathnorm.NormalizeToPOSIX(`C:\music\A\B.mp3`)
 	if got != "C:/music/A/B.mp3" {
 		t.Fatalf("got %q", got)
 	}
@@ -43,11 +45,11 @@ func TestCleanRootPathAndRootPathKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := CleanRootPath(tt.in); got != tt.wantClean {
-				t.Errorf("CleanRootPath(%q) = %q, want %q", tt.in, got, tt.wantClean)
+			if got := pathnorm.CleanRootPath(tt.in); got != tt.wantClean {
+				t.Errorf("pathnorm.CleanRootPath(%q) = %q, want %q", tt.in, got, tt.wantClean)
 			}
-			if got := RootPathKey(tt.in); got != tt.wantKey {
-				t.Errorf("RootPathKey(%q) = %q, want %q", tt.in, got, tt.wantKey)
+			if got := pathnorm.RootPathKey(tt.in); got != tt.wantKey {
+				t.Errorf("pathnorm.RootPathKey(%q) = %q, want %q", tt.in, got, tt.wantKey)
 			}
 		})
 	}
@@ -68,9 +70,9 @@ func TestIsWindowsUNCPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsWindowsUNCPath(tt.path)
+			got := pathnorm.IsWindowsUNCPath(tt.path)
 			if got != tt.want {
-				t.Fatalf("IsWindowsUNCPath(%q)=%v, want %v", tt.path, got, tt.want)
+				t.Fatalf("pathnorm.IsWindowsUNCPath(%q)=%v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}
@@ -102,8 +104,8 @@ func TestIsWithinRoot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsWithinRoot(tt.root, tt.candidate); got != tt.want {
-				t.Fatalf("IsWithinRoot(%q, %q) = %v, want %v", tt.root, tt.candidate, got, tt.want)
+			if got := pathnorm.IsWithinRoot(tt.root, tt.candidate); got != tt.want {
+				t.Fatalf("pathnorm.IsWithinRoot(%q, %q) = %v, want %v", tt.root, tt.candidate, got, tt.want)
 			}
 		})
 	}
@@ -129,7 +131,7 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 		t.Fatalf("create outside file: %v", err)
 	}
 
-	within, err := IsResolvedWithinRoot(root, insideFile)
+	within, err := pathnorm.IsResolvedWithinRoot(root, insideFile)
 	if err != nil {
 		t.Fatalf("IsResolvedWithinRoot inside file: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 			strings.ToUpper(filepath.Base(insideDir)),
 			filepath.Base(insideFile),
 		)
-		within, err = IsResolvedWithinRoot(root, caseSwapped)
+		within, err = pathnorm.IsResolvedWithinRoot(root, caseSwapped)
 		if err != nil {
 			t.Fatalf("IsResolvedWithinRoot case-swapped inside file: %v", err)
 		}
@@ -159,7 +161,7 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 	if symlinkErr := os.Symlink(outsideDir, linkPath); symlinkErr != nil {
 		t.Skipf("symlinks unavailable: %v", symlinkErr)
 	}
-	within, err = IsResolvedWithinRoot(root, filepath.Join(linkPath, filepath.Base(outsideFile)))
+	within, err = pathnorm.IsResolvedWithinRoot(root, filepath.Join(linkPath, filepath.Base(outsideFile)))
 	if err != nil {
 		t.Fatalf("IsResolvedWithinRoot symlink escape: %v", err)
 	}
@@ -175,7 +177,7 @@ func TestTruncatePathComponentsToBytes_UTF8Boundary(t *testing.T) {
 	}
 
 	input := filepath.Join("1-单一", "12_一般", longComponent)
-	got := TruncatePathComponentsToBytes(input, 214)
+	got := pathnorm.TruncatePathComponentsToBytes(input, 214)
 
 	parts := strings.SplitSeq(got, string(filepath.Separator))
 	for part := range parts {
