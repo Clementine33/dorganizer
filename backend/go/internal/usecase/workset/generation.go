@@ -69,8 +69,8 @@ func (s *serviceImpl) prepareGeneration(id string) (*generationInput, error) {
 	if err != nil {
 		return nil, NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW", "stored draft is invalid", err)
 	}
-	if err := validateExecutableWorkflow(wf); err != nil {
-		return nil, err
+	if validateErr := validateExecutableWorkflow(wf); validateErr != nil {
+		return nil, validateErr
 	}
 	active, err := s.repo.GetActiveGenerationForWorkset(id)
 	if err != nil {

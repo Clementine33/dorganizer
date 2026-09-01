@@ -1,4 +1,4 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -96,14 +96,14 @@ func TestListPlans_ValidRootPathWithData_ReturnsPlansSortedByCreatedAtDesc(t *te
 		CreatedAt:     now, // newest
 	}
 
-	if err := repo.CreatePlan(plan1); err != nil {
-		t.Fatalf("failed to create plan1: %v", err)
+	if planErr := repo.CreatePlan(plan1); planErr != nil {
+		t.Fatalf("failed to create plan1: %v", planErr)
 	}
-	if err := repo.CreatePlan(plan2); err != nil {
-		t.Fatalf("failed to create plan2: %v", err)
+	if planErr := repo.CreatePlan(plan2); planErr != nil {
+		t.Fatalf("failed to create plan2: %v", planErr)
 	}
-	if err := repo.CreatePlan(plan3); err != nil {
-		t.Fatalf("failed to create plan3: %v", err)
+	if planErr := repo.CreatePlan(plan3); planErr != nil {
+		t.Fatalf("failed to create plan3: %v", planErr)
 	}
 
 	// Create server
@@ -214,8 +214,8 @@ func TestListPlans_WithLimit_ReturnsCorrectNumberOfPlans(t *testing.T) {
 			Status:        "ready",
 			CreatedAt:     now.Add(time.Duration(-i) * time.Hour),
 		}
-		if err := repo.CreatePlan(plan); err != nil {
-			t.Fatalf("failed to create plan: %v", err)
+		if planErr := repo.CreatePlan(plan); planErr != nil {
+			t.Fatalf("failed to create plan: %v", planErr)
 		}
 	}
 

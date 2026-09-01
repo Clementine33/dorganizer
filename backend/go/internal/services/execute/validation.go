@@ -179,6 +179,46 @@ func (s *ExecuteService) validatePreconditionPhase2(path string, item PlanItem) 
 	return nil
 }
 
+// applyFolderPrecheckFailures records per-folder fail-fast flags and returns
+// the terminal ExecuteResult for any hard (non-folder-scoped) precondition
+// failure. The caller returns immediately when failed is true.
+func (s *ExecuteService) applyFolderPrecheckFailures(
+	sessionID string,
+	plan *Plan,
+	folderFailures []precheckFolderFailure,
+	failedFolders map[string]bool,
+) (failed bool, result *ExecuteResult, err error) {
+	for _, ff := range folderFailures {
+		if ff.folderPath != "" {
+			failedFolders[ff.folderPath] = true
+			continue
+		}
+		if ff.index >= 0 && ff.index < len(plan.Items) && s.eventHandler != nil {
+			s.eventHandler.OnPreconditionFailed(ff.index, plan.Items[ff.index], ff.err)
+		}
+		if s.repo != nil {
+			_ = s.repo.UpdateExecuteSessionStatus(
+				sessionID,
+				"failed",
+				"EXEC_PRECONDITION_FAILED",
+				ff.err.Error(),
+			)
+		}
+		errMsg := ff.err.Error()
+		if ff.index >= 0 {
+			errMsg = fmt.Sprintf("item %d: %v", ff.index, ff.err)
+		}
+		return true, &ExecuteResult{
+			SessionID: sessionID,
+			PlanID:    plan.PlanID,
+			Status:    "precondition_failed",
+			ErrorCode: "EXEC_PRECONDITION_FAILED",
+			ErrorMsg:  errMsg,
+		}, ff.err
+	}
+	return false, nil, nil
+}
+
 func (s *ExecuteService) precheckPlan(plan *Plan) *precheckFailure {
 	if plan == nil || len(plan.Items) == 0 {
 		return nil

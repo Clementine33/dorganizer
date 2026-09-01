@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -104,14 +104,6 @@ func (m *mockPipelineRunner) getConvertCalls() []string {
 	return result
 }
 
-func (m *mockPipelineRunner) getDeleteCalls() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]string, len(m.deleteCalls))
-	copy(result, m.deleteCalls)
-	return result
-}
-
 // TestExecutePlan_FailFast_StopsOnFirstError validates that when a conversion fails,
 // the pipeline stops admitting new work after the first error is recorded.
 //
@@ -129,7 +121,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	numFiles := max(maxCPUWorkers()+8, 8)
 
 	var files []string
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		file := filepath.Join(tmp, fmt.Sprintf("song%d.wav", i))
 		if err := os.WriteFile(file, []byte("test"), 0644); err != nil {
 			t.Fatal(err)
@@ -451,7 +443,7 @@ func TestExecutePlan_Overlap_PartialSuccessThenFail(t *testing.T) {
 	// Keep enough tail items beyond worker count to observe fail-fast stopping point.
 	numFiles := max(maxCPUWorkers()+8, 10)
 	var files []string
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		file := filepath.Join(tmp, fmt.Sprintf("track%d.wav", i))
 		if err := os.WriteFile(file, []byte("audio"), 0644); err != nil {
 			t.Fatal(err)

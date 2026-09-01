@@ -1,4 +1,4 @@
-package e2e
+package e2e //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bufio"
@@ -21,6 +21,8 @@ import (
 // (ONSEI_DATA_DIR=<temp>), parses the ONSEI_BACKEND_READY handshake for both
 // the gRPC and HTTP ports, then drives the HTTP/SSE library workflow end to
 // end: health -> create library -> SSE scan -> list folders -> plan.
+//
+//nolint:funlen // long e2e loop scenario
 func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
 

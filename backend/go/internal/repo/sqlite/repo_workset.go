@@ -531,7 +531,7 @@ func (r *Repository) PersistWorksetRevision(genID, worksetID string, now time.Ti
 	}
 	defer tx.Rollback()
 
-	if err := InsertWorkflowPlanTx(
+	if insertErr := InsertWorkflowPlanTx(
 		tx,
 		p.PlanID,
 		"workflow",
@@ -541,26 +541,26 @@ func (r *Repository) PersistWorksetRevision(genID, worksetID string, now time.Ti
 		p.Steps,
 		p.Roots,
 		p.Components,
-	); err != nil {
-		return err
+	); insertErr != nil {
+		return insertErr
 	}
 
 	var next int
-	if err := tx.QueryRow("SELECT COALESCE(MAX(revision_index), 0) + 1 FROM workset_revisions WHERE workset_id = ?", worksetID).
-		Scan(&next); err != nil {
-		return fmt.Errorf("next revision index: %w", err)
+	if nextErr := tx.QueryRow("SELECT COALESCE(MAX(revision_index), 0) + 1 FROM workset_revisions WHERE workset_id = ?", worksetID).
+		Scan(&next); nextErr != nil {
+		return fmt.Errorf("next revision index: %w", nextErr)
 	}
-	if _, err := tx.Exec(`
+	if _, revErr := tx.Exec(`
 		INSERT INTO workset_revisions (plan_id, workset_id, revision_index, draft_hash, member_hash, worksets_version, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, p.PlanID, worksetID, next, p.DraftHash, p.MemberHash, p.WorksetsVersion, now.Format(timeFormat)); err != nil {
-		return fmt.Errorf("insert workset revision: %w", err)
+	`, p.PlanID, worksetID, next, p.DraftHash, p.MemberHash, p.WorksetsVersion, now.Format(timeFormat)); revErr != nil {
+		return fmt.Errorf("insert workset revision: %w", revErr)
 	}
-	if _, err := tx.Exec(`
+	if _, promoteErr := tx.Exec(`
 		UPDATE worksets SET current_revision_id = ?, version = version + 1, updated_at = ?
 		WHERE id = ?
-	`, p.PlanID, now.Format(timeFormat), worksetID); err != nil {
-		return fmt.Errorf("promote workset revision: %w", err)
+	`, p.PlanID, now.Format(timeFormat), worksetID); promoteErr != nil {
+		return fmt.Errorf("promote workset revision: %w", promoteErr)
 	}
 	result, err := tx.Exec(`
 		UPDATE plan_generations SET status = 'completed', revision_id = ?, finished_at = ?, updated_at = ?
@@ -737,8 +737,8 @@ func (r *Repository) NextQueuedGeneration() (*PlanGeneration, error) {
 		}
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
 	}
 	if g == nil {
 		return nil, nil

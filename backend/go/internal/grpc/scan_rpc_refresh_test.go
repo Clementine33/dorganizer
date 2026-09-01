@@ -1,4 +1,4 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -98,14 +98,14 @@ func TestRefreshFolders_StructuredPerFolderResult(t *testing.T) {
 
 	// Create a valid folder structure
 	validFolder := filepath.Join(tmpDir, "valid_folder")
-	if err := os.MkdirAll(validFolder, 0755); err != nil {
-		t.Fatalf("failed to create valid folder: %v", err)
+	if mkdirErr := os.MkdirAll(validFolder, 0755); mkdirErr != nil {
+		t.Fatalf("failed to create valid folder: %v", mkdirErr)
 	}
 
 	// Create audio file in valid folder
 	audioFile := filepath.Join(validFolder, "test.flac")
-	if err := os.WriteFile(audioFile, []byte("dummy flac"), 0644); err != nil {
-		t.Fatalf("failed to create audio file: %v", err)
+	if writeErr := os.WriteFile(audioFile, []byte("dummy flac"), 0644); writeErr != nil {
+		t.Fatalf("failed to create audio file: %v", writeErr)
 	}
 
 	// Create an invalid folder path (doesn't exist)
@@ -190,21 +190,21 @@ func TestRefreshFolders_FolderScopedSemantics(t *testing.T) {
 	// Create folder structure with subfolder
 	folder1 := filepath.Join(tmpDir, "folder1")
 	folder2 := filepath.Join(tmpDir, "folder2")
-	if err := os.MkdirAll(folder1, 0755); err != nil {
-		t.Fatalf("failed to create folder1: %v", err)
+	if mkdirErr := os.MkdirAll(folder1, 0755); mkdirErr != nil {
+		t.Fatalf("failed to create folder1: %v", mkdirErr)
 	}
-	if err := os.MkdirAll(folder2, 0755); err != nil {
-		t.Fatalf("failed to create folder2: %v", err)
+	if mkdirErr := os.MkdirAll(folder2, 0755); mkdirErr != nil {
+		t.Fatalf("failed to create folder2: %v", mkdirErr)
 	}
 
 	// Create audio files
 	audio1 := filepath.Join(folder1, "track1.flac")
 	audio2 := filepath.Join(folder2, "track2.flac")
-	if err := os.WriteFile(audio1, []byte("dummy flac 1"), 0644); err != nil {
-		t.Fatalf("failed to create audio1: %v", err)
+	if writeErr := os.WriteFile(audio1, []byte("dummy flac 1"), 0644); writeErr != nil {
+		t.Fatalf("failed to create audio1: %v", writeErr)
 	}
-	if err := os.WriteFile(audio2, []byte("dummy flac 2"), 0644); err != nil {
-		t.Fatalf("failed to create audio2: %v", err)
+	if writeErr := os.WriteFile(audio2, []byte("dummy flac 2"), 0644); writeErr != nil {
+		t.Fatalf("failed to create audio2: %v", writeErr)
 	}
 
 	server := NewOnseiServer(repo, tmpDir, "ffmpeg")
@@ -299,21 +299,21 @@ func TestRefreshFolders_AllFoldersSucceed(t *testing.T) {
 	// Create multiple valid folders
 	folderA := filepath.Join(tmpDir, "folderA")
 	folderB := filepath.Join(tmpDir, "folderB")
-	if err := os.MkdirAll(folderA, 0755); err != nil {
-		t.Fatalf("failed to create folderA: %v", err)
+	if mkdirErr := os.MkdirAll(folderA, 0755); mkdirErr != nil {
+		t.Fatalf("failed to create folderA: %v", mkdirErr)
 	}
-	if err := os.MkdirAll(folderB, 0755); err != nil {
-		t.Fatalf("failed to create folderB: %v", err)
+	if mkdirErr := os.MkdirAll(folderB, 0755); mkdirErr != nil {
+		t.Fatalf("failed to create folderB: %v", mkdirErr)
 	}
 
 	// Create audio files
 	audioA := filepath.Join(folderA, "track.flac")
 	audioB := filepath.Join(folderB, "track.flac")
-	if err := os.WriteFile(audioA, []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create audioA: %v", err)
+	if writeErr := os.WriteFile(audioA, []byte("dummy"), 0644); writeErr != nil {
+		t.Fatalf("failed to create audioA: %v", writeErr)
 	}
-	if err := os.WriteFile(audioB, []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create audioB: %v", err)
+	if writeErr := os.WriteFile(audioB, []byte("dummy"), 0644); writeErr != nil {
+		t.Fatalf("failed to create audioB: %v", writeErr)
 	}
 
 	server := NewOnseiServer(repo, tmpDir, "ffmpeg")
@@ -422,12 +422,12 @@ func TestRefreshFolders_UsesScanFolderNotScanRoot(t *testing.T) {
 	folderC := filepath.Join(tmpDir, "folderC")
 
 	for _, f := range []string{folderA, folderB, folderC} {
-		if err := os.MkdirAll(f, 0755); err != nil {
-			t.Fatalf("failed to create folder: %v", err)
+		if mkdirErr := os.MkdirAll(f, 0755); mkdirErr != nil {
+			t.Fatalf("failed to create folder: %v", mkdirErr)
 		}
 		audio := filepath.Join(f, "track.flac")
-		if err := os.WriteFile(audio, []byte("dummy flac"), 0644); err != nil {
-			t.Fatalf("failed to create audio file: %v", err)
+		if writeErr := os.WriteFile(audio, []byte("dummy flac"), 0644); writeErr != nil {
+			t.Fatalf("failed to create audio file: %v", writeErr)
 		}
 	}
 
@@ -466,9 +466,11 @@ func TestRefreshFolders_UsesScanFolderNotScanRoot(t *testing.T) {
 
 	// Verify entries exist for folderA and folderB
 	var countA, countB, countC int
-	repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", folderANorm+"/%").Scan(&countA)
-	repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", folderBNorm+"/%").Scan(&countB)
-	repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", filepath.ToSlash(folderC)+"/%").Scan(&countC)
+	_ = repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", folderANorm+"/%").Scan(&countA)
+	_ = repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", folderBNorm+"/%").Scan(&countB)
+	_ = repo.DB().
+		QueryRow("SELECT COUNT(*) FROM entries WHERE path LIKE ?", filepath.ToSlash(folderC)+"/%").
+		Scan(&countC)
 
 	if countA == 0 {
 		t.Error("expected entries in folderA after folder-scoped refresh")

@@ -1,10 +1,11 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"
 	"time"
 )
 
+//nolint:funlen // long CRUD scenario with many assertions
 func TestRepository_CreateAndListErrorEvents_PathNullableRoundTrip(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -68,8 +69,8 @@ func TestRepository_CreateAndListErrorEvents_PathNullableRoundTrip(t *testing.T)
 		Retryable: false,
 	}
 
-	if err := repo.CreateErrorEvent(errEvent2); err != nil {
-		t.Fatalf("CreateErrorEvent failed: %v", err)
+	if createErr := repo.CreateErrorEvent(errEvent2); createErr != nil {
+		t.Fatalf("CreateErrorEvent failed: %v", createErr)
 	}
 
 	events, err = repo.ListErrorEventsByRoot("/music")
@@ -143,8 +144,8 @@ func TestRepository_DeleteErrorEventsOlderThanTx_RespectsCutoffBoundary(t *testi
 		Message:   "new error",
 		Retryable: false,
 	}
-	if err := repo.CreateErrorEvent(newErr); err != nil {
-		t.Fatalf("create new error event: %v", err)
+	if createErr := repo.CreateErrorEvent(newErr); createErr != nil {
+		t.Fatalf("create new error event: %v", createErr)
 	}
 	_, err = repo.db.Exec("UPDATE error_events SET created_at = ? WHERE id = ?", newTime.Format(timeFormat), newErr.ID)
 	if err != nil {

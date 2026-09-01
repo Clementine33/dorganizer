@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"database/sql"
@@ -919,6 +919,8 @@ func TestMergeLargeSetStaleCleanup(t *testing.T) {
 
 // TestMergeUpsertContentRevIncrementSemantics tests that content_rev increment
 // semantics work correctly for both new and existing entries.
+//
+//nolint:funlen // long merge-semantics scenario
 func TestMergeUpsertContentRevIncrementSemantics(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := tmpDir + "/test.db"

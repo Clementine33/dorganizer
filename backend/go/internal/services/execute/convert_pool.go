@@ -35,11 +35,6 @@ type poolRuntime struct {
 	commitReplaceFn   func(tmpOut, dst string) error
 }
 
-type noopSem struct{}
-
-func (noopSem) Acquire() {}
-func (noopSem) Release() {}
-
 type boundedSem struct {
 	tokens chan struct{}
 }
@@ -88,6 +83,7 @@ func defaultPoolRuntime(s *ExecuteService) poolRuntime {
 	}
 }
 
+//nolint:gocognit,gocyclo,cyclop,funlen // pool lifecycle state machine (worker/batch/retry/commit); extracted lanes would obscure the state
 func (s *ExecuteService) executeConvertPoolWithTracking(
 	plan *Plan,
 	sessionID string,
@@ -274,6 +270,7 @@ func (s *ExecuteService) executeConvertPoolWithTracking(
 	return nil, nil
 }
 
+//nolint:gocognit // batch scheduling + retry/commit bookkeeping is intrinsically branched
 func (s *ExecuteService) executeConvertBatchWithPool(
 	plan *Plan,
 	batchSessionID string,

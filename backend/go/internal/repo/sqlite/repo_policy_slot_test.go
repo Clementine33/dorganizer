@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"strings"
@@ -26,8 +26,8 @@ func TestPolicySlotsSeedAndRoundTrip(t *testing.T) {
 	}
 
 	// Update slot 2 with a name and policy; slots 1/3 stay empty.
-	if err := repo.UpdatePolicySlot(2, "compact", `{"schema_version":1}`); err != nil {
-		t.Fatalf("UpdatePolicySlot(2): %v", err)
+	if updateErr := repo.UpdatePolicySlot(2, "compact", `{"schema_version":1}`); updateErr != nil {
+		t.Fatalf("UpdatePolicySlot(2): %v", updateErr)
 	}
 	slots, err = repo.GetPolicySlots()
 	if err != nil {
@@ -41,10 +41,10 @@ func TestPolicySlotsSeedAndRoundTrip(t *testing.T) {
 	}
 
 	// Out-of-range indexes are rejected.
-	if err := repo.UpdatePolicySlot(0, "x", "{}"); err == nil {
+	if updateErr := repo.UpdatePolicySlot(0, "x", "{}"); updateErr == nil {
 		t.Fatal("slot 0 update should fail")
 	}
-	if err := repo.UpdatePolicySlot(4, "x", "{}"); err == nil {
+	if updateErr := repo.UpdatePolicySlot(4, "x", "{}"); updateErr == nil {
 		t.Fatal("slot 4 update should fail")
 	}
 

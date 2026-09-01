@@ -170,58 +170,14 @@ linters:
     rules:
       - source: 'TODO'
         linters: [ godot ]
-      - path: 'internal/services/scanner/service\.go'
-        linters: [ errcheck ]
-      - path: 'internal/services/execute/convert_pool_test\.go'
-        linters: [ gocritic ]
-      - path: 'internal/services/execute/convert_pool\.go'
-        linters: [ unused ]
-      - path: 'internal/services/reconcile/reconcile\.go'
-        linters: [ gocritic ]
-      - path: 'internal/bootstrap/handshake_test\.go'
-        linters: [ paralleltest ]
+      # cmd/ keeps a few point exclusions: G112 (slowloris) is acceptable on a
+      # loopback-only dev server; exitAfterDefer is intentional (process exit);
+      # errcheck/unused cover the Windows-conditional wsacancelled const.
       - path: 'cmd/onsei-organizer-backend/.*'
-        linters: [ gocognit, cyclop, gocyclo, forbidigo, funlen, gosec, gocritic, errcheck, unused, govet, testpackage, paralleltest ]
-      - path: 'internal/repo/sqlite/.*'
-        linters: [ funlen, gocognit, cyclop, gocyclo, govet, testpackage, paralleltest ]
-      - path: 'internal/services/.*'
-        linters: [ gocognit, gocyclo, funlen, cyclop, govet, testpackage, paralleltest ]
-      - path: 'internal/usecase/.*'
-        linters: [ gocognit, gocyclo, funlen, cyclop, govet, testpackage, paralleltest ]
-      - path: 'internal/httpapi/.*'
-        linters: [ funlen, govet, testpackage, paralleltest ]
-      - path: 'internal/grpc/.*'
-        linters: [ testpackage, paralleltest ]
-      - path: 'internal/pathnorm/.*'
-        linters: [ testpackage, paralleltest ]
-      - path: 'tests/e2e/.*'
-        linters: [ testpackage, paralleltest ]
-      - path: 'internal/services/scanner/sqlite_adapter\.go'
-        linters: [ staticcheck ]
-      - path: 'tests/e2e/scan_plan_execute_test\.go'
-        linters: [ staticcheck ]
-      - path: 'internal/grpc/plan_rpc\.go'
-        linters: [ unused ]
-      - path: 'internal/usecase/execute/.*'
-        linters: [ gocognit, gocyclo, funlen, cyclop, unused ]
-      - path: 'internal/usecase/plan/.*'
-        linters: [ gocognit, gocyclo, funlen, cyclop, unused ]
+        linters: [ gosec, gocritic, errcheck, unused ]
+      # Tests share SQLite databases, temp filesystems and in-process HTTP
+      # servers; parallelizing them would produce intermittent failures.
+      # Individual tests opt out via //nolint:paralleltest when they are safe.
       - path: '_test\.go'
-        linters:
-          - bodyclose
-          - dupl
-          - errcheck
-          - funlen
-          - goconst
-          - gosec
-          - noctx
-          - gocognit
-          - cyclop
-          - gochecknoglobals
-          - unparam
-          - funcorder
-          - intrange
-          - gocyclo
-          - modernize
-          - unused
-          - govet
+        linters: [ paralleltest ]
+      

@@ -312,7 +312,29 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 
 	detail := &WorkflowPlanDetail{Plan: p}
 
-	stepRows, err := r.db.Query(`
+	steps, err := loadWorkflowSteps(r.db, planID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Steps = steps
+
+	roots, err := loadWorkflowRoots(r.db, planID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Roots = roots
+
+	components, err := loadWorkflowComponents(r.db, planID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Components = components
+
+	return detail, nil
+}
+
+func loadWorkflowSteps(db *sql.DB, planID string) ([]WorkflowStepRecord, error) {
+	stepRows, err := db.Query(`
 		SELECT step_index, step_type, status,
 		       policy_schema_version, policy_json, policy_hash, classifier_pattern, classifier_hash, step_summary_json
 		FROM plan_workflow_steps WHERE plan_id = ? ORDER BY step_index
@@ -321,9 +343,10 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 		return nil, err
 	}
 	defer stepRows.Close()
+	var steps []WorkflowStepRecord
 	for stepRows.Next() {
 		var s WorkflowStepRecord
-		if err := stepRows.Scan(
+		if scanErr := stepRows.Scan(
 			&s.StepIndex,
 			&s.StepType,
 			&s.Status,
@@ -333,16 +356,16 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 			&s.ClassifierTags,
 			&s.ClassifierHash,
 			&s.StepSummaryJSON,
-		); err != nil {
-			return nil, err
+		); scanErr != nil {
+			return nil, scanErr
 		}
-		detail.Steps = append(detail.Steps, s)
+		steps = append(steps, s)
 	}
-	if err := stepRows.Err(); err != nil {
-		return nil, err
-	}
+	return steps, stepRows.Err()
+}
 
-	rootRows, err := r.db.Query(`
+func loadWorkflowRoots(db *sql.DB, planID string) ([]WorkflowRootRecord, error) {
+	rootRows, err := db.Query(`
 		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message
 		FROM plan_roots WHERE plan_id = ? ORDER BY root_index
 	`, planID)
@@ -350,27 +373,28 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 		return nil, err
 	}
 	defer rootRows.Close()
+	var roots []WorkflowRootRecord
 	for rootRows.Next() {
-		var r WorkflowRootRecord
-		if err := rootRows.Scan(
-			&r.RootIndex,
-			&r.RootPath,
-			&r.RootIdentity,
-			&r.InventoryFingerprint,
-			&r.EntryCount,
-			&r.RootStatus,
-			&r.RootErrorCode,
-			&r.RootErrorMessage,
-		); err != nil {
-			return nil, err
+		var rec WorkflowRootRecord
+		if scanErr := rootRows.Scan(
+			&rec.RootIndex,
+			&rec.RootPath,
+			&rec.RootIdentity,
+			&rec.InventoryFingerprint,
+			&rec.EntryCount,
+			&rec.RootStatus,
+			&rec.RootErrorCode,
+			&rec.RootErrorMessage,
+		); scanErr != nil {
+			return nil, scanErr
 		}
-		detail.Roots = append(detail.Roots, r)
+		roots = append(roots, rec)
 	}
-	if err := rootRows.Err(); err != nil {
-		return nil, err
-	}
+	return roots, rootRows.Err()
+}
 
-	compRows, err := r.db.Query(`
+func loadWorkflowComponents(db *sql.DB, planID string) ([]WorkflowComponentRecord, error) {
+	compRows, err := db.Query(`
 		SELECT step_index, component_index, component_id, root_index, partition, status, reason_code, outcome_json
 		FROM plan_components WHERE plan_id = ? ORDER BY component_index
 	`, planID)
@@ -378,6 +402,7 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 		return nil, err
 	}
 	defer compRows.Close()
+	var comps []WorkflowComponentRecord
 	for compRows.Next() {
 		var c WorkflowComponentRecord
 		if err := compRows.Scan(
@@ -392,13 +417,9 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 		); err != nil {
 			return nil, err
 		}
-		detail.Components = append(detail.Components, c)
+		comps = append(comps, c)
 	}
-	if err := compRows.Err(); err != nil {
-		return nil, err
-	}
-
-	return detail, nil
+	return comps, compRows.Err()
 }
 
 // GetWorkflowPlanRoots returns the persisted planning roots of a workflow

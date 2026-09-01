@@ -124,8 +124,8 @@ func main() {
 	}
 
 	// Ensure DB directory exists
-	if err := sqlite.EnsureDBPath(dbPath); err != nil {
-		log.Fatalf("ensure db path: %v", err)
+	if ensureErr := sqlite.EnsureDBPath(dbPath); ensureErr != nil {
+		log.Fatalf("ensure db path: %v", ensureErr)
 	}
 
 	// Open repository
@@ -139,19 +139,29 @@ func main() {
 	log.SetOutput(os.Stdout)
 
 	// One-time startup retention cleanup (non-fatal)
-	if err := runStartupRetentionCleanup(repo, time.Now()); err != nil {
-		log.Printf("retention cleanup failed: %v", err)
+	if cleanupErr := runStartupRetentionCleanup(repo, time.Now()); cleanupErr != nil {
+		log.Printf("retention cleanup failed: %v", cleanupErr)
 	}
 
+	// Build token (use env if provided, else empty)
+	token := os.Getenv("ONSEI_TOKEN")
+
+	runServer(ctx, repo, dataDir, configDir, ffmpegPath, token, version)
+}
+
+// runServer starts the gRPC + HTTP listeners and blocks until the process is
+// killed. Startup failures are fatal (log.Fatalf) so CI/dev surfaces them.
+func runServer(
+	ctx context.Context,
+	repo *sqlite.Repository,
+	dataDir, configDir, ffmpegPath, token, version string,
+) {
 	// Start TCP listener on a random available port
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 	port := lis.Addr().(*net.TCPAddr).Port
-
-	// Build token (use env if provided, else empty)
-	token := os.Getenv("ONSEI_TOKEN")
 
 	// Register gRPC server
 	grpcServer := grpc.NewServer()
@@ -234,6 +244,7 @@ func main() {
 	}()
 
 	// Print ready handshake BEFORE blocking — Flutter reads this line
+	//nolint:forbidigo // stdout handshake is a wire protocol for the host
 	fmt.Println(bootstrap.BuildHandshakeLine(port, token, version, httpPort))
 
 	// Block until killed

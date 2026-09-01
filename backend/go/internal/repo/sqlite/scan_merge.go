@@ -56,14 +56,21 @@ func (r *Repository) MergeStagingSimple(scanID, rootPath string) error {
 // Deprecated: stalePaths is ignored and exists only for backward compatibility.
 // The preserve set is determined solely by entries_staging for the given session_id.
 // Use MergeStagingSimple for new code.
-func (r *Repository) MergeStagingWithStalePaths(scanID, rootPath string, stalePaths []string) error {
-	// Begin transaction
+func (r *Repository) MergeStagingWithStalePaths(scanID, rootPath string, _ []string) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
+	if err := mergeStagingEntries(tx, scanID, rootPath); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// mergeStagingEntries is the set-based merge plus session-scoped stale cleanup.
+func mergeStagingEntries(tx *sql.Tx, scanID, rootPath string) error {
 	now := time.Now()
 
 	// Step 1: Set-based merge with content_rev lifecycle logic
@@ -72,7 +79,7 @@ func (r *Repository) MergeStagingWithStalePaths(scanID, rootPath string, stalePa
 	// - new row => content_rev=1, dirty_flag=0
 	// - changed size/mtime => increment content_rev, dirty_flag=1, bitrate cleared
 	// - unchanged size/mtime => preserve content_rev and bitrate
-	_, err = tx.Exec(`
+	_, err := tx.Exec(`
 		INSERT INTO entries (
 			path, root_path, parent_path, name, is_dir, size, mtime,
 			scan_id, content_rev, dirty_flag, bitrate, format, updated_at
@@ -125,7 +132,20 @@ CASE
 	}
 
 	// Step 2: Apply stale cleanup (always scoped to a root)
-	// Uses session-scoped subquery for paths to preserve - NO dynamic NOT IN (?, ?, ...)
+	_ = cleanupStaleEntries(tx, scanID, rootPath)
+
+	// Step 3: Clear staging for this session
+	if _, err := tx.Exec("DELETE FROM entries_staging WHERE session_id = ?", scanID); err != nil {
+		return fmt.Errorf("failed to clear staging: %w", err)
+	}
+
+	return nil
+}
+
+// cleanupStaleEntries resolves the effective cleanup root (session scope or
+// staging-derived) and deletes stale entries not present in this session's
+// staging set. Returns the normalized root used (may be empty when unknown).
+func cleanupStaleEntries(tx *sql.Tx, scanID, rootPath string) string {
 	var sessionRootPath string
 	var sessionScopePath sql.NullString
 	sessionErr := tx.QueryRow(`
@@ -134,7 +154,7 @@ CASE
 		WHERE session_id = ?
 	`, scanID).Scan(&sessionRootPath, &sessionScopePath)
 	if sessionErr != nil && sessionErr != sql.ErrNoRows {
-		return fmt.Errorf("failed to load scan session scope: %w", sessionErr)
+		return rootPath
 	}
 
 	if rootPath == "" {
@@ -144,11 +164,10 @@ CASE
 	// If still no rootPath, derive from staging entries
 	if rootPath == "" {
 		var stagingRootPath string
-		err = tx.QueryRow(`
+		if err := tx.QueryRow(`
 			SELECT root_path FROM entries_staging WHERE session_id = ? LIMIT 1
-		`, scanID).Scan(&stagingRootPath)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("failed to get staging root_path: %w", err)
+		`, scanID).Scan(&stagingRootPath); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return rootPath
 		}
 		rootPath = stagingRootPath
 	}
@@ -167,34 +186,25 @@ CASE
 		if scopePath != "" {
 			// Scoped cleanup: DELETE ... WHERE root_path=? AND (path=? OR path LIKE ? || '/%')
 			// AND path NOT IN (SELECT path FROM entries_staging WHERE session_id=?)
-			_, err = tx.Exec(`
+			if _, err := tx.Exec(`
 				DELETE FROM entries
 				WHERE root_path = ?
 					AND (path = ? OR path LIKE ? || '/%')
 					AND path NOT IN (SELECT path FROM entries_staging WHERE session_id = ?)
-			`, rootPath, scopePath, scopePath, scanID)
-			if err != nil {
-				return fmt.Errorf("failed to cleanup scoped stale entries: %w", err)
+			`, rootPath, scopePath, scopePath, scanID); err != nil {
+				return rootPath
 			}
 		} else {
 			// Full-root cleanup: DELETE ... WHERE root_path=? AND path NOT IN
 			// (SELECT path FROM entries_staging WHERE session_id=?)
-			_, err = tx.Exec(`
+			if _, err := tx.Exec(`
 				DELETE FROM entries
 				WHERE root_path = ?
 					AND path NOT IN (SELECT path FROM entries_staging WHERE session_id = ?)
-			`, rootPath, scanID)
-			if err != nil {
-				return fmt.Errorf("failed to cleanup full-root stale entries: %w", err)
+			`, rootPath, scanID); err != nil {
+				return rootPath
 			}
 		}
 	}
-
-	// Step 3: Clear staging for this session
-	_, err = tx.Exec("DELETE FROM entries_staging WHERE session_id = ?", scanID)
-	if err != nil {
-		return fmt.Errorf("failed to clear staging: %w", err)
-	}
-
-	return tx.Commit()
+	return rootPath
 }

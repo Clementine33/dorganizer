@@ -44,8 +44,8 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req scanRequest
-	if err := decodeJSONAllowEmpty(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid scan payload")
+	if decodeErr := decodeJSONAllowEmpty(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid scan payload")
 		return
 	}
 	rootPath := lib.RootPath
@@ -85,7 +85,7 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	if err := sw.Send("started", scanEventData{Stage: "scan", Message: "Scanning " + rootPath}); err != nil {
+	if sendErr := sw.Send("started", scanEventData{Stage: "scan", Message: "Scanning " + rootPath}); sendErr != nil {
 		return
 	}
 

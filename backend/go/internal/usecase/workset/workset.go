@@ -61,8 +61,8 @@ func (s *serviceImpl) CreateWorkset(ctx context.Context, req CreateRequest) (*Cr
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load library", err)
 	}
-	if result, replayed, err := s.replayCreate(ctx, req.IdempotencyKey); err != nil || replayed {
-		return result, err
+	if result, replayed, replayErr := s.replayCreate(ctx, req.IdempotencyKey); replayErr != nil || replayed {
+		return result, replayErr
 	}
 	members, err := s.resolveMembers(lib, req.FolderIDs)
 	if err != nil {

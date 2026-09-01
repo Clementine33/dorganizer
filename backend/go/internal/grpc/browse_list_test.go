@@ -1,4 +1,4 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -150,13 +150,12 @@ func TestListFiles_ReturnsBitrateEntriesForMP3(t *testing.T) {
 		{filepath.Join(root, "2.mp3"), 256000},
 	}
 	for _, p := range paths {
-		_, err := repo.DB().Exec(`
+		if _, execErr := repo.DB().Exec(`
 			INSERT OR REPLACE INTO entries (path, root_path, parent_path, name,
 				is_dir, size, mtime, scan_id, content_rev, bitrate, updated_at)
 			VALUES (?, ?, ?, ?, 0, 1000, 1, 'scan-1', 1, ?, ?)
-		`, filepath.ToSlash(p.abs), filepath.ToSlash(root), filepath.ToSlash(root), filepath.Base(p.abs), p.bitrate, now)
-		if err != nil {
-			t.Fatalf("insert entry %q: %v", p.abs, err)
+		`, filepath.ToSlash(p.abs), filepath.ToSlash(root), filepath.ToSlash(root), filepath.Base(p.abs), p.bitrate, now); execErr != nil {
+			t.Fatalf("insert entry %q: %v", p.abs, execErr)
 		}
 	}
 

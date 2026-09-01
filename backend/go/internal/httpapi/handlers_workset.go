@@ -218,8 +218,8 @@ func (s *Server) createWorkset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req worksetCreateRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid workset payload")
+	if decodeErr := decodeJSON(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid workset payload")
 		return
 	}
 	idemKey := r.Header.Get("Idempotency-Key")
@@ -299,8 +299,8 @@ func (s *Server) patchWorkset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req worksetPatchRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid workset payload")
+	if decodeErr := decodeJSON(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid workset payload")
 		return
 	}
 	version, valid := ifMatchVersion(r)
@@ -347,8 +347,8 @@ func (s *Server) putWorksetDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req worksetDraftRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid draft payload")
+	if decodeErr := decodeJSON(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid draft payload")
 		return
 	}
 	version, valid := ifMatchVersion(r)
@@ -375,8 +375,8 @@ func (s *Server) startGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req generationStartRequest
-	if err := decodeJSONAllowEmpty(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid generation payload")
+	if decodeErr := decodeJSONAllowEmpty(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid generation payload")
 		return
 	}
 	idemKey := r.Header.Get("Idempotency-Key")

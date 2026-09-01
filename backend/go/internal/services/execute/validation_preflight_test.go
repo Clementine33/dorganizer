@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"os"
@@ -7,6 +7,8 @@ import (
 )
 
 // TestToolsConfig_InvalidEncoder_Fails validates that invalid encoder fails.
+//
+//nolint:dupl // distinct encoder-validation scenarios
 func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -47,6 +49,8 @@ func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 }
 
 // TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop validates qaac selected but qaac_path missing fails before item loop.
+//
+//nolint:dupl // distinct qaac validation scenarios
 func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -88,6 +92,8 @@ func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 }
 
 // TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop validates lame selected but lame_path missing fails before item loop.
+//
+//nolint:dupl // distinct lame validation scenarios
 func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -129,6 +135,8 @@ func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 }
 
 // TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop validates qaac selected but qaac_path invalid fails before item loop.
+//
+//nolint:dupl // distinct invalid-path scenarios
 func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -170,6 +178,8 @@ func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 }
 
 // TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop validates lame selected but lame_path invalid fails before item loop.
+//
+//nolint:dupl // distinct invalid-path scenarios
 func TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -309,6 +319,8 @@ func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
 
 // TestConvertPlan_TargetExtensionMismatch_FailsPreflight validates convert plan target extension
 // must strictly match configured encoder suffix mapping.
+//
+//nolint:dupl // distinct encoder target-extension scenarios
 func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -351,6 +363,7 @@ func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 	}
 }
 
+//nolint:dupl // distinct encoder target-extension scenarios
 func TestConvertPlan_TargetExtensionMismatch_QAAC_FailsPreflight(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")

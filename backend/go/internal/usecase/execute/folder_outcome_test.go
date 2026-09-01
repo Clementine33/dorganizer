@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"os"
@@ -43,7 +43,7 @@ func TestExecuteEventHandler_FolderOutcome_UseCaseOwned(t *testing.T) {
 		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))},
 	)
 
-	sink := handler.sink.(*testEventSink)
+	sink, _ := handler.sink.(*testEventSink)
 
 	completed := folderEvents(sink.events, "folder_completed")
 	failed := folderEvents(sink.events, "folder_failed")
@@ -130,7 +130,7 @@ func TestExecuteEventHandler_UsecaseOwnsFolderOutcome(t *testing.T) {
 		SourcePath: filepath.ToSlash(filepath.Join(folderA, "file.mp3")),
 	})
 
-	sink := handler.sink.(*testEventSink)
+	sink, _ := handler.sink.(*testEventSink)
 
 	completed := folderEvents(sink.events, "folder_completed")
 	failed := folderEvents(sink.events, "folder_failed")

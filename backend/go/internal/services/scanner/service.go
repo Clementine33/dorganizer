@@ -198,6 +198,8 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 // are cleaned up best-effort.
 //
 // Invariant: Root = parallel directory descent + inline metadata + pipeline.
+//
+//nolint:gocognit,funlen // producer/consumer pipeline with cancellation has many coordinated branches
 func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts ...ScanOption) (string, error) {
 	var o scanOptions
 	for _, opt := range opts {
@@ -314,7 +316,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
 	if err := baseCtx.Err(); err != nil {
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
 		}
 		if cleanupFn != nil {
 			_ = cleanupFn(sessionID) // Best-effort cleanup
@@ -334,7 +336,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		// Update session status to failed
 		code, primaryErr := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		// Return primary error (not cleanup failure). A staging-write failure
@@ -360,7 +362,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		// Merge into main catalog
 		_, err := s.repo.MergeStaging(sessionID, normalizedRootPath, nil)
 		if err != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
 			return "", fmt.Errorf("merge staging: %w", err)
 		}
 
@@ -387,6 +389,8 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 // are cleaned up best-effort.
 //
 // Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline.
+//
+//nolint:gocognit,funlen // mirrors the root-scan pipeline branches (folder-scoped)
 func (s *ScannerService) ScanFolderCtx(
 	ctx context.Context,
 	folderPath, rootPath string,
@@ -505,7 +509,7 @@ func (s *ScannerService) ScanFolderCtx(
 	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
 	if err := baseCtx.Err(); err != nil {
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
 		}
 		if cleanupFn != nil {
 			_ = cleanupFn(sessionID) // Best-effort cleanup
@@ -524,7 +528,7 @@ func (s *ScannerService) ScanFolderCtx(
 		// Update session status
 		code, primaryErr := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		_ = cleanupFailure // Best effort cleanup
@@ -542,7 +546,7 @@ func (s *ScannerService) ScanFolderCtx(
 
 		_, err := s.repo.MergeStaging(sessionID, normalizedRootPath, nil)
 		if err != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
 			return "", err
 		}
 

@@ -1,4 +1,4 @@
-package reconcile
+package reconcile //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"fmt"

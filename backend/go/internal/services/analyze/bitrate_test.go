@@ -1,4 +1,4 @@
-package analyze
+package analyze //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bytes"
@@ -154,8 +154,8 @@ func TestPersistBitrateUpdates_ReturnsExecError(t *testing.T) {
 	}
 	defer repo.Close()
 
-	if _, err := repo.DB().Exec("DROP TABLE entries"); err != nil {
-		t.Fatalf("failed to drop entries table: %v", err)
+	if _, dropErr := repo.DB().Exec("DROP TABLE entries"); dropErr != nil {
+		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
 	a := NewAnalyzer(repo)
@@ -205,8 +205,8 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 			SELECT RAISE(ABORT, 'forced update failure');
 		END;
 	`, failPathEscaped)
-	if _, err := repo.DB().Exec(triggerSQL); err != nil {
-		t.Fatalf("failed to create failure trigger: %v", err)
+	if _, triggerErr := repo.DB().Exec(triggerSQL); triggerErr != nil {
+		t.Fatalf("failed to create failure trigger: %v", triggerErr)
 	}
 
 	a := NewAnalyzer(repo)
@@ -255,8 +255,8 @@ func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
 	mp3Path := filepath.Join(tmpDir, "track.mp3")
 	writeTestMP3Frame(t, mp3Path)
 
-	if _, err := repo.DB().Exec("DROP TABLE entries"); err != nil {
-		t.Fatalf("failed to drop entries table: %v", err)
+	if _, dropErr := repo.DB().Exec("DROP TABLE entries"); dropErr != nil {
+		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
 	a := NewAnalyzer(repo)
@@ -442,23 +442,3 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 		t.Fatalf("expected %d entries with bitrate > 0, got %d", totalEntries, updatedCount)
 	}
 }
-
-// mockSQLDB and related types are minimal mocks for unit-testing DB interactions.
-// They are not used by the current integration tests but kept for future expansion.
-
-type mockSQLResult struct{}
-
-func (mockSQLResult) LastInsertId() (int64, error) { return 0, nil }
-func (mockSQLResult) RowsAffected() (int64, error) { return 0, nil }
-
-type mockSQLTx struct {
-	execFn     func(string, ...any) (mockSQLResult, error)
-	commitFn   func() error
-	rollbackFn func() error
-}
-
-func (tx mockSQLTx) Exec(q string, args ...any) (mockSQLResult, error) {
-	return tx.execFn(q, args...)
-}
-func (tx mockSQLTx) Commit() error   { return tx.commitFn() }
-func (tx mockSQLTx) Rollback() error { return tx.rollbackFn() }

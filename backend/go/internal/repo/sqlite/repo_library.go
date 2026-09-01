@@ -316,8 +316,8 @@ func (r *Repository) ReplaceLibraryFolders(libraryID, rootPath string) (int, err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM library_folders WHERE library_id = ?", libraryID); err != nil {
-		return 0, err
+	if _, deleteErr := tx.Exec("DELETE FROM library_folders WHERE library_id = ?", libraryID); deleteErr != nil {
+		return 0, deleteErr
 	}
 
 	rows, err := tx.Query(`

@@ -1,4 +1,4 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bytes"
@@ -75,14 +75,14 @@ func reqWithIfMatch(
 
 func seedLibrary(t *testing.T, repo *sqlite.Repository) string {
 	t.Helper()
-	repo.DB().
+	_, _ = repo.DB().
 		Exec(`INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at) VALUES ('lib-1', 'Onsei', '/music', '/music', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
 	return "lib-1"
 }
 
 func seedFolder(t *testing.T, repo *sqlite.Repository, libID string) {
 	t.Helper()
-	repo.DB().
+	_, _ = repo.DB().
 		Exec(`INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at) VALUES ('f-a', ?, '/music/albumA', 'albumA', 'albumA', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, libID)
 }
 

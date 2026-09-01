@@ -200,6 +200,10 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	if s.deps.PlanService == nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "plan service not configured")
+		return
+	}
 
 	lib, err := s.deps.Repo.GetLibrary(req.LibraryID)
 	if err != nil {
@@ -211,66 +215,12 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.deps.PlanService == nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "plan service not configured")
-		return
-	}
-
 	usecaseReq := planusecase.Request{LibraryID: req.LibraryID}
-
 	switch {
 	case req.Workflow != nil:
-		if len(req.FolderIDs) == 0 {
-			writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "workflow requires folder_ids as planning roots")
-			return
-		}
-		folderPaths := make([]string, 0, len(req.FolderIDs))
-		for _, folderID := range req.FolderIDs {
-			folder, err := s.deps.Repo.GetLibraryFolder(lib.ID, folderID)
-			if err != nil {
-				if errors.Is(err, sqlite.ErrLibraryFolderNotFound) {
-					writeError(w, http.StatusNotFound, "LIBRARY_FOLDER_NOT_FOUND", "folder not found in library")
-					return
-				}
-				writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load folder")
-				return
-			}
-			folderPaths = append(folderPaths, folder.Path)
-		}
-
-		steps := make([]planusecase.WorkflowStep, 0, len(req.Workflow.Steps))
-		for _, step := range req.Workflow.Steps {
-			policySource, err := parsePolicySource(step.Policy)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "INVALID_POLICY_SOURCE", err.Error())
-				return
-			}
-			steps = append(steps, planusecase.WorkflowStep{StepType: step.StepType, Policy: policySource})
-		}
-		usecaseReq.Workflow = &planusecase.Workflow{
-			SchemaVersion: req.Workflow.SchemaVersion,
-			Steps:         steps,
-		}
-		usecaseReq.PlanningRoots = folderPaths
-
+		usecaseReq = s.createPlanWorkflowReq(w, lib, req)
 	case req.SingleAction != nil:
-		if len(req.SingleAction.SourceFiles) == 0 && len(req.SourceFiles) == 0 {
-			writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "single_action requires source_files")
-			return
-		}
-		sourceFiles := req.SingleAction.SourceFiles
-		if len(sourceFiles) == 0 {
-			sourceFiles = req.SourceFiles
-		}
-		normalized, ok := validatePlanSourceFiles(w, lib.RootPath, sourceFiles)
-		if !ok {
-			return
-		}
-		usecaseReq.SingleAction = &planusecase.SingleAction{
-			Action:       req.SingleAction.Action,
-			SourceFiles:  normalized,
-			TargetFormat: req.SingleAction.TargetFormat,
-		}
+		usecaseReq = s.createPlanSingleActionReq(w, lib, req)
 	}
 
 	resp, err := s.deps.PlanService.Plan(r.Context(), usecaseReq)
@@ -297,6 +247,77 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toPlanResponse(resp))
+}
+
+// createPlanWorkflowReq validates folder scopes + inline policies and builds
+// the workflow usecase request. On validation failure it writes the error and
+// returns the zero request (the caller checks PlanService.Plan error instead).
+func (s *Server) createPlanWorkflowReq(
+	w http.ResponseWriter,
+	lib *sqlite.Library,
+	req planCreateRequest,
+) planusecase.Request {
+	usecaseReq := planusecase.Request{LibraryID: req.LibraryID}
+	if len(req.FolderIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "workflow requires folder_ids as planning roots")
+		return usecaseReq
+	}
+	folderPaths := make([]string, 0, len(req.FolderIDs))
+	for _, folderID := range req.FolderIDs {
+		folder, folderErr := s.deps.Repo.GetLibraryFolder(lib.ID, folderID)
+		if folderErr != nil {
+			if errors.Is(folderErr, sqlite.ErrLibraryFolderNotFound) {
+				writeError(w, http.StatusNotFound, "LIBRARY_FOLDER_NOT_FOUND", "folder not found in library")
+				return usecaseReq
+			}
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load folder")
+			return usecaseReq
+		}
+		folderPaths = append(folderPaths, folder.Path)
+	}
+	steps := make([]planusecase.WorkflowStep, 0, len(req.Workflow.Steps))
+	for _, step := range req.Workflow.Steps {
+		policySource, policyErr := parsePolicySource(step.Policy)
+		if policyErr != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_POLICY_SOURCE", policyErr.Error())
+			return usecaseReq
+		}
+		steps = append(steps, planusecase.WorkflowStep{StepType: step.StepType, Policy: policySource})
+	}
+	usecaseReq.Workflow = &planusecase.Workflow{
+		SchemaVersion: req.Workflow.SchemaVersion,
+		Steps:         steps,
+	}
+	usecaseReq.PlanningRoots = folderPaths
+	return usecaseReq
+}
+
+// createPlanSingleActionReq validates the source-file scope and builds the
+// single-action usecase request (source_files fall back to the top-level list).
+func (s *Server) createPlanSingleActionReq(
+	w http.ResponseWriter,
+	lib *sqlite.Library,
+	req planCreateRequest,
+) planusecase.Request {
+	usecaseReq := planusecase.Request{LibraryID: req.LibraryID}
+	if len(req.SingleAction.SourceFiles) == 0 && len(req.SourceFiles) == 0 {
+		writeError(w, http.StatusBadRequest, "SCOPE_REQUIRED", "single_action requires source_files")
+		return usecaseReq
+	}
+	sourceFiles := req.SingleAction.SourceFiles
+	if len(sourceFiles) == 0 {
+		sourceFiles = req.SourceFiles
+	}
+	normalized, ok := validatePlanSourceFiles(w, lib.RootPath, sourceFiles)
+	if !ok {
+		return usecaseReq
+	}
+	usecaseReq.SingleAction = &planusecase.SingleAction{
+		Action:       req.SingleAction.Action,
+		SourceFiles:  normalized,
+		TargetFormat: req.SingleAction.TargetFormat,
+	}
+	return usecaseReq
 }
 
 // resolveStepSummary rebuilds the plan summary from the persisted step

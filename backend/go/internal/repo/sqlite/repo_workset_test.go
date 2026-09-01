@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -234,6 +234,7 @@ func TestWorksetListPagination(t *testing.T) {
 	}
 }
 
+//nolint:funlen // long lifecycle scenario
 func TestWorksetRevisionLifecycle(t *testing.T) {
 	repo := newTestRepository(t)
 	insertLibrary(t, repo, "lib-1")
@@ -308,10 +309,10 @@ func TestWorksetRevisionLifecycle(t *testing.T) {
 
 	// A second revision gets index 2.
 	g2 := &PlanGeneration{GenerationID: "gen-2", WorksetID: w.ID, CreatedAt: now.Add(time.Second)}
-	if err := repo.CreateGeneration(g2); err != nil {
-		t.Fatalf("CreateGeneration 2: %v", err)
+	if createErr := repo.CreateGeneration(g2); createErr != nil {
+		t.Fatalf("CreateGeneration 2: %v", createErr)
 	}
-	if err := repo.PersistWorksetRevision(g2.GenerationID, w.ID, now.Add(time.Second), WorksetRevisionPersist{
+	if persistErr := repo.PersistWorksetRevision(g2.GenerationID, w.ID, now.Add(time.Second), WorksetRevisionPersist{
 		PlanID:          "plan-2",
 		RootPath:        "/music/albumA",
 		SnapshotToken:   "snap-2",
@@ -329,8 +330,8 @@ func TestWorksetRevisionLifecycle(t *testing.T) {
 				EntryCount:           3,
 			},
 		},
-	}); err != nil {
-		t.Fatalf("PersistWorksetRevision 2: %v", err)
+	}); persistErr != nil {
+		t.Fatalf("PersistWorksetRevision 2: %v", persistErr)
 	}
 	rev2, _ := repo.GetWorksetRevision(w.ID, "plan-2")
 	if rev2.RevisionIndex != 2 {
@@ -382,17 +383,17 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 	membersOther[0].WorksetID = wOther.ID
 	membersOther[1].WorksetID = wOther.ID
 	draftOther.WorksetID = wOther.ID
-	if err := repo.CreateWorkset(wOther, membersOther, draftOther); err != nil {
-		t.Fatalf("create other: %v", err)
+	if createErr := repo.CreateWorkset(wOther, membersOther, draftOther); createErr != nil {
+		t.Fatalf("create other: %v", createErr)
 	}
 	g3 := &PlanGeneration{GenerationID: "gen-3", WorksetID: wOther.ID, IdempotencyKey: "key-1", CreatedAt: now}
-	if err := repo.CreateGeneration(g3); err != nil {
-		t.Fatalf("cross-workset same key: %v", err)
+	if createErr := repo.CreateGeneration(g3); createErr != nil {
+		t.Fatalf("cross-workset same key: %v", createErr)
 	}
 
 	// Queued cancel is synchronous terminal.
-	if err := repo.CancelGeneration("gen-1"); err != nil {
-		t.Fatalf("CancelGeneration: %v", err)
+	if cancelErr := repo.CancelGeneration("gen-1"); cancelErr != nil {
+		t.Fatalf("CancelGeneration: %v", cancelErr)
 	}
 	got, _ := repo.GetGeneration("gen-1")
 	if got.Status != GenStatusCanceled {

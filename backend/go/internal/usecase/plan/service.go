@@ -2,7 +2,6 @@ package plan
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -224,8 +223,6 @@ func aggregateSummaryReason(s reconcile.StepSummary) string {
 		return reconcile.ReasonNoMatch
 	}
 }
-
-func sha256Sum(b []byte) [32]byte { return sha256.Sum256(b) }
 
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)

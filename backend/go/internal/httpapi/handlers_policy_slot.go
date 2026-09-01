@@ -74,8 +74,8 @@ func (s *Server) putPolicySlot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req policySlotPutRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeDecodeError(w, err, "invalid policy slot payload")
+	if decodeErr := decodeJSON(w, r, &req); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid policy slot payload")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -92,15 +92,15 @@ func (s *Server) putPolicySlot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_POLICY", err.Error())
 		return
 	}
-	if err := reconcile.ValidatePolicy(policy); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", err.Error())
+	if validateErr := reconcile.ValidatePolicy(policy); validateErr != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_POLICY", validateErr.Error())
 		return
 	}
-	if _, err := reconcile.ResolveClassifier(policy.ClassifierTags); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", err.Error())
+	if _, resolveErr := reconcile.ResolveClassifier(policy.ClassifierTags); resolveErr != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_POLICY", resolveErr.Error())
 		return
 	}
-	if err := s.deps.Repo.UpdatePolicySlot(slotIndex, name, string(req.Policy)); err != nil {
+	if updateErr := s.deps.Repo.UpdatePolicySlot(slotIndex, name, string(req.Policy)); updateErr != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update policy slot")
 		return
 	}

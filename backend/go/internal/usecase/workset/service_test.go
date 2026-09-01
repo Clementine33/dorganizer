@@ -1,4 +1,4 @@
-package workset
+package workset //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -29,7 +29,8 @@ func newSvc(t *testing.T, concurrency int) *serviceImpl {
 	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	return NewService(repo, tmp, concurrency).(*serviceImpl)
+	svc, _ := NewService(repo, tmp, concurrency).(*serviceImpl)
+	return svc
 }
 
 func insertLibraryRow(t *testing.T, repo *sqlite.Repository, id, name, root string) {
@@ -53,22 +54,6 @@ func insertFolder(t *testing.T, repo *sqlite.Repository, libID, id, path, rel, n
 	`, id, libID, path, name, rel, now, now)
 	if err != nil {
 		t.Fatalf("insert folder: %v", err)
-	}
-}
-
-func insertEntry(t *testing.T, repo *sqlite.Repository, path, root string, size, mtime int64) {
-	t.Helper()
-	now := time.Now().Format(timeFmt)
-	parent := "/"
-	if len(path) > 1 {
-		parent = path[:len(path)-len("file.mp3")]
-	}
-	_, err := repo.DB().Exec(`
-		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
-	`, path, root, parent, "file.mp3", size, mtime, now, now)
-	if err != nil {
-		t.Fatalf("insert entry: %v", err)
 	}
 }
 

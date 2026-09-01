@@ -1,4 +1,4 @@
-package scanner
+package scanner //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -191,7 +191,7 @@ func TestScannerService_StagingWriteFailure_PreventsMergeAndEndsSessionFailed(t 
 	// we create a minimal temp directory to walk
 	tmpDir := t.TempDir()
 	// Create one file so there's something to stage
-	os.WriteFile(filepath.Join(tmpDir, "song.mp3"), []byte("dummy"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "song.mp3"), []byte("dummy"), 0644)
 
 	// The session should fail and not call MergeStaging
 	_, err := svc.ScanRoot(tmpDir)
@@ -559,8 +559,8 @@ func TestCleanupStagingSession_RemovesAllEntriesForSession(t *testing.T) {
 	}
 
 	// Cleanup
-	if err := suite.adapter.CleanupStagingSession(sessionID); err != nil {
-		t.Fatalf("CleanupStagingSession failed: %v", err)
+	if cleanupErr := suite.adapter.CleanupStagingSession(sessionID); cleanupErr != nil {
+		t.Fatalf("CleanupStagingSession failed: %v", cleanupErr)
 	}
 
 	// Verify entries removed
@@ -676,7 +676,7 @@ func BenchmarkWriteStagingEntries_LargeBatch(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		err := adapter.WriteStagingEntries("bench-session-"+string(rune(i)), entries)
 		if err != nil {
 			b.Fatalf("WriteStagingEntries failed: %v", err)

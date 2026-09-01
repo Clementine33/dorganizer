@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+//nolint:funlen // long CRUD scenario with many assertions
 func TestRepository_PlanMethods(t *testing.T) {
 	t.Run("CreatePlan and GetPlan", func(t *testing.T) {
 		repo := newTestRepository(t)
@@ -175,8 +176,8 @@ func TestRepository_CreateAndGetPlan_SlimModeNullableRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
-	if err := repo.CreatePlan(plan2); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
+	if planErr := repo.CreatePlan(plan2); planErr != nil {
+		t.Fatalf("CreatePlan failed: %v", planErr)
 	}
 
 	fetched2, err := repo.GetPlan("plan-with-slim")
@@ -190,6 +191,7 @@ func TestRepository_CreateAndGetPlan_SlimModeNullableRoundTrip(t *testing.T) {
 	}
 }
 
+//nolint:funlen // long batch scenario
 func TestPersistPlan_Batch_AllOrNothing(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -249,9 +251,9 @@ func TestPersistPlan_Batch_AllOrNothing(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
-	if err := CreatePlanTx(tx, plan); err != nil {
+	if createErr := CreatePlanTx(tx, plan); createErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanTx failed: %v", err)
+		t.Fatalf("CreatePlanTx failed: %v", createErr)
 	}
 
 	items := []PlanItem{
@@ -269,13 +271,13 @@ func TestPersistPlan_Batch_AllOrNothing(t *testing.T) {
 		},
 	}
 
-	if err := CreatePlanItemsBatchTx(tx, "test-plan-batch", items); err != nil {
+	if batchErr := CreatePlanItemsBatchTx(tx, "test-plan-batch", items); batchErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanItemsBatchTx failed: %v", err)
+		t.Fatalf("CreatePlanItemsBatchTx failed: %v", batchErr)
 	}
 
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit transaction: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("failed to commit transaction: %v", commitErr)
 	}
 
 	persistedPlan, err := repo.GetPlan("test-plan-batch")
@@ -380,6 +382,7 @@ func TestPersistPlan_Batch_PlanIDConflict(t *testing.T) {
 	}
 }
 
+//nolint:funlen // long batch rollback scenario
 func TestPersistPlan_Batch_RollbackAfterPlanInsert(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -408,9 +411,9 @@ func TestPersistPlan_Batch_RollbackAfterPlanInsert(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
-	if err := CreatePlanTx(tx, plan); err != nil {
+	if createErr := CreatePlanTx(tx, plan); createErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanTx failed: %v", err)
+		t.Fatalf("CreatePlanTx failed: %v", createErr)
 	}
 
 	var count int
@@ -446,9 +449,9 @@ func TestPersistPlan_Batch_RollbackAfterPlanInsert(t *testing.T) {
 		},
 	}
 
-	if err := CreatePlanItemsBatchTx(tx, planID, items); err != nil {
+	if batchErr := CreatePlanItemsBatchTx(tx, planID, items); batchErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanItemsBatchTx failed: %v", err)
+		t.Fatalf("CreatePlanItemsBatchTx failed: %v", batchErr)
 	}
 
 	err = tx.QueryRow("SELECT COUNT(*) FROM plan_items WHERE plan_id = ?", planID).Scan(&count)
@@ -484,6 +487,7 @@ func TestPersistPlan_Batch_RollbackAfterPlanInsert(t *testing.T) {
 	t.Logf("Rollback verified: planCount=%d, itemCount=%d (both should be 0)", planCount, itemCount)
 }
 
+//nolint:funlen // long rollback scenario
 func TestPersistPlan_Batch_ConstraintFailureRollback(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -502,7 +506,7 @@ func TestPersistPlan_Batch_ConstraintFailureRollback(t *testing.T) {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
 
-	plan := &Plan{
+	plan := &Plan{ //nolint:gosec // test plan identifier, not a credential
 		PlanID:        planID,
 		RootPath:      "/music",
 		ScanRootPath:  "/music",
@@ -512,9 +516,9 @@ func TestPersistPlan_Batch_ConstraintFailureRollback(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
-	if err := CreatePlanTx(tx, plan); err != nil {
+	if createErr := CreatePlanTx(tx, plan); createErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanTx failed: %v", err)
+		t.Fatalf("CreatePlanTx failed: %v", createErr)
 	}
 
 	var count int
@@ -679,13 +683,13 @@ func TestPersistPlan_Batch_ChunkedItems(t *testing.T) {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
 
-	if err := CreatePlanItemsBatchTx(tx, "chunked-items-plan", items); err != nil {
+	if batchErr := CreatePlanItemsBatchTx(tx, "chunked-items-plan", items); batchErr != nil {
 		tx.Rollback()
-		t.Fatalf("CreatePlanItemsBatchTx failed: %v", err)
+		t.Fatalf("CreatePlanItemsBatchTx failed: %v", batchErr)
 	}
 
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit transaction: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("failed to commit transaction: %v", commitErr)
 	}
 
 	persistedItems, err := repo.ListPlanItems("chunked-items-plan")
@@ -804,9 +808,9 @@ func TestRepository_ListPlansFilterOrderLimit(t *testing.T) {
 	}
 
 	mk := func(id, libID, created string) *Plan {
-		ts, err := time.Parse(time.RFC3339Nano, created)
-		if err != nil {
-			t.Fatalf("parse created %q: %v", created, err)
+		ts, parseErr := time.Parse(time.RFC3339Nano, created)
+		if parseErr != nil {
+			t.Fatalf("parse created %q: %v", created, parseErr)
 		}
 		return &Plan{
 			PlanID:        id,
@@ -825,8 +829,8 @@ func TestRepository_ListPlansFilterOrderLimit(t *testing.T) {
 		mk("p3", libB.ID, "2026-01-03T00:00:00Z"),
 		mk("p4", "", "2026-01-04T00:00:00Z"), // legacy/unattributed
 	} {
-		if err := repo.CreatePlan(p); err != nil {
-			t.Fatalf("CreatePlan(%s) failed: %v", p.PlanID, err)
+		if planErr := repo.CreatePlan(p); planErr != nil {
+			t.Fatalf("CreatePlan(%s) failed: %v", p.PlanID, planErr)
 		}
 	}
 
@@ -881,15 +885,15 @@ func TestRepository_GetPlanDetailRoundTrip(t *testing.T) {
 		Status:        "ready",
 		CreatedAt:     time.Now(),
 	}
-	if err := repo.CreatePlan(plan); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
+	if createErr := repo.CreatePlan(plan); createErr != nil {
+		t.Fatalf("CreatePlan failed: %v", createErr)
 	}
 
 	tx, err := repo.DB().Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CreatePlanItemsBatchTx(tx, "plan-det", []PlanItem{
+	if batchErr := CreatePlanItemsBatchTx(tx, "plan-det", []PlanItem{
 		{
 			PlanID:                 "plan-det",
 			ItemIndex:              0,
@@ -901,10 +905,10 @@ func TestRepository_GetPlanDetailRoundTrip(t *testing.T) {
 			PreconditionSize:       1,
 			PreconditionMtime:      1,
 		},
-	}); err != nil {
-		t.Fatalf("CreatePlanItemsBatchTx: %v", err)
+	}); batchErr != nil {
+		t.Fatalf("CreatePlanItemsBatchTx: %v", batchErr)
 	}
-	if err := CreatePlanFolderErrorsBatchTx(tx, "plan-det", []PlanFolderError{
+	if folderErr := CreatePlanFolderErrorsBatchTx(tx, "plan-det", []PlanFolderError{
 		{
 			PlanID:     "plan-det",
 			ErrorIndex: 0,
@@ -913,18 +917,18 @@ func TestRepository_GetPlanDetailRoundTrip(t *testing.T) {
 			Message:    "boom",
 			Retryable:  true,
 		},
-	}); err != nil {
-		t.Fatalf("CreatePlanFolderErrorsBatchTx: %v", err)
+	}); folderErr != nil {
+		t.Fatalf("CreatePlanFolderErrorsBatchTx: %v", folderErr)
 	}
-	if err := CreatePlanSuccessfulFoldersBatchTx(
+	if successErr := CreatePlanSuccessfulFoldersBatchTx(
 		tx,
 		"plan-det",
 		[]string{"/music/Album", "/music/Second"},
-	); err != nil {
-		t.Fatalf("CreatePlanSuccessfulFoldersBatchTx: %v", err)
+	); successErr != nil {
+		t.Fatalf("CreatePlanSuccessfulFoldersBatchTx: %v", successErr)
 	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatal(commitErr)
 	}
 
 	detail, err := repo.GetPlanDetail("plan-det")

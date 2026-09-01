@@ -1,4 +1,4 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"encoding/json"
@@ -108,6 +108,7 @@ func TestListLibraryFolders(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo,funlen // folder-tree scenario with many cases
 func TestFolderTree(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })

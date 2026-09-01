@@ -289,15 +289,15 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 		return err
 	}
 	if !hasCol {
-		if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
-			return err
+		if _, fkErr := db.Exec("PRAGMA foreign_keys=OFF"); fkErr != nil {
+			return fkErr
 		}
 		defer func() {
 			_, _ = db.Exec("PRAGMA foreign_keys=ON")
 		}()
 
-		if _, err := db.Exec("BEGIN"); err != nil {
-			return err
+		if _, beginErr := db.Exec("BEGIN"); beginErr != nil {
+			return beginErr
 		}
 		committed := false
 		defer func() {
@@ -327,12 +327,12 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 			`CREATE INDEX idx_plans_library_created ON plans(library_id, created_at)`,
 		}
 		for _, s := range steps {
-			if _, err := db.Exec(s); err != nil {
-				return fmt.Errorf("plans schema migration: %w", err)
+			if _, stepErr := db.Exec(s); stepErr != nil {
+				return fmt.Errorf("plans schema migration: %w", stepErr)
 			}
 		}
-		if _, err := db.Exec("COMMIT"); err != nil {
-			return err
+		if _, commitErr := db.Exec("COMMIT"); commitErr != nil {
+			return commitErr
 		}
 		committed = true
 	}
@@ -347,17 +347,23 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 	}
 	for libs.Next() {
 		var id, key string
-		if err := libs.Scan(&id, &key); err != nil {
+		if scanErr := libs.Scan(&id, &key); scanErr != nil {
 			libs.Close()
-			return err
+			return scanErr
 		}
 		libKeys[key] = id
 	}
 	libs.Close()
-	if err := libs.Err(); err != nil {
-		return err
+	if rowsErr := libs.Err(); rowsErr != nil {
+		return rowsErr
 	}
 
+	return backfillPlansLibraryOwnership(db, libKeys)
+}
+
+// backfillPlansLibraryOwnership attributes legacy nullable-library plans to the
+// library whose canonical root key matches the plan's scan_root_path.
+func backfillPlansLibraryOwnership(db *sql.DB, libKeys map[string]string) error {
 	plans, err := db.Query("SELECT plan_id, scan_root_path FROM plans WHERE library_id IS NULL")
 	if err != nil {
 		return err
@@ -365,9 +371,9 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 	var toUpdate []struct{ id, libraryID string }
 	for plans.Next() {
 		var planID, scanRoot string
-		if err := plans.Scan(&planID, &scanRoot); err != nil {
+		if scanErr := plans.Scan(&planID, &scanRoot); scanErr != nil {
 			plans.Close()
-			return err
+			return scanErr
 		}
 		if scanRoot == "" {
 			continue
@@ -377,22 +383,27 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 		}
 	}
 	plans.Close()
-	if err := plans.Err(); err != nil {
-		return err
+	if rowsErr := plans.Err(); rowsErr != nil {
+		return rowsErr
 	}
 
 	for _, u := range toUpdate {
-		if _, err := db.Exec("UPDATE plans SET library_id = ? WHERE plan_id = ?", u.libraryID, u.id); err != nil {
-			return err
+		if _, updateErr := db.Exec(
+			"UPDATE plans SET library_id = ? WHERE plan_id = ?",
+			u.libraryID,
+			u.id,
+		); updateErr != nil {
+			return updateErr
 		}
 	}
+	return createPlansLibraryIndex(db)
+}
 
-	if _, err := db.Exec(
+func createPlansLibraryIndex(db *sql.DB) error {
+	_, err := db.Exec(
 		"CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)",
-	); err != nil {
-		return err
-	}
-	return nil
+	)
+	return err
 }
 
 // migratePlansWorkflowSchema is the breaking migration for the workflow plan
@@ -671,8 +682,9 @@ func migrateWorksetSchema(db *sql.DB) error {
 	return nil
 }
 
-func initSchema(db *sql.DB) error {
-	schemaTables := `
+// schemaTablesDDL is the full CREATE-TABLE schema (V1+). Kept out of
+// initSchema so the function stays a thin executor.
+const schemaTablesDDL = `
 -- P0 Schema V1: Main entries table with content revision tracking
 CREATE TABLE IF NOT EXISTS entries (
     path TEXT PRIMARY KEY,
@@ -1016,12 +1028,9 @@ CREATE TABLE IF NOT EXISTS classifier_tag_library (
 );
 CREATE INDEX IF NOT EXISTS idx_classifier_tag_norm ON classifier_tag_library(normalized_tag);
 `
-	if _, err := db.Exec(schemaTables); err != nil {
-		return err
-	}
 
-	// Create indexes
-	schemaIndexes := `
+// schemaIndexesDDL is the CREATE-INDEX DDL applied after the tables exist.
+const schemaIndexesDDL = `
 -- Entry indexes
 CREATE INDEX IF NOT EXISTS idx_entries_root_path ON entries(root_path);
 CREATE INDEX IF NOT EXISTS idx_entries_parent_path ON entries(parent_path);
@@ -1055,13 +1064,18 @@ CREATE INDEX IF NOT EXISTS idx_errors_scope ON error_events(scope);
 CREATE INDEX IF NOT EXISTS idx_exec_plan ON execute_sessions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_exec_status ON execute_sessions(status);
 `
-	_, err := db.Exec(schemaIndexes)
-	if err != nil {
+
+// initSchema creates the full schema (tables, indexes, seed rows).
+func initSchema(db *sql.DB) error {
+	if _, err := db.Exec(schemaTablesDDL); err != nil {
+		return err
+	}
+	if _, err := db.Exec(schemaIndexesDDL); err != nil {
 		return err
 	}
 	// Fixed three policy slots exist from initialization (storage-level
 	// cardinality invariant; there is no insert/delete API).
-	_, err = db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`)
+	_, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`)
 	return err
 }
 

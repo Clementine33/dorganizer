@@ -103,8 +103,8 @@ func (s *serviceImpl) SaveDraft(ctx context.Context, id string, req SaveDraftReq
 	if w.LibraryID == "" {
 		return nil, NewError(ErrKindConflict, "ORPHANED_WORKSET", "orphaned worksets are read-only", nil)
 	}
-	if err := validateWorkflow(req.Workflow); err != nil {
-		return nil, err
+	if validateErr := validateWorkflow(req.Workflow); validateErr != nil {
+		return nil, validateErr
 	}
 	// Reject while a generation is queued/running: the session freezes the
 	// draft at enqueue time and must not race a replace.

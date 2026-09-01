@@ -94,14 +94,8 @@ func (a *SQLiteRepositoryAdapter) WriteStagingEntries(_ string, entries []Stagin
 }
 
 // MergeStaging merges staged entries and returns merged count.
-func (a *SQLiteRepositoryAdapter) MergeStaging(sessionID, rootPath string, stalePaths []string) (int, error) {
-	var err error
-	if len(stalePaths) > 0 {
-		err = a.repo.MergeStagingWithStalePaths(sessionID, rootPath, stalePaths)
-	} else {
-		err = a.repo.MergeStagingSimple(sessionID, rootPath)
-	}
-	if err != nil {
+func (a *SQLiteRepositoryAdapter) MergeStaging(sessionID, rootPath string, _ []string) (int, error) {
+	if err := a.repo.MergeStagingSimple(sessionID, rootPath); err != nil {
 		return 0, err
 	}
 

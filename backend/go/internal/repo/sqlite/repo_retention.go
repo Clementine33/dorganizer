@@ -99,8 +99,8 @@ func (r *Repository) RunRetentionCleanupWithCutoffs(cutoff, generationCutoff tim
 	// PRAGMA settings are connection-scoped in SQLite and do not carry over
 	// to a transaction started on a connection that may have been reset,
 	// so we re-enable explicitly before any cascade-dependent deletes.
-	if _, err := tx.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		return CleanupStats{}, fmt.Errorf("enable foreign keys in retention tx: %w", err)
+	if _, fkErr := tx.Exec("PRAGMA foreign_keys = ON;"); fkErr != nil {
+		return CleanupStats{}, fmt.Errorf("enable foreign keys in retention tx: %w", fkErr)
 	}
 
 	var stats CleanupStats

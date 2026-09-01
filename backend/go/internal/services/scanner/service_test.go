@@ -1,4 +1,4 @@
-package scanner
+package scanner //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"os"

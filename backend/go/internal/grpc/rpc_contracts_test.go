@@ -1,4 +1,4 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"

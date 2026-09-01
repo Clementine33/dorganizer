@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"
@@ -40,8 +40,8 @@ func TestRepository_ExecuteSessionMethods(t *testing.T) {
 		t.Errorf("expected status running, got %s", fetched.Status)
 	}
 
-	if err := repo.UpdateExecuteSessionStatus("exec-001", "completed", "", ""); err != nil {
-		t.Fatalf("UpdateExecuteSessionStatus failed: %v", err)
+	if updateErr := repo.UpdateExecuteSessionStatus("exec-001", "completed", "", ""); updateErr != nil {
+		t.Fatalf("UpdateExecuteSessionStatus failed: %v", updateErr)
 	}
 
 	fetched, err = repo.GetExecuteSession("exec-001")

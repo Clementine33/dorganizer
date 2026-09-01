@@ -1,4 +1,4 @@
-package workset
+package workset //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -13,6 +13,8 @@ import (
 // generate a revision synchronously via the dispatcher, then assert that
 // GetRevision maps every component to the correct planning root and that a
 // re-read returns the identical ownership table.
+//
+//nolint:funlen // long ownership scenario
 func TestRevisionComponentRootOwnership(t *testing.T) {
 	svc := newSvc(t, 1)
 	repo := svc.repo
@@ -41,12 +43,12 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 	}
 	id := res.Workset.WorksetID
 
-	if _, err := svc.SaveDraft(
+	if _, saveErr := svc.SaveDraft(
 		ctx,
 		id,
 		SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 1},
-	); err != nil {
-		t.Fatalf("SaveDraft: %v", err)
+	); saveErr != nil {
+		t.Fatalf("SaveDraft: %v", saveErr)
 	}
 	view, _ := svc.GetWorkset(ctx, id)
 	if view.Version != 2 {

@@ -1,4 +1,4 @@
-package workset
+package workset //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -44,9 +44,9 @@ func seedFeedFixtures(t *testing.T, svc *serviceImpl) {
 	if err != nil {
 		t.Fatalf("create orphan: %v", err)
 	}
-	if _, err := repo.DB().
-		Exec("UPDATE worksets SET library_id = NULL WHERE id = ?", res.Workset.WorksetID); err != nil {
-		t.Fatalf("orphan: %v", err)
+	if _, orphanErr := repo.DB().
+		Exec("UPDATE worksets SET library_id = NULL WHERE id = ?", res.Workset.WorksetID); orphanErr != nil {
+		t.Fatalf("orphan: %v", orphanErr)
 	}
 	// error: blocked revision (fabricated through the repo persistence path:
 	// one blocked component forces BlockedCount > 0 on read).

@@ -52,6 +52,8 @@ type WorkflowRunResult struct {
 // roots concurrently (results collected in request order), and returns
 // persisted-snapshot records without touching the database. Callers persist
 // via their own transaction boundary.
+//
+//nolint:gocognit,funlen // step-1 workflow has many outcome branches; split when steps multiply
 func RunWorkflow(
 	ctx context.Context,
 	repo *sqlite.Repository,
@@ -103,12 +105,6 @@ func RunWorkflow(
 		return nil, err
 	}
 
-	type rootResult struct {
-		root    string
-		result  reconcile.ReconcileResult
-		missing bool
-		err     error
-	}
 	// Planning roots are independent works: analyze them concurrently (the
 	// bitrate enrichment serializes its own DB writes internally). Results are
 	// collected in request order so persistence is deterministic.

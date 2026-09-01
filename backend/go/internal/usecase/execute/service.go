@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -21,6 +20,8 @@ type serviceImpl struct {
 // Execute orchestrates the full execution of a persisted plan, streaming events
 // through the provided EventSink. It owns plan loading, config interpretation,
 // tool execution, folder failure/completion semantics, and error-event persistence.
+//
+//nolint:funlen // flat linear orchestration; splitting would add indirection without reducing state
 func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (Result, error) {
 	// 1. Validate PlanID
 	if req.PlanID == "" {
@@ -65,15 +66,15 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 	slashRootPath := filepath.ToSlash(rootPath)
 
 	// 4. Emit started event
-	if err := sink.Emit(Event{
+	if emitErr := sink.Emit(Event{
 		Type:      "started",
 		Message:   fmt.Sprintf("Executing plan %s", planID),
 		PlanID:    planID,
 		RootPath:  slashRootPath,
 		EventID:   generateEventID(),
 		Timestamp: time.Now(),
-	}); err != nil {
-		return Result{}, err
+	}); emitErr != nil {
+		return Result{}, emitErr
 	}
 
 	// 5. Load config
@@ -203,11 +204,6 @@ func hasConvertOp(plan *exesvc.Plan) bool {
 		}
 	}
 	return false
-}
-
-// Helper to check if a db item op_type is a convert operation.
-func isConvertOpType(opType string) bool {
-	return strings.EqualFold(opType, "convert_and_delete")
 }
 
 // planFolders extracts distinct folder paths from the plan items using attributeFolderPath.

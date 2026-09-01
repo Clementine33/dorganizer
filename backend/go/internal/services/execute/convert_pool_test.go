@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -361,9 +361,7 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 			}
 			return errors.New("forced encode failure: " + filepath.Base(src))
 		},
-		commitReplaceFn: func(tmpOut, dst string) error {
-			return os.Rename(tmpOut, dst)
-		},
+		commitReplaceFn: os.Rename,
 	}
 
 	outcome := svc.executeConvertBatchWithPool(
@@ -545,7 +543,7 @@ func TestExecuteConvertPoolWithTracking_NonRootedGlobalFailFastStopsFurtherAdmis
 
 	items := make([]PlanItem, 0, totalItems)
 	indices := make([]int, 0, totalItems)
-	for i := 0; i < totalItems; i++ {
+	for i := range totalItems {
 		src := filepath.Join(tmp, fmt.Sprintf("%02d.wav", i))
 		dst := filepath.Join(tmp, fmt.Sprintf("%02d.m4a", i))
 		if err := os.WriteFile(src, []byte("audio"), 0644); err != nil {

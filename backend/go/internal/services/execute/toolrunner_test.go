@@ -1,10 +1,9 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -17,7 +16,6 @@ import (
 
 // mockRenameLockedBusy simulates Locked/Busy error on every rename call.
 type mockRenameLockedBusy struct {
-	mu        sync.Mutex
 	callCount atomic.Int32
 }
 
@@ -37,7 +35,6 @@ func (m *mockRenameLockedBusy) getCallCount() int {
 
 // mockRenamePermissionDenied simulates Permission Denied error.
 type mockRenamePermissionDenied struct {
-	mu        sync.Mutex
 	callCount atomic.Int32
 }
 
@@ -206,6 +203,7 @@ func TestDelete_SoftDelete_Success(t *testing.T) {
 		t.Errorf("File should exist at %s", expectedDest)
 	}
 }
+
 func TestDelete_SoftDelete_RelativePath_ReturnsError(t *testing.T) {
 	tmp := t.TempDir()
 	runner := NewToolRunnerWithRoot(ToolsConfig{}, tmp)

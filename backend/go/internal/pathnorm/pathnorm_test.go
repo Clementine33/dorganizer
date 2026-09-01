@@ -1,4 +1,4 @@
-package pathnorm
+package pathnorm //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"os"
@@ -156,8 +156,8 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 	}
 
 	linkPath := filepath.Join(root, "linked")
-	if err := os.Symlink(outsideDir, linkPath); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	if symlinkErr := os.Symlink(outsideDir, linkPath); symlinkErr != nil {
+		t.Skipf("symlinks unavailable: %v", symlinkErr)
 	}
 	within, err = IsResolvedWithinRoot(root, filepath.Join(linkPath, filepath.Base(outsideFile)))
 	if err != nil {

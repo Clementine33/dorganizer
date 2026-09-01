@@ -1,4 +1,4 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -8,21 +8,6 @@ import (
 
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
-
-// mockServerStream implements grpc.ServerStreamingServer for testing.
-type mockServerStream struct {
-	ctx    context.Context
-	events []*pb.JobEvent
-}
-
-func (m *mockServerStream) Context() context.Context {
-	return m.ctx
-}
-
-func (m *mockServerStream) Send(event *pb.JobEvent) error {
-	m.events = append(m.events, event)
-	return nil
-}
 
 // mockServerStreamHelper is a helper that provides the Send method.
 type mockServerStreamHelper struct {

@@ -143,6 +143,7 @@ type groupPlan struct {
 	encodedTargetPath     string
 }
 
+//nolint:gocognit,gocyclo,cyclop,funlen // per-lane decision table (lossless/encoded/ops); each case is a straight-line rule
 func reconcileComponent(
 	root string,
 	partition Partition,
@@ -220,14 +221,15 @@ func reconcileComponent(
 					targetCodec = append(targetCodec, f)
 				}
 			}
-			if len(targetCodec) > 0 {
+			switch {
+			case len(targetCodec) > 0:
 				p.losslessKeep = targetCodec
 				for _, f := range losslessFiles {
 					if f.Codec != profile.Lossless.Codec {
 						p.losslessObsolete = append(p.losslessObsolete, f)
 					}
 				}
-			} else if len(losslessFiles) > 0 {
+			case len(losslessFiles) > 0:
 				if len(candidates) == 0 {
 					p.losslessBlocked = ReasonSourceMissing
 				} else {
@@ -235,7 +237,7 @@ func reconcileComponent(
 					p.losslessEncodeSrc = &src
 					p.losslessObsolete = losslessFiles
 				}
-			} else {
+			default:
 				p.losslessBlocked = ReasonLosslessUnfulfillable
 			}
 		} else {

@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"
@@ -29,8 +29,8 @@ func TestRepository_ScanSessionMethods(t *testing.T) {
 		t.Errorf("expected status running, got %s", fetched.Status)
 	}
 
-	if err := repo.UpdateScanSessionStatus("scan-001", "completed", "", ""); err != nil {
-		t.Fatalf("UpdateScanSessionStatus failed: %v", err)
+	if updateErr := repo.UpdateScanSessionStatus("scan-001", "completed", "", ""); updateErr != nil {
+		t.Fatalf("UpdateScanSessionStatus failed: %v", updateErr)
 	}
 
 	fetched, err = repo.GetScanSession("scan-001")
@@ -76,8 +76,8 @@ func TestRepository_CreateAndGetScanSession_ScopePathNullableRoundTrip(t *testin
 		StartedAt: time.Now(),
 	}
 
-	if err := repo.CreateScanSession(session2); err != nil {
-		t.Fatalf("CreateScanSession failed: %v", err)
+	if createErr := repo.CreateScanSession(session2); createErr != nil {
+		t.Fatalf("CreateScanSession failed: %v", createErr)
 	}
 
 	fetched2, err := repo.GetScanSession("scan-folder")
@@ -91,6 +91,7 @@ func TestRepository_CreateAndGetScanSession_ScopePathNullableRoundTrip(t *testin
 	}
 }
 
+//nolint:funlen // long lifecycle scenario
 func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -130,8 +131,8 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		Status:    "running",
 		StartedAt: oldTime,
 	}
-	if err := repo.CreateScanSession(runningOld); err != nil {
-		t.Fatalf("create running-old scan: %v", err)
+	if createErr := repo.CreateScanSession(runningOld); createErr != nil {
+		t.Fatalf("create running-old scan: %v", createErr)
 	}
 
 	// 3) Newer scan → should be retained
@@ -142,11 +143,11 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		Status:    "completed",
 		StartedAt: newTime,
 	}
-	if err := repo.CreateScanSession(newerScan); err != nil {
-		t.Fatalf("create new scan: %v", err)
+	if createErr := repo.CreateScanSession(newerScan); createErr != nil {
+		t.Fatalf("create new scan: %v", createErr)
 	}
-	if err := repo.UpdateScanSessionStatus("scan-new", "completed", "", ""); err != nil {
-		t.Fatalf("update new scan status: %v", err)
+	if updateErr := repo.UpdateScanSessionStatus("scan-new", "completed", "", ""); updateErr != nil {
+		t.Fatalf("update new scan status: %v", updateErr)
 	}
 
 	// 4) Old started_at but new finished_at → COALESCE(finished_at, started_at) picks finished_at → retained
@@ -157,11 +158,11 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		Status:    "completed",
 		StartedAt: oldTime, // started_at < cutoff
 	}
-	if err := repo.CreateScanSession(coalesceScan); err != nil {
-		t.Fatalf("create coalesce-precedence scan: %v", err)
+	if createErr := repo.CreateScanSession(coalesceScan); createErr != nil {
+		t.Fatalf("create coalesce-precedence scan: %v", createErr)
 	}
-	if err := repo.UpdateScanSessionStatus("scan-coalesce-precedence", "completed", "", ""); err != nil {
-		t.Fatalf("update coalesce-precedence scan status: %v", err)
+	if updateErr := repo.UpdateScanSessionStatus("scan-coalesce-precedence", "completed", "", ""); updateErr != nil {
+		t.Fatalf("update coalesce-precedence scan status: %v", updateErr)
 	}
 	_, err = repo.db.Exec(
 		"UPDATE scan_sessions SET finished_at = ? WHERE session_id = ?",
@@ -182,8 +183,8 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		tx.Rollback()
 		t.Fatalf("DeleteScanSessionsOlderThanTx: %v", err)
 	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("commit: %v", commitErr)
 	}
 
 	if deleted != 2 {
@@ -192,8 +193,8 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 
 	// Verify the two retained scans remain
 	var count int
-	if err := repo.db.QueryRow("SELECT COUNT(*) FROM scan_sessions").Scan(&count); err != nil {
-		t.Fatalf("count scan_sessions: %v", err)
+	if countErr := repo.db.QueryRow("SELECT COUNT(*) FROM scan_sessions").Scan(&count); countErr != nil {
+		t.Fatalf("count scan_sessions: %v", countErr)
 	}
 	if count != 2 {
 		t.Fatalf("scan_sessions remaining = %d, want 2", count)

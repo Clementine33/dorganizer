@@ -1,7 +1,6 @@
 package execute
 
 import (
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,16 +19,6 @@ func firstNonEmpty(values ...string) string {
 // generateEventID generates a unique event identifier.
 func generateEventID() string {
 	return "evt-" + uuid.NewString()
-}
-
-// isSQLiteBusyLockedError checks if the error is a SQLite busy/locked error.
-func isSQLiteBusyLockedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") ||
-		strings.Contains(msg, "sqlite_locked")
 }
 
 // newEvent creates a new Event with the given fields and auto-generated ID/timestamp.

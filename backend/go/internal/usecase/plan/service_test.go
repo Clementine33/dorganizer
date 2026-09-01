@@ -1,4 +1,4 @@
-package plan
+package plan //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"

@@ -169,8 +169,8 @@ func (s *serviceImpl) view(w *sqlite.Workset) (*WorksetView, error) {
 		CreatedAt:     w.CreatedAt,
 	}
 	if w.LibraryID != "" {
-		lib, err := s.repo.GetLibrary(w.LibraryID)
-		if err == nil {
+		lib, libErr := s.repo.GetLibrary(w.LibraryID)
+		if libErr == nil {
 			out.Library = &LibraryRef{LibraryID: lib.ID, Name: lib.Name, RootPath: lib.RootPath}
 		}
 	}
@@ -181,9 +181,9 @@ func (s *serviceImpl) view(w *sqlite.Workset) (*WorksetView, error) {
 	}
 	covered := map[string]bool{}
 	if w.CurrentRevisionID != "" {
-		sum, roots, err := s.loadCurrentRevision(w)
-		if err != nil {
-			return nil, err
+		sum, roots, revErr := s.loadCurrentRevision(w)
+		if revErr != nil {
+			return nil, revErr
 		}
 		out.CurrentRevision = sum
 		for _, r := range roots {

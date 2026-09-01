@@ -58,8 +58,8 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	}
 
 	// 5. Delete tag
-	if err := repo.DeleteClassifierTag(created.ID); err != nil {
-		t.Fatalf("delete tag: %v", err)
+	if deleteErr := repo.DeleteClassifierTag(created.ID); deleteErr != nil {
+		t.Fatalf("delete tag: %v", deleteErr)
 	}
 	listAfterDel, err := repo.GetClassifierTags()
 	if err != nil {

@@ -9,27 +9,6 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// persistExecuteError persists an execute error event into the error_events table.
-func (s *serviceImpl) persistExecuteError(code, message, folderPath, rootPath string) {
-	if s.repo == nil {
-		return
-	}
-	var pathPtr *string
-	if folderPath != "" {
-		pathPtr = &folderPath
-	}
-	if err := s.repo.CreateErrorEvent(&sqlite.ErrorEvent{
-		Scope:     "execute",
-		RootPath:  rootPath,
-		Path:      pathPtr,
-		Code:      code,
-		Message:   message,
-		Retryable: false,
-	}); err != nil {
-		log.Printf("warning: failed to persist execute error event: %v", err)
-	}
-}
-
 // persistExecuteErrorGlobal persists an execute-level error with no folder attribution.
 func (s *serviceImpl) persistExecuteErrorGlobal(code, message string) {
 	if s.repo == nil {

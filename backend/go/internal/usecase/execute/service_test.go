@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -535,8 +535,8 @@ func TestExecute_ConvertPlanWithoutToolsConfig_Fails(t *testing.T) {
 
 	// Create config.json with empty tools config
 	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	testFile := filepath.Join(tmpDir, "test.wav")
@@ -592,6 +592,8 @@ func TestExecute_ConvertPlanWithoutToolsConfig_Fails(t *testing.T) {
 
 // TestExecute_DeleteOnlyPlan_SkipsToolsConfig validates that delete-only plans
 // succeed even without tools config.
+//
+//nolint:dupl // distinct delete-only config scenarios
 func TestExecute_DeleteOnlyPlan_SkipsToolsConfig(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-usecase-delete-no-tools-*")
 	if err != nil {
@@ -603,8 +605,8 @@ func TestExecute_DeleteOnlyPlan_SkipsToolsConfig(t *testing.T) {
 
 	// Empty tools config
 	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	testFile := filepath.Join(tmpDir, "test.mp3")
@@ -628,6 +630,8 @@ func TestExecute_DeleteOnlyPlan_SkipsToolsConfig(t *testing.T) {
 
 // TestExecute_DeleteOnlyPlan_IgnoresMalformedToolsConfig validates delete-only
 // plans succeed even when tools config is malformed.
+//
+//nolint:dupl // distinct delete-only config scenarios
 func TestExecute_DeleteOnlyPlan_IgnoresMalformedToolsConfig(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-usecase-delete-bad-config-*")
 	if err != nil {
@@ -639,8 +643,8 @@ func TestExecute_DeleteOnlyPlan_IgnoresMalformedToolsConfig(t *testing.T) {
 
 	// Malformed JSON in tools section
 	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "C:/tools/lame.exe"}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	testFile := filepath.Join(tmpDir, "test.mp3")
@@ -683,8 +687,8 @@ func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
 		"\\",
 		"\\\\",
 	) + `"}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	repo := newTestRepo(t, tmpDir)
@@ -749,8 +753,8 @@ func TestExecute_ConvertWithFakeEncoder_HardDelete(t *testing.T) {
 		"\\",
 		"\\\\",
 	) + `"}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	repo := newTestRepo(t, tmpDir)
@@ -812,8 +816,8 @@ func TestExecute_ConvertFailure_PreservesSource(t *testing.T) {
 
 	// Config with nonexistent encoder
 	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "nonexistent_lame_encoder"}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	repo := newTestRepo(t, tmpDir)
@@ -1358,8 +1362,8 @@ func TestExecute_ConfigInvalid_RemainsGlobal(t *testing.T) {
 
 	// No tools config
 	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {}}`
-	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	testFile := filepath.Join(tmpDir, "test.wav")

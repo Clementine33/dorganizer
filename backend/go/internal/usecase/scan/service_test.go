@@ -1,4 +1,4 @@
-package scan
+package scan //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"

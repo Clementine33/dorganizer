@@ -46,6 +46,8 @@ type walkResult struct {
 //   - emit: callback for each DirEntry found; returning error cancels the walk
 //
 // Returns error if walk fails or if emit returns error.
+//
+//nolint:gocognit,gocyclo,funlen // worker-pool coordinator (dispatch/collect/cancel) is inherently branched
 func WalkRootEntriesParallel(
 	ctx context.Context,
 	rootPath, basePath string,

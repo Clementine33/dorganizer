@@ -1,7 +1,6 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -34,18 +33,6 @@ func inlinePolicyFixture() map[string]any {
 			"unmatched":       profile,
 		},
 	}
-}
-
-// stubPlanService is a controllable plan usecase stub for mapping tests.
-type stubPlanService struct {
-	planFn func(ctx context.Context, req planusecase.Request) (planusecase.Response, error)
-}
-
-func (s *stubPlanService) Plan(ctx context.Context, req planusecase.Request) (planusecase.Response, error) {
-	if s.planFn == nil {
-		return planusecase.Response{}, nil
-	}
-	return s.planFn(ctx, req)
 }
 
 type planSummaryDTO struct {

@@ -181,7 +181,7 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	for itemRows.Next() {
 		var pi PlanItem
 		var targetPath sql.NullString
-		if err := itemRows.Scan(
+		if scanErr := itemRows.Scan(
 			&pi.PlanID,
 			&pi.ItemIndex,
 			&pi.OpType,
@@ -192,9 +192,9 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 			&pi.PreconditionContentRev,
 			&pi.PreconditionSize,
 			&pi.PreconditionMtime,
-		); err != nil {
+		); scanErr != nil {
 			itemRows.Close()
-			return nil, err
+			return nil, scanErr
 		}
 		if targetPath.Valid {
 			pi.TargetPath = &targetPath.String
@@ -202,8 +202,8 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 		detail.Items = append(detail.Items, pi)
 	}
 	itemRows.Close()
-	if err := itemRows.Err(); err != nil {
-		return nil, err
+	if rowsErr := itemRows.Err(); rowsErr != nil {
+		return nil, rowsErr
 	}
 
 	errRows, err := r.db.Query(`
@@ -216,23 +216,23 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	for errRows.Next() {
 		var pe PlanFolderError
 		var retryable int
-		if err := errRows.Scan(
+		if scanErr := errRows.Scan(
 			&pe.PlanID,
 			&pe.ErrorIndex,
 			&pe.FolderPath,
 			&pe.Code,
 			&pe.Message,
 			&retryable,
-		); err != nil {
+		); scanErr != nil {
 			errRows.Close()
-			return nil, err
+			return nil, scanErr
 		}
 		pe.Retryable = retryable == 1
 		detail.FolderErrors = append(detail.FolderErrors, pe)
 	}
 	errRows.Close()
-	if err := errRows.Err(); err != nil {
-		return nil, err
+	if rowsErr := errRows.Err(); rowsErr != nil {
+		return nil, rowsErr
 	}
 
 	folderRows, err := r.db.Query(`

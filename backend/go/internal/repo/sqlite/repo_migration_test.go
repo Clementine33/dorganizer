@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"database/sql"
@@ -168,11 +168,11 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	if len(plans) != 0 {
 		t.Fatalf("expected 0 legacy plans after migration, got %d", len(plans))
 	}
-	if _, err := repo.GetPlan("plan-1"); !errors.Is(err, ErrPlanNotFound) {
-		t.Fatalf("GetPlan(plan-1) = %v, want ErrPlanNotFound", err)
+	if _, planErr := repo.GetPlan("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+		t.Fatalf("GetPlan(plan-1) = %v, want ErrPlanNotFound", planErr)
 	}
-	if _, err := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(err, ErrPlanNotFound) {
-		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", err)
+	if _, detailErr := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(detailErr, ErrPlanNotFound) {
+		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", detailErr)
 	}
 
 	// A new workflow plan round-trips after migration.

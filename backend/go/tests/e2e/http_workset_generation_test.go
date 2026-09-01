@@ -1,4 +1,4 @@
-package e2e
+package e2e //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bytes"
@@ -17,6 +17,8 @@ import (
 // the seeded balanced draft, polls the generation detail to completion,
 // reviews the immutable revision, verifies unchanged-generation replay, then
 // deletes the library and checks the orphan workspace is read-only.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // e2e generation loop
 func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
 	dataDir := t.TempDir()
@@ -259,7 +261,7 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	}
 
 	// Delete the library (no active generation) succeeds and orphans the workset.
-	if code := doJSON(
+	if delCode := doJSON(
 		t,
 		client,
 		ctx,
@@ -269,8 +271,8 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		token,
 		nil,
 		nil,
-	); code != http.StatusNoContent {
-		t.Fatalf("delete library: %d", code)
+	); delCode != http.StatusNoContent {
+		t.Fatalf("delete library: %d", delCode)
 	}
 	var orphan struct {
 		PlanningState   string `json:"planning_state"`
@@ -278,7 +280,7 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			ValidationState string `json:"validation_state"`
 		} `json:"current_revision"`
 	}
-	if code := doJSON(
+	if getCode := doJSON(
 		t,
 		client,
 		ctx,
@@ -288,8 +290,8 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		token,
 		nil,
 		&orphan,
-	); code != http.StatusOK {
-		t.Fatalf("orphan detail: %d", code)
+	); getCode != http.StatusOK {
+		t.Fatalf("orphan detail: %d", getCode)
 	}
 	if orphan.PlanningState != "orphaned" || orphan.CurrentRevision == nil ||
 		orphan.CurrentRevision.ValidationState != "unavailable" {
