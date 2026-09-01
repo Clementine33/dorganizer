@@ -31,7 +31,11 @@ func openLegacyLibraryDB(t *testing.T, rows [][2]string) (*Repository, error) {
 		t.Fatalf("create legacy libraries table: %v", err)
 	}
 	for _, r := range rows {
-		if _, err := db.Exec("INSERT INTO libraries (id, name, root_path) VALUES (?, 'Legacy', ?)", r[0], r[1]); err != nil {
+		if _, err := db.Exec(
+			"INSERT INTO libraries (id, name, root_path) VALUES (?, 'Legacy', ?)",
+			r[0],
+			r[1],
+		); err != nil {
 			t.Fatalf("insert legacy library: %v", err)
 		}
 	}
@@ -123,13 +127,19 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	)`); err != nil {
 		t.Fatalf("create legacy plans table: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO libraries (id, name, root_path) VALUES ('lib-1', 'Music', '/music')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO libraries (id, name, root_path) VALUES ('lib-1', 'Music', '/music')",
+	); err != nil {
 		t.Fatalf("insert legacy library: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-1', '/music/Album', '/music', 'slim', 'snap-1', 'ready')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-1', '/music/Album', '/music', 'slim', 'snap-1', 'ready')",
+	); err != nil {
 		t.Fatalf("insert plan-1: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-2', '/other', '/other', 'slim', 'snap-2', 'ready')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-2', '/other', '/other', 'slim', 'snap-2', 'ready')",
+	); err != nil {
 		t.Fatalf("insert plan-2: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -170,14 +180,22 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	err = CreateWorkflowPlanTx(repo.DB(), "wf-1", "workflow", "/new", "snap-wf", lib.ID,
+	err = CreateWorkflowPlanTx(
+		repo.DB(),
+		"wf-1",
+		"workflow",
+		"/new",
+		"snap-wf",
+		lib.ID,
 		[]WorkflowStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
 			PolicySchemaVersion: 1, PolicyJSON: `{"schema_version":1}`, PolicyHash: "h",
 			ClassifierTags: "se\xe3\x81\xaa\xe3\x81\x97", ClassifierHash: "ch",
 			StepSummaryJSON: `{"summary_reason":"NO_MATCH"}`,
 		}},
-		[]WorkflowRootRecord{{RootIndex: 0, RootPath: "/new", RootIdentity: "/new", InventoryFingerprint: "fp", EntryCount: 0}},
+		[]WorkflowRootRecord{
+			{RootIndex: 0, RootPath: "/new", RootIdentity: "/new", InventoryFingerprint: "fp", EntryCount: 0},
+		},
 		[]WorkflowComponentRecord{{
 			ComponentIndex: 0, ComponentID: "cid", RootIndex: 0, Partition: "unmatched",
 			Status: "ok", OutcomeJSON: `{}`,
@@ -191,7 +209,12 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 		t.Fatalf("GetWorkflowPlanDetail(wf-1) failed: %v", err)
 	}
 	if len(detail.Steps) != 1 || len(detail.Components) != 1 || len(detail.Roots) != 1 {
-		t.Fatalf("workflow detail steps=%d roots=%d components=%d", len(detail.Steps), len(detail.Roots), len(detail.Components))
+		t.Fatalf(
+			"workflow detail steps=%d roots=%d components=%d",
+			len(detail.Steps),
+			len(detail.Roots),
+			len(detail.Components),
+		)
 	}
 	if detail.Plan.PlanKind != "workflow" || detail.Plan.WorkflowSchemaVersion != 1 {
 		t.Fatalf("plan kind=%q schema=%d", detail.Plan.PlanKind, detail.Plan.WorkflowSchemaVersion)

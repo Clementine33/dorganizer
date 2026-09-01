@@ -19,6 +19,18 @@ tasks:
     cmds:
       - go test ./...
 
+  lint:go:
+    desc: Lint Go backend (golangci-lint)
+    dir: backend/go
+    cmds:
+      - golangci-lint run ./...
+
+  lint:go:fix:
+    desc: Auto-fix Go lint issues
+    dir: backend/go
+    cmds:
+      - golangci-lint run --fix ./...
+
   test:flutter:
     desc: Run Flutter tests
     dir: frontend/flutter_app
@@ -72,6 +84,7 @@ tasks:
     desc: Run quality checks (Go + Flutter + Web)
     cmds:
       - task test:go
+      - task lint:go
       - task test:flutter
       - task analyze:flutter
       - task typecheck:web

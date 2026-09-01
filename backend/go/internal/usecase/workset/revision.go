@@ -3,6 +3,7 @@ package workset
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -58,7 +59,11 @@ func revisionBlockedCount(detail *sqlite.WorkflowPlanDetail) int {
 
 // ListRevisions returns one page of revision summaries newest-first with a
 // keyset on revision_index plus the next-page cursor.
-func (s *serviceImpl) ListRevisions(ctx context.Context, worksetID string, beforeIndex, limit int) (*RevisionListResult, error) {
+func (s *serviceImpl) ListRevisions(
+	ctx context.Context,
+	worksetID string,
+	beforeIndex, limit int,
+) (*RevisionListResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -70,7 +75,7 @@ func (s *serviceImpl) ListRevisions(ctx context.Context, worksetID string, befor
 	}
 	w, err := s.repo.GetWorkset(worksetID)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
@@ -111,7 +116,7 @@ func (s *serviceImpl) GetRevision(ctx context.Context, worksetID, planID string)
 	}
 	rev, err := s.repo.GetWorksetRevision(worksetID, planID)
 	if err != nil {
-		if err == sqlite.ErrRevisionNotFound {
+		if errors.Is(err, sqlite.ErrRevisionNotFound) {
 			return nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", err)

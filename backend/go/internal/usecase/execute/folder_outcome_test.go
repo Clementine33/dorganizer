@@ -31,11 +31,17 @@ func TestExecuteEventHandler_FolderOutcome_UseCaseOwned(t *testing.T) {
 	handler.lastItemIndexByFolder[folderBNorm] = 1
 
 	// AlbumA (item 0) succeeds
-	handler.OnItemCompleted(0, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file.mp3"))})
+	handler.OnItemCompleted(
+		0,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file.mp3"))},
+	)
 
 	// AlbumB (item 1) precondition failed
 	handler.failedFolders[folderBNorm] = true
-	handler.OnItemCompleted(1, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))})
+	handler.OnItemCompleted(
+		1,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))},
+	)
 
 	sink := handler.sink.(*testEventSink)
 
@@ -130,7 +136,13 @@ func TestExecuteEventHandler_UsecaseOwnsFolderOutcome(t *testing.T) {
 	failed := folderEvents(sink.events, "folder_failed")
 
 	if len(completed) != 1 || !containsFolder(completed, folderANorm) {
-		t.Fatalf("expected folder_completed for %s, got completed=%v failed=%v events=%+v", folderANorm, completed, failed, sink.events)
+		t.Fatalf(
+			"expected folder_completed for %s, got completed=%v failed=%v events=%+v",
+			folderANorm,
+			completed,
+			failed,
+			sink.events,
+		)
 	}
 	if len(failed) != 1 || !containsFolder(failed, folderBNorm) {
 		t.Fatalf("expected folder_failed for %s, got failed=%v", folderBNorm, failed)

@@ -14,7 +14,15 @@ func int64ptr(v int64) *int64 { return &v }
 
 // insertEntryMeta inserts a row into the entries table with size/bitrate/
 // format metadata, under the fixed root /music.
-func insertEntryMeta(t *testing.T, repo *sqlite.Repository, path, parentPath, name string, isDir bool, size int64, bitrate *int64, format string) {
+func insertEntryMeta(
+	t *testing.T,
+	repo *sqlite.Repository,
+	path, parentPath, name string,
+	isDir bool,
+	size int64,
+	bitrate *int64,
+	format string,
+) {
 	t.Helper()
 	isDirInt := 0
 	if isDir {

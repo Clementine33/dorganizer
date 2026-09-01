@@ -85,7 +85,10 @@ func (h *executeEventHandler) emitError(code, message, folderPath string, item e
 
 // OnPreconditionFailed handles precondition failure events from the execute service.
 func (h *executeEventHandler) OnPreconditionFailed(itemIndex int, item exesvc.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
+	folderPath := attributeFolderPath(
+		h.rootPath,
+		firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath),
+	)
 	itemType := "delete"
 	if item.Type == exesvc.ItemTypeConvert {
 		itemType = "convert"
@@ -120,7 +123,10 @@ func (h *executeEventHandler) OnStage3CommitFailed(itemIndex int, item exesvc.Pl
 
 // OnDeleteFailed handles delete failure events from the execute service.
 func (h *executeEventHandler) OnDeleteFailed(itemIndex int, item exesvc.PlanItem, err error) {
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
+	folderPath := attributeFolderPath(
+		h.rootPath,
+		firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath),
+	)
 	message := fmt.Sprintf("Item %d delete failed: %v", itemIndex, err)
 	if strings.HasPrefix(err.Error(), "PERMISSION_DENIED:") {
 		message = fmt.Sprintf("PERMISSION_DENIED: item %d delete blocked: %v", itemIndex, err)
@@ -146,7 +152,10 @@ func (h *executeEventHandler) OnItemCompleted(itemIndex int, item exesvc.PlanIte
 
 	h.completedItems[itemIndex] = true
 
-	folderPath := attributeFolderPath(h.rootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
+	folderPath := attributeFolderPath(
+		h.rootPath,
+		firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath),
+	)
 	if folderPath == "" {
 		return
 	}

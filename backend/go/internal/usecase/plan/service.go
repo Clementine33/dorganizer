@@ -40,7 +40,12 @@ func (s *serviceImpl) Plan(_ context.Context, req Request) (Response, error) {
 	case req.SingleAction != nil:
 		return s.planSingleAction(req)
 	}
-	return Response{}, NewError(ErrKindInvalidArgument, "INVALID_PLAN_REQUEST", "exactly one of workflow or single_action is required", nil)
+	return Response{}, NewError(
+		ErrKindInvalidArgument,
+		"INVALID_PLAN_REQUEST",
+		"exactly one of workflow or single_action is required",
+		nil,
+	)
 }
 
 // planWorkflow runs the declarative reconcile_audio_outputs step over each
@@ -58,11 +63,31 @@ func (s *serviceImpl) planWorkflow(req Request) (Response, error) {
 	// plan is addressable under every root it covers (the per-root rows in
 	// plan_roots hold the authoritative inventory fingerprints). The display
 	// root is the first planning root.
-	if err := sqlite.CreateWorkflowPlanTx(s.repo.DB(), planID, "workflow", result.RootPath, snapshotToken, req.LibraryID, result.StepRecords, result.Roots, result.Components); err != nil {
+	if err := sqlite.CreateWorkflowPlanTx(
+		s.repo.DB(),
+		planID,
+		"workflow",
+		result.RootPath,
+		snapshotToken,
+		req.LibraryID,
+		result.StepRecords,
+		result.Roots,
+		result.Components,
+	); err != nil {
 		if sqlite.IsPlanIDConflictError(err) {
-			return Response{}, NewError(ErrKindAlreadyExists, "PLAN_ID_CONFLICT", fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID), err)
+			return Response{}, NewError(
+				ErrKindAlreadyExists,
+				"PLAN_ID_CONFLICT",
+				fmt.Sprintf("PLAN_ID_CONFLICT: plan %s already exists", planID),
+				err,
+			)
 		}
-		return Response{}, NewError(ErrKindInternal, "PERSIST_FAILED", fmt.Sprintf("persist workflow plan: %v", err), err)
+		return Response{}, NewError(
+			ErrKindInternal,
+			"PERSIST_FAILED",
+			fmt.Sprintf("persist workflow plan: %v", err),
+			err,
+		)
 	}
 
 	return Response{
@@ -95,13 +120,28 @@ func (s *serviceImpl) planWorkflow(req Request) (Response, error) {
 func (s *serviceImpl) planSingleAction(req Request) (Response, error) {
 	action := req.SingleAction
 	if action.Action != "delete" && action.Action != "convert" {
-		return Response{}, NewError(ErrKindInvalidArgument, "INVALID_ACTION", fmt.Sprintf("unsupported single action %q", action.Action), nil)
+		return Response{}, NewError(
+			ErrKindInvalidArgument,
+			"INVALID_ACTION",
+			fmt.Sprintf("unsupported single action %q", action.Action),
+			nil,
+		)
 	}
 	if len(action.SourceFiles) == 0 {
-		return Response{}, NewError(ErrKindInvalidArgument, "MISSING_SOURCE_FILES", "source_files required for single action", nil)
+		return Response{}, NewError(
+			ErrKindInvalidArgument,
+			"MISSING_SOURCE_FILES",
+			"source_files required for single action",
+			nil,
+		)
 	}
 	if action.Action == "convert" && action.TargetFormat == "" {
-		return Response{}, NewError(ErrKindInvalidArgument, "MISSING_TARGET_FORMAT", "target_format required for single convert", nil)
+		return Response{}, NewError(
+			ErrKindInvalidArgument,
+			"MISSING_TARGET_FORMAT",
+			"target_format required for single convert",
+			nil,
+		)
 	}
 
 	ops, err := buildSingleFileOperations(action.SourceFiles, action.TargetFormat, "single_"+action.Action)
@@ -117,8 +157,22 @@ func (s *serviceImpl) planSingleAction(req Request) (Response, error) {
 	planID := generatePlanID()
 	snapshotToken := generateSnapshotToken()
 	planType := "single_" + action.Action
-	if err := persistSingleActionPlan(s.repo, planID, planType, rootPath, snapshotToken, req.LibraryID, action.SourceFiles, ops); err != nil {
-		return Response{}, NewError(ErrKindInternal, "PERSIST_FAILED", fmt.Sprintf("persist single action plan: %v", err), err)
+	if err := persistSingleActionPlan(
+		s.repo,
+		planID,
+		planType,
+		rootPath,
+		snapshotToken,
+		req.LibraryID,
+		action.SourceFiles,
+		ops,
+	); err != nil {
+		return Response{}, NewError(
+			ErrKindInternal,
+			"PERSIST_FAILED",
+			fmt.Sprintf("persist single action plan: %v", err),
+			err,
+		)
 	}
 
 	usecaseOps := make([]Operation, 0, len(ops))
@@ -222,7 +276,11 @@ func collectWorkflowEntries(repo *sqlite.Repository, root string) ([]reconcile.A
 
 // enrichWorkflowBitrate bridges reconcile entries into the existing analyzer
 // enrichment path and copies probed bitrate facts back.
-func enrichWorkflowBitrate(repo *sqlite.Repository, entries []reconcile.AudioEntry, batch bool) ([]reconcile.AudioEntry, error) {
+func enrichWorkflowBitrate(
+	repo *sqlite.Repository,
+	entries []reconcile.AudioEntry,
+	batch bool,
+) ([]reconcile.AudioEntry, error) {
 	analyzer := analyze.NewAnalyzer(repo)
 	an := make([]analyze.Entry, 0, len(entries))
 	for _, e := range entries {
@@ -256,10 +314,7 @@ func resolveRootPathForSources(repo *sqlite.Repository, sources []string) (strin
 
 	const chunkSize = 500
 	for start := 0; start < len(normalized); start += chunkSize {
-		end := start + chunkSize
-		if end > len(normalized) {
-			end = len(normalized)
-		}
+		end := min(start+chunkSize, len(normalized))
 		chunk := normalized[start:end]
 		placeholders := make([]string, len(chunk))
 		args := make([]any, len(chunk))

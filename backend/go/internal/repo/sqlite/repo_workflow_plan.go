@@ -176,7 +176,17 @@ func CreateWorkflowPlanTx(
 	}
 	defer tx.Rollback()
 
-	if err := InsertWorkflowPlanTx(tx, planID, planType, rootPath, snapshotToken, libraryID, steps, roots, components); err != nil {
+	if err := InsertWorkflowPlanTx(
+		tx,
+		planID,
+		planType,
+		rootPath,
+		snapshotToken,
+		libraryID,
+		steps,
+		roots,
+		components,
+	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -213,13 +223,24 @@ func InsertWorkflowPlanTx(
 	}
 
 	for _, s := range steps {
-		if _, err := tx.Exec(`
+		if _, err := tx.Exec(
+			`
 			INSERT INTO plan_workflow_steps
 			(plan_id, step_index, step_type, status,
 			 policy_schema_version, policy_json, policy_hash, classifier_pattern, classifier_hash, step_summary_json)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, planID, s.StepIndex, s.StepType, s.Status,
-			s.PolicySchemaVersion, s.PolicyJSON, s.PolicyHash, s.ClassifierTags, s.ClassifierHash, s.StepSummaryJSON); err != nil {
+		`,
+			planID,
+			s.StepIndex,
+			s.StepType,
+			s.Status,
+			s.PolicySchemaVersion,
+			s.PolicyJSON,
+			s.PolicyHash,
+			s.ClassifierTags,
+			s.ClassifierHash,
+			s.StepSummaryJSON,
+		); err != nil {
 			return fmt.Errorf("insert workflow step: %w", err)
 		}
 	}
@@ -251,7 +272,13 @@ func InsertWorkflowPlanTx(
 }
 
 // scanWorkflowPlanRow scans one plan row (workflowPlanColumns order).
-func scanWorkflowPlanRow(p *Plan, createdAtStr string, libraryID, slimMode sql.NullString, planKind string, workflowSchemaVersion int) {
+func scanWorkflowPlanRow(
+	p *Plan,
+	createdAtStr string,
+	libraryID, slimMode sql.NullString,
+	planKind string,
+	workflowSchemaVersion int,
+) {
 	if libraryID.Valid {
 		p.LibraryID = libraryID.String
 	}
@@ -296,8 +323,17 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	defer stepRows.Close()
 	for stepRows.Next() {
 		var s WorkflowStepRecord
-		if err := stepRows.Scan(&s.StepIndex, &s.StepType, &s.Status,
-			&s.PolicySchemaVersion, &s.PolicyJSON, &s.PolicyHash, &s.ClassifierTags, &s.ClassifierHash, &s.StepSummaryJSON); err != nil {
+		if err := stepRows.Scan(
+			&s.StepIndex,
+			&s.StepType,
+			&s.Status,
+			&s.PolicySchemaVersion,
+			&s.PolicyJSON,
+			&s.PolicyHash,
+			&s.ClassifierTags,
+			&s.ClassifierHash,
+			&s.StepSummaryJSON,
+		); err != nil {
 			return nil, err
 		}
 		detail.Steps = append(detail.Steps, s)
@@ -316,7 +352,16 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	defer rootRows.Close()
 	for rootRows.Next() {
 		var r WorkflowRootRecord
-		if err := rootRows.Scan(&r.RootIndex, &r.RootPath, &r.RootIdentity, &r.InventoryFingerprint, &r.EntryCount, &r.RootStatus, &r.RootErrorCode, &r.RootErrorMessage); err != nil {
+		if err := rootRows.Scan(
+			&r.RootIndex,
+			&r.RootPath,
+			&r.RootIdentity,
+			&r.InventoryFingerprint,
+			&r.EntryCount,
+			&r.RootStatus,
+			&r.RootErrorCode,
+			&r.RootErrorMessage,
+		); err != nil {
 			return nil, err
 		}
 		detail.Roots = append(detail.Roots, r)
@@ -335,7 +380,16 @@ func (r *Repository) GetWorkflowPlanDetail(planID string) (*WorkflowPlanDetail, 
 	defer compRows.Close()
 	for compRows.Next() {
 		var c WorkflowComponentRecord
-		if err := compRows.Scan(&c.StepIndex, &c.ComponentIndex, &c.ComponentID, &c.RootIndex, &c.Partition, &c.Status, &c.ReasonCode, &c.OutcomeJSON); err != nil {
+		if err := compRows.Scan(
+			&c.StepIndex,
+			&c.ComponentIndex,
+			&c.ComponentID,
+			&c.RootIndex,
+			&c.Partition,
+			&c.Status,
+			&c.ReasonCode,
+			&c.OutcomeJSON,
+		); err != nil {
 			return nil, err
 		}
 		detail.Components = append(detail.Components, c)
@@ -362,7 +416,16 @@ func (r *Repository) GetWorkflowPlanRoots(planID string) ([]WorkflowRootRecord, 
 	var out []WorkflowRootRecord
 	for rows.Next() {
 		var rec WorkflowRootRecord
-		if err := rows.Scan(&rec.RootIndex, &rec.RootPath, &rec.RootIdentity, &rec.InventoryFingerprint, &rec.EntryCount, &rec.RootStatus, &rec.RootErrorCode, &rec.RootErrorMessage); err != nil {
+		if err := rows.Scan(
+			&rec.RootIndex,
+			&rec.RootPath,
+			&rec.RootIdentity,
+			&rec.InventoryFingerprint,
+			&rec.EntryCount,
+			&rec.RootStatus,
+			&rec.RootErrorCode,
+			&rec.RootErrorMessage,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, rec)

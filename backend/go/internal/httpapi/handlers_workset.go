@@ -147,7 +147,11 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 		Members:       make([]memberResponse, 0, len(v.Members)),
 	}
 	if v.Library != nil {
-		out.Library = &libraryRefResponse{LibraryID: v.Library.LibraryID, Name: v.Library.Name, RootPath: v.Library.RootPath}
+		out.Library = &libraryRefResponse{
+			LibraryID: v.Library.LibraryID,
+			Name:      v.Library.Name,
+			RootPath:  v.Library.RootPath,
+		}
 	}
 	if v.CurrentRevision != nil {
 		out.CurrentRevision = toCurrentRevisionResponse(v.CurrentRevision)
@@ -173,7 +177,11 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 	}
 	for _, m := range v.Members {
 		out.Members = append(out.Members, memberResponse{
-			FolderID: m.FolderID, FolderPath: m.FolderPath, FolderName: m.FolderName, RelPath: m.RelPath, State: m.State,
+			FolderID:   m.FolderID,
+			FolderPath: m.FolderPath,
+			FolderName: m.FolderName,
+			RelPath:    m.RelPath,
+			State:      m.State,
 		})
 	}
 	return out
@@ -242,14 +250,9 @@ func (s *Server) listWorksets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
 		return
 	}
-	limit := queryInt(r, "limit", 50)
-	if limit > 200 {
-		limit = 200
-	}
-	includeOrphaned := true
-	if r.URL.Query().Get("status") == "active" {
-		includeOrphaned = false
-	}
+	limit := min(queryInt(r, "limit", 50), 200)
+	includeOrphaned := r.URL.Query().Get("status") != "active"
+
 	feed := r.URL.Query().Get("feed")
 	if feed != "" && !worksetusecase.ValidFeed(feed) {
 		writeError(w, http.StatusBadRequest, "INVALID_FEED_FILTER", "feed must be one of all|pending|normal|error")
@@ -483,10 +486,7 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
 		return
 	}
-	limit := queryInt(r, "limit", 50)
-	if limit > 200 {
-		limit = 200
-	}
+	limit := min(queryInt(r, "limit", 50), 200)
 	before := queryInt(r, "before_index", 0)
 	result, err := svc.ListRevisions(r.Context(), r.PathValue("id"), before, limit)
 	if err != nil {

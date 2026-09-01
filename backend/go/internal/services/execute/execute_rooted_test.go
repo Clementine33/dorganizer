@@ -34,8 +34,20 @@ func TestExecutePlan_RootedConvertFailure_NotCompleted(t *testing.T) {
 		PlanID:   "plan-rooted-convert-fail",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: fileA, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: fileA, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: fileB, TargetPath: filepath.Join(folderB, "b.m4a"), PreconditionPath: fileB, PreconditionSize: 4},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       fileA,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: fileA,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       fileB,
+				TargetPath:       filepath.Join(folderB, "b.m4a"),
+				PreconditionPath: fileB,
+				PreconditionSize: 4,
+			},
 		},
 	}
 
@@ -93,8 +105,20 @@ func TestExecutePlan_RootedMixedFailure_ContinuesOtherFolder(t *testing.T) {
 		PlanID:   "plan-rooted-mixed-fail",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: fileA, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: fileA, PreconditionSize: 4},
-			{Type: ItemTypeDelete, SourcePath: fileB, PreconditionPath: fileB, PreconditionSize: infoB.Size(), PreconditionMtime: infoB.ModTime().Unix()},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       fileA,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: fileA,
+				PreconditionSize: 4,
+			},
+			{
+				Type:              ItemTypeDelete,
+				SourcePath:        fileB,
+				PreconditionPath:  fileB,
+				PreconditionSize:  infoB.Size(),
+				PreconditionMtime: infoB.ModTime().Unix(),
+			},
 		},
 	}
 
@@ -152,8 +176,20 @@ func TestExecutePlan_RootedConsecutiveConvertFailure_ContinuesOtherFolder(t *tes
 		PlanID:   "plan-rooted-consecutive-convert-fail",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: fileA, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: fileA, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: fileB, TargetPath: filepath.Join(folderB, "b.m4a"), PreconditionPath: fileB, PreconditionSize: 4},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       fileA,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: fileA,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       fileB,
+				TargetPath:       filepath.Join(folderB, "b.m4a"),
+				PreconditionPath: fileB,
+				PreconditionSize: 4,
+			},
 		},
 	}
 
@@ -219,9 +255,27 @@ func TestExecutePlan_RootedExplicitDeleteSkippedAfterFlushMarksFolderFailed(t *t
 		PlanID:   "plan-rooted-explicit-delete-recheck",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: aConvert, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: aConvert, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: bConvert, TargetPath: filepath.Join(folderB, "b.m4a"), PreconditionPath: bConvert, PreconditionSize: 4},
-			{Type: ItemTypeDelete, SourcePath: aDelete, PreconditionPath: aDelete, PreconditionSize: deleteInfo.Size(), PreconditionMtime: deleteInfo.ModTime().Unix()},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       aConvert,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: aConvert,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       bConvert,
+				TargetPath:       filepath.Join(folderB, "b.m4a"),
+				PreconditionPath: bConvert,
+				PreconditionSize: 4,
+			},
+			{
+				Type:              ItemTypeDelete,
+				SourcePath:        aDelete,
+				PreconditionPath:  aDelete,
+				PreconditionSize:  deleteInfo.Size(),
+				PreconditionMtime: deleteInfo.ModTime().Unix(),
+			},
 		},
 	}
 
@@ -275,8 +329,20 @@ func TestExecutePlan_RootedMixedResultBatch_EmitsCompletedForSuccessfulFolderOnl
 		PlanID:   "plan-rooted-mixed-batch-folder-completed",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: a, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: a, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: b, TargetPath: filepath.Join(folderB, "b.m4a"), PreconditionPath: b, PreconditionSize: 4},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       a,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: a,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       b,
+				TargetPath:       filepath.Join(folderB, "b.m4a"),
+				PreconditionPath: b,
+				PreconditionSize: 4,
+			},
 		},
 	}
 
@@ -352,8 +418,20 @@ func TestExecutePlan_RootedDeleteBarrierFailure_ContinuesOtherFolder(t *testing.
 		PlanID:   "plan-rooted-delete-barrier-fail-continue",
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: srcA, TargetPath: filepath.Join(folderA, "a.m4a"), PreconditionPath: srcA, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: srcB, TargetPath: filepath.Join(folderB, "b.m4a"), PreconditionPath: srcB, PreconditionSize: 4},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       srcA,
+				TargetPath:       filepath.Join(folderA, "a.m4a"),
+				PreconditionPath: srcA,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       srcB,
+				TargetPath:       filepath.Join(folderB, "b.m4a"),
+				PreconditionPath: srcB,
+				PreconditionSize: 4,
+			},
 		},
 	}
 
@@ -392,7 +470,10 @@ func TestExecutePlan_RootedDeleteBarrierFailure_ContinuesOtherFolder(t *testing.
 
 	// CRITICAL ASSERTION: srcB should be deleted (folder B continued processing after folder A delete barrier failure)
 	if _, statErr := os.Stat(srcB); !os.IsNotExist(statErr) {
-		t.Fatalf("FAIL: srcB should be deleted (folder B continued after folder A delete barrier failure), but statErr=%v", statErr)
+		t.Fatalf(
+			"FAIL: srcB should be deleted (folder B continued after folder A delete barrier failure), but statErr=%v",
+			statErr,
+		)
 	}
 
 	// Verify OnDeleteFailed was called for item index 0 (srcA)
@@ -450,11 +531,29 @@ func TestExecutePlan_RootedConcurrentPrecheck_PerFolderFailFast_ContinuesOtherFo
 		RootPath: filepath.ToSlash(tmp),
 		Items: []PlanItem{
 			// Folder A: first item has stale size precondition -> folder A fail-fast
-			{Type: ItemTypeDelete, SourcePath: fileA1, PreconditionPath: fileA1, PreconditionSize: infoA1.Size() + 1, PreconditionMtime: infoA1.ModTime().Unix()},
+			{
+				Type:              ItemTypeDelete,
+				SourcePath:        fileA1,
+				PreconditionPath:  fileA1,
+				PreconditionSize:  infoA1.Size() + 1,
+				PreconditionMtime: infoA1.ModTime().Unix(),
+			},
 			// Folder A second item should be skipped due to folder-level fail-fast
-			{Type: ItemTypeDelete, SourcePath: fileA2, PreconditionPath: fileA2, PreconditionSize: infoA2.Size(), PreconditionMtime: infoA2.ModTime().Unix()},
+			{
+				Type:              ItemTypeDelete,
+				SourcePath:        fileA2,
+				PreconditionPath:  fileA2,
+				PreconditionSize:  infoA2.Size(),
+				PreconditionMtime: infoA2.ModTime().Unix(),
+			},
 			// Folder B should still continue and execute
-			{Type: ItemTypeDelete, SourcePath: fileB1, PreconditionPath: fileB1, PreconditionSize: infoB1.Size(), PreconditionMtime: infoB1.ModTime().Unix()},
+			{
+				Type:              ItemTypeDelete,
+				SourcePath:        fileB1,
+				PreconditionPath:  fileB1,
+				PreconditionSize:  infoB1.Size(),
+				PreconditionMtime: infoB1.ModTime().Unix(),
+			},
 		},
 	}
 

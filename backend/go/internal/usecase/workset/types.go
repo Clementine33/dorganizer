@@ -55,6 +55,11 @@ type Error struct {
 	Cause   error
 }
 
+// NewError creates a workset usecase error.
+func NewError(kind, code, message string, cause error) *Error {
+	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
+}
+
 func (e *Error) Error() string {
 	if e.Cause != nil {
 		return e.Kind + ": " + e.Message + ": " + e.Cause.Error()
@@ -63,11 +68,6 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Cause }
-
-// NewError creates a workset usecase error.
-func NewError(kind, code, message string, cause error) *Error {
-	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
-}
 
 // AsError extracts a *Error from an error chain.
 func AsError(err error) (*Error, bool) {

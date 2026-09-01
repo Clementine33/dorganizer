@@ -7,29 +7,33 @@ import (
 	"path/filepath"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	"github.com/onsei/organizer/backend/internal/services/scanner"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	"github.com/onsei/organizer/backend/internal/services/scanner"
+	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 // Scan scans a folder and streams JobEvent progress.
 func (s *OnseiServer) Scan(req *pb.ScanRequest, stream grpc.ServerStreamingServer[pb.JobEvent]) error {
-	if req.FolderPath == "" {
+	if req.GetFolderPath() == "" {
 		return status.Errorf(codes.InvalidArgument, "folder_path is required")
 	}
 
 	service := scanusecase.NewService(s.repo)
-	_, err := service.Scan(stream.Context(), scanusecase.Request{RootPath: req.FolderPath}, func(ev scanusecase.Event) {
-		jobEvent := &pb.JobEvent{EventType: ev.Type, Message: ev.Message}
-		switch ev.Type {
-		case "completed":
-			jobEvent.ProgressPercent = 100
-		}
-		_ = stream.Send(jobEvent)
-	})
+	_, err := service.Scan(
+		stream.Context(),
+		scanusecase.Request{RootPath: req.GetFolderPath()},
+		func(ev scanusecase.Event) {
+			jobEvent := &pb.JobEvent{EventType: ev.Type, Message: ev.Message}
+			if ev.Type == "completed" {
+				jobEvent.ProgressPercent = 100
+			}
+			_ = stream.Send(jobEvent)
+		},
+	)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return status.Errorf(codes.Canceled, "scan canceled")
@@ -45,7 +49,10 @@ func (s *OnseiServer) Scan(req *pb.ScanRequest, stream grpc.ServerStreamingServe
 }
 
 // RefreshFolders performs folder-scoped scans for the given folder_paths under root_path.
-func (s *OnseiServer) RefreshFolders(ctx context.Context, req *pb.RefreshFoldersRequest) (*pb.RefreshFoldersResponse, error) {
+func (s *OnseiServer) RefreshFolders(
+	ctx context.Context,
+	req *pb.RefreshFoldersRequest,
+) (*pb.RefreshFoldersResponse, error) {
 	if req.GetRootPath() == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "root_path is required")
 	}

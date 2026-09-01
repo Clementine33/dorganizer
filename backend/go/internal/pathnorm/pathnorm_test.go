@@ -32,7 +32,12 @@ func TestCleanRootPathAndRootPathKey(t *testing.T) {
 		{name: "windows drive preserves case display", in: `C:\Music\`, wantClean: "C:/Music", wantKey: "c:/music"},
 		{name: "windows drive lower", in: "c:/music", wantClean: "c:/music", wantKey: "c:/music"},
 		{name: "windows drive root", in: "C:/", wantClean: "C:/", wantKey: "c:/"},
-		{name: "windows drive case variant collides", in: `C:\MUSIC\Album`, wantClean: "C:/MUSIC/Album", wantKey: "c:/music/album"},
+		{
+			name:      "windows drive case variant collides",
+			in:        `C:\MUSIC\Album`,
+			wantClean: "C:/MUSIC/Album",
+			wantKey:   "c:/music/album",
+		},
 		{name: "unc case folded", in: `\\SERVER\Share\Dir\..\`, wantClean: "//SERVER/Share", wantKey: "//server/share"},
 		{name: "device path", in: `\\?\C:\music`, wantClean: `//?/C:/music`, wantKey: `//?/c:/music`},
 	}
@@ -86,7 +91,12 @@ func TestIsWithinRoot(t *testing.T) {
 		{name: "Windows separators and case", root: `C:\Music`, candidate: `c:\music\Album\track.flac`, want: true},
 		{name: "same Windows drive root", root: `C:\`, candidate: `c:/`, want: true},
 		{name: "rejects another Windows drive", root: `C:\Music`, candidate: `D:\Music\track.flac`, want: false},
-		{name: "UNC comparison is case insensitive", root: `\\Server\Share\Music`, candidate: `\\server\share\music\track.flac`, want: true},
+		{
+			name:      "UNC comparison is case insensitive",
+			root:      `\\Server\Share\Music`,
+			candidate: `\\server\share\music\track.flac`,
+			want:      true,
+		},
 		{name: "empty candidate", root: "/music", candidate: "", want: false},
 	}
 
@@ -131,7 +141,11 @@ func TestIsResolvedWithinRoot(t *testing.T) {
 	// does not canonicalize letter case, so a case-swapped inside path must
 	// still resolve within the root (mirrors IsWithinRoot's case folding).
 	if runtime.GOOS == "windows" {
-		caseSwapped := filepath.Join(filepath.Dir(insideDir), strings.ToUpper(filepath.Base(insideDir)), filepath.Base(insideFile))
+		caseSwapped := filepath.Join(
+			filepath.Dir(insideDir),
+			strings.ToUpper(filepath.Base(insideDir)),
+			filepath.Base(insideFile),
+		)
 		within, err = IsResolvedWithinRoot(root, caseSwapped)
 		if err != nil {
 			t.Fatalf("IsResolvedWithinRoot case-swapped inside file: %v", err)
@@ -163,8 +177,8 @@ func TestTruncatePathComponentsToBytes_UTF8Boundary(t *testing.T) {
 	input := filepath.Join("1-单一", "12_一般", longComponent)
 	got := TruncatePathComponentsToBytes(input, 214)
 
-	parts := strings.Split(got, string(filepath.Separator))
-	for _, part := range parts {
+	parts := strings.SplitSeq(got, string(filepath.Separator))
+	for part := range parts {
 		if part == "" || part == "." || part == ".." {
 			continue
 		}

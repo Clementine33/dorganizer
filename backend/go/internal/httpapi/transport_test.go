@@ -199,7 +199,13 @@ func TestRecoveryMiddlewareCanRecoverAfterEarlyHints(t *testing.T) {
 	writer := &informationalResponseWriter{header: make(http.Header)}
 	handler.ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	if got, want := writer.statuses, []int{http.StatusEarlyHints, http.StatusInternalServerError}; !reflect.DeepEqual(got, want) {
+	if got, want := writer.statuses, []int{
+		http.StatusEarlyHints,
+		http.StatusInternalServerError,
+	}; !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("statuses = %v, want %v", got, want)
 	}
 	if got := writer.body.String(); got != `{"code":"INTERNAL","message":"internal server error"}` {

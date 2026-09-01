@@ -562,7 +562,8 @@ func TestPersistPlan_Batch_ConstraintFailureRollback(t *testing.T) {
 	}
 
 	errStr := strings.ToLower(err.Error())
-	if !strings.Contains(errStr, "constraint") && !strings.Contains(errStr, "primary key") && !strings.Contains(errStr, "unique") {
+	if !strings.Contains(errStr, "constraint") && !strings.Contains(errStr, "primary key") &&
+		!strings.Contains(errStr, "unique") {
 		tx.Rollback()
 		t.Errorf("expected constraint violation error, got: %v", err)
 	}
@@ -597,7 +598,7 @@ func TestPersistPlan_Batch_ChunkedPreconditions(t *testing.T) {
 	paths := make([]string, numPaths)
 	expectedPaths := make(map[string]bool)
 
-	for i := 0; i < numPaths; i++ {
+	for i := range numPaths {
 		paths[i] = fmt.Sprintf("/music/song_%04d.mp3", i)
 		if i%3 == 0 {
 			_, err := repo.DB().Exec(`
@@ -658,7 +659,7 @@ func TestPersistPlan_Batch_ChunkedItems(t *testing.T) {
 
 	numItems := 750
 	items := make([]PlanItem, numItems)
-	for i := 0; i < numItems; i++ {
+	for i := range numItems {
 		items[i] = PlanItem{
 			PlanID:                 "chunked-items-plan",
 			ItemIndex:              i,
@@ -807,7 +808,16 @@ func TestRepository_ListPlansFilterOrderLimit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse created %q: %v", created, err)
 		}
-		return &Plan{PlanID: id, RootPath: "/x", ScanRootPath: "/x", LibraryID: libID, PlanType: "slim", SnapshotToken: "s", Status: "ready", CreatedAt: ts}
+		return &Plan{
+			PlanID:        id,
+			RootPath:      "/x",
+			ScanRootPath:  "/x",
+			LibraryID:     libID,
+			PlanType:      "slim",
+			SnapshotToken: "s",
+			Status:        "ready",
+			CreatedAt:     ts,
+		}
 	}
 	for _, p := range []*Plan{
 		mk("p1", libA.ID, "2026-01-01T00:00:00Z"),
@@ -880,16 +890,37 @@ func TestRepository_GetPlanDetailRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := CreatePlanItemsBatchTx(tx, "plan-det", []PlanItem{
-		{PlanID: "plan-det", ItemIndex: 0, OpType: "delete", SourcePath: "/music/Album/a.flac", ReasonCode: "lossy_dup", PreconditionPath: "/music/Album/a.flac", PreconditionContentRev: 1, PreconditionSize: 1, PreconditionMtime: 1},
+		{
+			PlanID:                 "plan-det",
+			ItemIndex:              0,
+			OpType:                 "delete",
+			SourcePath:             "/music/Album/a.flac",
+			ReasonCode:             "lossy_dup",
+			PreconditionPath:       "/music/Album/a.flac",
+			PreconditionContentRev: 1,
+			PreconditionSize:       1,
+			PreconditionMtime:      1,
+		},
 	}); err != nil {
 		t.Fatalf("CreatePlanItemsBatchTx: %v", err)
 	}
 	if err := CreatePlanFolderErrorsBatchTx(tx, "plan-det", []PlanFolderError{
-		{PlanID: "plan-det", ErrorIndex: 0, FolderPath: "/music/Album", Code: "SOME_ERR", Message: "boom", Retryable: true},
+		{
+			PlanID:     "plan-det",
+			ErrorIndex: 0,
+			FolderPath: "/music/Album",
+			Code:       "SOME_ERR",
+			Message:    "boom",
+			Retryable:  true,
+		},
 	}); err != nil {
 		t.Fatalf("CreatePlanFolderErrorsBatchTx: %v", err)
 	}
-	if err := CreatePlanSuccessfulFoldersBatchTx(tx, "plan-det", []string{"/music/Album", "/music/Second"}); err != nil {
+	if err := CreatePlanSuccessfulFoldersBatchTx(
+		tx,
+		"plan-det",
+		[]string{"/music/Album", "/music/Second"},
+	); err != nil {
 		t.Fatalf("CreatePlanSuccessfulFoldersBatchTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {

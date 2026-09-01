@@ -15,7 +15,13 @@ var ErrPlanNotFound = errors.New("plan not found")
 const planColumns = `plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, plan_kind, workflow_schema_version, created_at`
 
 // scanPlan scans one plan row (ordered per planColumns) into p.
-func scanPlan(p *Plan, createdAtStr string, libraryID, slimMode sql.NullString, planKind string, workflowSchemaVersion int) {
+func scanPlan(
+	p *Plan,
+	createdAtStr string,
+	libraryID, slimMode sql.NullString,
+	planKind string,
+	workflowSchemaVersion int,
+) {
 	if libraryID.Valid {
 		p.LibraryID = libraryID.String
 	}
@@ -27,13 +33,13 @@ func scanPlan(p *Plan, createdAtStr string, libraryID, slimMode sql.NullString, 
 	p.CreatedAt = parseTimestamp(createdAtStr)
 }
 
-// CreatePlan inserts a new plan
+// CreatePlan inserts a new plan.
 func (r *Repository) CreatePlan(p *Plan) error {
-	var slimMode interface{}
+	var slimMode any
 	if p.SlimMode != nil {
 		slimMode = *p.SlimMode
 	}
-	var libraryID interface{}
+	var libraryID any
 	if p.LibraryID != "" {
 		libraryID = p.LibraryID
 	}
@@ -48,7 +54,7 @@ func (r *Repository) CreatePlan(p *Plan) error {
 	return err
 }
 
-// GetPlan retrieves a plan by ID
+// GetPlan retrieves a plan by ID.
 func (r *Repository) GetPlan(planID string) (*Plan, error) {
 	var p Plan
 	var createdAtStr string
@@ -85,7 +91,19 @@ func scanPlanRows(rows *sql.Rows) ([]*Plan, error) {
 		var slimMode, libraryID sql.NullString
 		var planKind string
 		var workflowSchemaVersion int
-		if err := rows.Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.PlanType, &slimMode, &p.SnapshotToken, &p.Status, &planKind, &workflowSchemaVersion, &createdAtStr); err != nil {
+		if err := rows.Scan(
+			&p.PlanID,
+			&p.RootPath,
+			&p.ScanRootPath,
+			&libraryID,
+			&p.PlanType,
+			&slimMode,
+			&p.SnapshotToken,
+			&p.Status,
+			&planKind,
+			&workflowSchemaVersion,
+			&createdAtStr,
+		); err != nil {
 			return nil, err
 		}
 		scanPlan(&p, createdAtStr, libraryID, slimMode, planKind, workflowSchemaVersion)
@@ -97,7 +115,7 @@ func scanPlanRows(rows *sql.Rows) ([]*Plan, error) {
 	return plans, nil
 }
 
-// ListPlansByRoot returns all plans for a root
+// ListPlansByRoot returns all plans for a root.
 func (r *Repository) ListPlansByRoot(rootPath string) ([]*Plan, error) {
 	rows, err := r.db.Query(`
 		SELECT `+planColumns+`
@@ -163,7 +181,18 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	for itemRows.Next() {
 		var pi PlanItem
 		var targetPath sql.NullString
-		if err := itemRows.Scan(&pi.PlanID, &pi.ItemIndex, &pi.OpType, &pi.SourcePath, &targetPath, &pi.ReasonCode, &pi.PreconditionPath, &pi.PreconditionContentRev, &pi.PreconditionSize, &pi.PreconditionMtime); err != nil {
+		if err := itemRows.Scan(
+			&pi.PlanID,
+			&pi.ItemIndex,
+			&pi.OpType,
+			&pi.SourcePath,
+			&targetPath,
+			&pi.ReasonCode,
+			&pi.PreconditionPath,
+			&pi.PreconditionContentRev,
+			&pi.PreconditionSize,
+			&pi.PreconditionMtime,
+		); err != nil {
 			itemRows.Close()
 			return nil, err
 		}
@@ -187,7 +216,14 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	for errRows.Next() {
 		var pe PlanFolderError
 		var retryable int
-		if err := errRows.Scan(&pe.PlanID, &pe.ErrorIndex, &pe.FolderPath, &pe.Code, &pe.Message, &retryable); err != nil {
+		if err := errRows.Scan(
+			&pe.PlanID,
+			&pe.ErrorIndex,
+			&pe.FolderPath,
+			&pe.Code,
+			&pe.Message,
+			&retryable,
+		); err != nil {
 			errRows.Close()
 			return nil, err
 		}
@@ -221,15 +257,15 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	return detail, nil
 }
 
-// UpdatePlanStatus updates a plan's status
+// UpdatePlanStatus updates a plan's status.
 func (r *Repository) UpdatePlanStatus(planID, status string) error {
 	_, err := r.db.Exec("UPDATE plans SET status = ? WHERE plan_id = ?", status, planID)
 	return err
 }
 
-// CreatePlanItem inserts a new plan item
+// CreatePlanItem inserts a new plan item.
 func (r *Repository) CreatePlanItem(pi *PlanItem) error {
-	var targetPath interface{}
+	var targetPath any
 	if pi.TargetPath != nil {
 		targetPath = *pi.TargetPath
 	}
@@ -240,7 +276,7 @@ func (r *Repository) CreatePlanItem(pi *PlanItem) error {
 	return err
 }
 
-// Precond represents entry preconditions for batch loading
+// Precond represents entry preconditions for batch loading.
 type Precond struct {
 	ContentRev int
 	Size       int64
@@ -248,17 +284,14 @@ type Precond struct {
 }
 
 // LoadEntryPreconditionsBatchTx loads preconditions for multiple paths in a single transaction
-// Uses chunked IN queries to avoid SQLite parameter limits (999 max)
+// Uses chunked IN queries to avoid SQLite parameter limits (999 max).
 func LoadEntryPreconditionsBatchTx(tx *sql.Tx, paths []string) (map[string]Precond, error) {
 	result := make(map[string]Precond, len(paths))
 
 	const chunkSize = 999 // SQLite max host parameters
 
 	for start := 0; start < len(paths); start += chunkSize {
-		end := start + chunkSize
-		if end > len(paths) {
-			end = len(paths)
-		}
+		end := min(start+chunkSize, len(paths))
 		chunk := paths[start:end]
 
 		if len(chunk) == 0 {
@@ -267,14 +300,17 @@ func LoadEntryPreconditionsBatchTx(tx *sql.Tx, paths []string) (map[string]Preco
 
 		// Build IN clause with placeholders
 		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, len(chunk))
+		args := make([]any, len(chunk))
 		for i, path := range chunk {
 			placeholders[i] = "?"
 			args[i] = path
 		}
 
 		query := "SELECT path, COALESCE(content_rev, 0), COALESCE(size, 0), COALESCE(mtime, 0) FROM entries WHERE path IN (" +
-			strings.Join(placeholders, ",") +
+			strings.Join(
+				placeholders,
+				",",
+			) +
 			")"
 
 		rows, err := tx.Query(query, args...)
@@ -309,13 +345,13 @@ func LoadEntryPreconditionsBatchTx(tx *sql.Tx, paths []string) (map[string]Preco
 	return result, nil
 }
 
-// CreatePlanTx inserts a new plan within an existing transaction
+// CreatePlanTx inserts a new plan within an existing transaction.
 func CreatePlanTx(tx *sql.Tx, p *Plan) error {
-	var slimMode interface{}
+	var slimMode any
 	if p.SlimMode != nil {
 		slimMode = *p.SlimMode
 	}
-	var libraryID interface{}
+	var libraryID any
 	if p.LibraryID != "" {
 		libraryID = p.LibraryID
 	}
@@ -374,7 +410,7 @@ func CreatePlanSuccessfulFoldersBatchTx(tx *sql.Tx, planID string, folders []str
 	return nil
 }
 
-// IsPlanIDConflictError checks if an error is a plan ID conflict error
+// IsPlanIDConflictError checks if an error is a plan ID conflict error.
 func IsPlanIDConflictError(err error) bool {
 	if err == nil {
 		return false
@@ -386,7 +422,7 @@ func IsPlanIDConflictError(err error) bool {
 }
 
 // CreatePlanItemsBatchTx inserts multiple plan items within a single transaction
-// Uses chunked inserts with prepared statements for efficiency
+// Uses chunked inserts with prepared statements for efficiency.
 func CreatePlanItemsBatchTx(tx *sql.Tx, planID string, items []PlanItem) error {
 	if len(items) == 0 {
 		return nil
@@ -395,10 +431,7 @@ func CreatePlanItemsBatchTx(tx *sql.Tx, planID string, items []PlanItem) error {
 	const chunkSize = 500 // Balance between performance and parameter limits
 
 	for start := 0; start < len(items); start += chunkSize {
-		end := start + chunkSize
-		if end > len(items) {
-			end = len(items)
-		}
+		end := min(start+chunkSize, len(items))
 		chunk := items[start:end]
 
 		if len(chunk) == 0 {
@@ -415,7 +448,7 @@ func CreatePlanItemsBatchTx(tx *sql.Tx, planID string, items []PlanItem) error {
 		}
 
 		for _, item := range chunk {
-			var targetPath interface{}
+			var targetPath any
 			if item.TargetPath != nil {
 				targetPath = *item.TargetPath
 			}
@@ -446,7 +479,7 @@ func CreatePlanItemsBatchTx(tx *sql.Tx, planID string, items []PlanItem) error {
 	return nil
 }
 
-// ListPlanItems returns all items for a plan
+// ListPlanItems returns all items for a plan.
 func (r *Repository) ListPlanItems(planID string) ([]*PlanItem, error) {
 	rows, err := r.db.Query(`
 		SELECT plan_id, item_index, op_type, source_path, target_path, reason_code, precondition_path, precondition_content_rev, precondition_size, precondition_mtime
@@ -461,7 +494,18 @@ func (r *Repository) ListPlanItems(planID string) ([]*PlanItem, error) {
 	for rows.Next() {
 		var pi PlanItem
 		var targetPath sql.NullString
-		if err := rows.Scan(&pi.PlanID, &pi.ItemIndex, &pi.OpType, &pi.SourcePath, &targetPath, &pi.ReasonCode, &pi.PreconditionPath, &pi.PreconditionContentRev, &pi.PreconditionSize, &pi.PreconditionMtime); err != nil {
+		if err := rows.Scan(
+			&pi.PlanID,
+			&pi.ItemIndex,
+			&pi.OpType,
+			&pi.SourcePath,
+			&targetPath,
+			&pi.ReasonCode,
+			&pi.PreconditionPath,
+			&pi.PreconditionContentRev,
+			&pi.PreconditionSize,
+			&pi.PreconditionMtime,
+		); err != nil {
 			return nil, err
 		}
 		if targetPath.Valid {

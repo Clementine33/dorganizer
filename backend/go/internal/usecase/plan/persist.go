@@ -11,7 +11,12 @@ import (
 
 // persistSingleActionPlan persists an explicit single delete/convert plan with
 // precondition snapshots for its operation sources.
-func persistSingleActionPlan(repo *sqlite.Repository, planID, planType, rootPath, snapshotToken, libraryID string, sourceFiles []string, ops []analyze.Operation) error {
+func persistSingleActionPlan(
+	repo *sqlite.Repository,
+	planID, planType, rootPath, snapshotToken, libraryID string,
+	sourceFiles []string,
+	ops []analyze.Operation,
+) error {
 	tx, err := repo.DB().Begin()
 	if err != nil {
 		return fmt.Errorf("begin single action tx: %w", err)

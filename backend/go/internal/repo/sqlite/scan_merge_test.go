@@ -462,7 +462,8 @@ func TestMergeWithExplicitStalePaths(t *testing.T) {
 
 	// Verify: not_in_staging.mp3 should be DELETED (stalePaths ignored it)
 	var deleteExists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/not_in_staging.mp3").Scan(&deleteExists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/not_in_staging.mp3").
+		Scan(&deleteExists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -539,7 +540,8 @@ func TestMergeScopedCleanupWithEmptyStaging(t *testing.T) {
 
 	// Verify: placeholder should remain (it was in staging/scanned set)
 	var placeholderExists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums/.placeholder").Scan(&placeholderExists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums/.placeholder").
+		Scan(&placeholderExists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -623,7 +625,8 @@ func TestMergeBoundarySafeScopeMatching(t *testing.T) {
 
 	// Verify: file2.mp3 should be deleted (in scope but not in staging)
 	var file2Exists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums/sub/file2.mp3").Scan(&file2Exists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums/sub/file2.mp3").
+		Scan(&file2Exists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -633,7 +636,8 @@ func TestMergeBoundarySafeScopeMatching(t *testing.T) {
 
 	// Verify: albums-something/should_stay.mp3 should remain (NOT in scope)
 	var shouldStayExists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums-something/should_stay.mp3").Scan(&shouldStayExists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums-something/should_stay.mp3").
+		Scan(&shouldStayExists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -643,7 +647,8 @@ func TestMergeBoundarySafeScopeMatching(t *testing.T) {
 
 	// Verify: albums2/also_stay.mp3 should remain (NOT in scope)
 	var alsoStayExists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums2/also_stay.mp3").Scan(&alsoStayExists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/albums2/also_stay.mp3").
+		Scan(&alsoStayExists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -653,7 +658,8 @@ func TestMergeBoundarySafeScopeMatching(t *testing.T) {
 
 	// Verify: outside.mp3 should remain (not in scope)
 	var outsideExists int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/other/outside.mp3").Scan(&outsideExists)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", "/music/other/outside.mp3").
+		Scan(&outsideExists)
 	if err != nil {
 		t.Fatalf("failed to query: %v", err)
 	}
@@ -760,7 +766,8 @@ func TestMergeNewEntryDefaultsToNonError(t *testing.T) {
 
 	var isError int
 	var reason sql.NullString
-	err = repo.db.QueryRow("SELECT is_error, error_reason FROM entries WHERE path = ?", "/music/new_error_named.mp3").Scan(&isError, &reason)
+	err = repo.db.QueryRow("SELECT is_error, error_reason FROM entries WHERE path = ?", "/music/new_error_named.mp3").
+		Scan(&isError, &reason)
 	if err != nil {
 		t.Fatalf("failed to query entry error fields: %v", err)
 	}
@@ -809,7 +816,8 @@ func TestMergePreservesExistingErrorFlags(t *testing.T) {
 
 	var isError int
 	var reason sql.NullString
-	err = repo.db.QueryRow("SELECT is_error, error_reason FROM entries WHERE path = ?", "/music/existing.mp3").Scan(&isError, &reason)
+	err = repo.db.QueryRow("SELECT is_error, error_reason FROM entries WHERE path = ?", "/music/existing.mp3").
+		Scan(&isError, &reason)
 	if err != nil {
 		t.Fatalf("failed to query entry error fields: %v", err)
 	}
@@ -818,7 +826,11 @@ func TestMergePreservesExistingErrorFlags(t *testing.T) {
 		t.Errorf("expected is_error to be preserved as 1, got %d", isError)
 	}
 	if !reason.Valid || reason.String != "manual-seeded" {
-		t.Errorf("expected error_reason to be preserved as 'manual-seeded', got valid=%v value=%q", reason.Valid, reason.String)
+		t.Errorf(
+			"expected error_reason to be preserved as 'manual-seeded', got valid=%v value=%q",
+			reason.Valid,
+			reason.String,
+		)
 	}
 }
 
@@ -836,7 +848,7 @@ func TestMergeLargeSetStaleCleanup(t *testing.T) {
 	now := time.Now().Unix()
 
 	// Create many existing entries that should be cleaned up (2000+ to test large-set handling)
-	for i := 0; i < 2100; i++ {
+	for i := range 2100 {
 		_, err = repo.db.Exec(`
 			INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime)
 			VALUES (?, '/music', '/music', ?, 0, 1024000, ?)
@@ -847,7 +859,7 @@ func TestMergeLargeSetStaleCleanup(t *testing.T) {
 	}
 
 	// Create many staging entries (2000+ to test large-set handling)
-	for i := 0; i < 2100; i++ {
+	for i := range 2100 {
 		_, err = repo.db.Exec(`
 			INSERT INTO entries_staging (session_id, path, root_path, parent_path, name, is_dir, size, mtime, operation)
 			VALUES ('scan-large', ?, '/music', '/music', ?, 0, 1024000, ?, 'upsert')
@@ -895,7 +907,8 @@ func TestMergeLargeSetStaleCleanup(t *testing.T) {
 
 	// Verify staging is cleared
 	var stagingCount int
-	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries_staging WHERE session_id = ?", "scan-large").Scan(&stagingCount)
+	err = repo.db.QueryRow("SELECT COUNT(*) FROM entries_staging WHERE session_id = ?", "scan-large").
+		Scan(&stagingCount)
 	if err != nil {
 		t.Fatalf("failed to query staging count: %v", err)
 	}
@@ -981,7 +994,8 @@ func TestMergeUpsertContentRevIncrementSemantics(t *testing.T) {
 
 	// Verify unchanged entry preserves content_rev=3
 	var unchangedContentRev int
-	err = repo.db.QueryRow("SELECT content_rev FROM entries WHERE path = ?", "/music/existing.mp3").Scan(&unchangedContentRev)
+	err = repo.db.QueryRow("SELECT content_rev FROM entries WHERE path = ?", "/music/existing.mp3").
+		Scan(&unchangedContentRev)
 	if err != nil {
 		t.Fatalf("failed to query unchanged content_rev: %v", err)
 	}
@@ -1001,7 +1015,8 @@ func TestMergeUpsertContentRevIncrementSemantics(t *testing.T) {
 
 	// Verify changed entry has content_rev=3 (incremented from 2)
 	var changedContentRev int
-	err = repo.db.QueryRow("SELECT content_rev FROM entries WHERE path = ?", "/music/changed.mp3").Scan(&changedContentRev)
+	err = repo.db.QueryRow("SELECT content_rev FROM entries WHERE path = ?", "/music/changed.mp3").
+		Scan(&changedContentRev)
 	if err != nil {
 		t.Fatalf("failed to query changed content_rev: %v", err)
 	}
@@ -1011,7 +1026,8 @@ func TestMergeUpsertContentRevIncrementSemantics(t *testing.T) {
 
 	// Verify changed entry has dirty_flag=1
 	var changedDirtyFlag int
-	err = repo.db.QueryRow("SELECT dirty_flag FROM entries WHERE path = ?", "/music/changed.mp3").Scan(&changedDirtyFlag)
+	err = repo.db.QueryRow("SELECT dirty_flag FROM entries WHERE path = ?", "/music/changed.mp3").
+		Scan(&changedDirtyFlag)
 	if err != nil {
 		t.Fatalf("failed to query changed dirty_flag: %v", err)
 	}

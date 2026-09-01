@@ -12,7 +12,12 @@ import (
 // through reconcile.ValidatePolicy/ResolveClassifier.
 func (s *serviceImpl) resolvePolicy(source PolicySource) (reconcile.Policy, *reconcile.Classifier, error) {
 	if source.Kind != "inline" || source.InlinePolicy == nil {
-		return reconcile.Policy{}, nil, NewError(ErrKindInvalidArgument, "INVALID_POLICY_SOURCE", "workflow policy must be a complete inline policy", nil)
+		return reconcile.Policy{}, nil, NewError(
+			ErrKindInvalidArgument,
+			"INVALID_POLICY_SOURCE",
+			"workflow policy must be a complete inline policy",
+			nil,
+		)
 	}
 	policy := *source.InlinePolicy
 	if err := reconcile.ValidatePolicy(policy); err != nil {

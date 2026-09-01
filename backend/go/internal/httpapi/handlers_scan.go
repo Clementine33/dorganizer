@@ -53,7 +53,12 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		rootPath = *req.RootPath
 		isLibraryRoot := pathnorm.IsWithinRoot(lib.RootPath, rootPath) && pathnorm.IsWithinRoot(rootPath, lib.RootPath)
 		if !isLibraryRoot {
-			writeError(w, http.StatusBadRequest, "ROOT_PATH_OUTSIDE_LIBRARY", "root_path must match the selected library root")
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"ROOT_PATH_OUTSIDE_LIBRARY",
+				"root_path must match the selected library root",
+			)
 			return
 		}
 	}
@@ -84,17 +89,21 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.deps.ScanService.Scan(r.Context(), scanusecase.Request{RootPath: rootPath}, func(ev scanusecase.Event) {
-		// The usecase emits started/progress/completed/error internally; only
-		// progress is forwarded, the handler owns the terminal events.
-		if ev.Type == "progress" {
-			_ = sw.Send("progress", scanEventData{
-				Stage:        "scan",
-				FilesScanned: ev.FilesScanned,
-				DirsScanned:  ev.DirsScanned,
-			})
-		}
-	})
+	result, err := s.deps.ScanService.Scan(
+		r.Context(),
+		scanusecase.Request{RootPath: rootPath},
+		func(ev scanusecase.Event) {
+			// The usecase emits started/progress/completed/error internally; only
+			// progress is forwarded, the handler owns the terminal events.
+			if ev.Type == "progress" {
+				_ = sw.Send("progress", scanEventData{
+					Stage:        "scan",
+					FilesScanned: ev.FilesScanned,
+					DirsScanned:  ev.DirsScanned,
+				})
+			}
+		},
+	)
 	if err != nil {
 		now := time.Now()
 		if errors.Is(err, context.Canceled) {
@@ -115,7 +124,10 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	// signal completion.
 	if _, err := s.deps.Repo.ReplaceLibraryFolders(lib.ID, result.RootPath); err != nil {
 		_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "failed", err.Error(), time.Now())
-		_ = sw.Send("error", scanEventData{Stage: "scan", Code: "INTERNAL", Message: "failed to persist library folders"})
+		_ = sw.Send(
+			"error",
+			scanEventData{Stage: "scan", Code: "INTERNAL", Message: "failed to persist library folders"},
+		)
 		return
 	}
 	_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now())

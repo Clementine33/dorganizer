@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -11,7 +12,7 @@ import (
 //
 // Deprecated: Use MergeStagingSimple or MergeStagingWithStalePaths instead.
 // This function is kept for backward compatibility.
-func (r *Repository) MergeStaging(args ...interface{}) error {
+func (r *Repository) MergeStaging(args ...any) error {
 	if len(args) == 2 {
 		// Old 2-arg form: MergeStaging(scanID, rootPath)
 		scanID, ok := args[0].(string)
@@ -146,7 +147,7 @@ CASE
 		err = tx.QueryRow(`
 			SELECT root_path FROM entries_staging WHERE session_id = ? LIMIT 1
 		`, scanID).Scan(&stagingRootPath)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("failed to get staging root_path: %w", err)
 		}
 		rootPath = stagingRootPath

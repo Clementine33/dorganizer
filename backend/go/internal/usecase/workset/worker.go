@@ -2,6 +2,7 @@ package workset
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -132,7 +133,7 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		Progress:         progress,
 	})
 	if err != nil {
-		if ctx.Err() != nil || err == context.Canceled {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			_ = d.svc.repo.CompleteGenerationCanceled(gen.GenerationID)
 			return
 		}

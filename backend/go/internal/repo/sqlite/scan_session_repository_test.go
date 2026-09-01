@@ -113,7 +113,11 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 	if err := repo.UpdateScanSessionStatus("scan-completed-old", "completed", "", ""); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	_, err := repo.db.Exec("UPDATE scan_sessions SET finished_at = ? WHERE session_id = ?", oldTime.Format(timeFormat), "scan-completed-old")
+	_, err := repo.db.Exec(
+		"UPDATE scan_sessions SET finished_at = ? WHERE session_id = ?",
+		oldTime.Format(timeFormat),
+		"scan-completed-old",
+	)
 	if err != nil {
 		t.Fatalf("patch finished_at: %v", err)
 	}
@@ -159,7 +163,11 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 	if err := repo.UpdateScanSessionStatus("scan-coalesce-precedence", "completed", "", ""); err != nil {
 		t.Fatalf("update coalesce-precedence scan status: %v", err)
 	}
-	_, err = repo.db.Exec("UPDATE scan_sessions SET finished_at = ? WHERE session_id = ?", newTime.Format(timeFormat), "scan-coalesce-precedence")
+	_, err = repo.db.Exec(
+		"UPDATE scan_sessions SET finished_at = ? WHERE session_id = ?",
+		newTime.Format(timeFormat),
+		"scan-coalesce-precedence",
+	)
 	if err != nil {
 		t.Fatalf("patch coalesce-precedence finished_at: %v", err)
 	}
@@ -222,10 +230,13 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 
 	// Explicitly verify COALESCE precedence: old started_at + new finished_at → retained
 	var coalesceExists bool
-	if err := repo.db.QueryRow("SELECT EXISTS(SELECT 1 FROM scan_sessions WHERE session_id = 'scan-coalesce-precedence')").Scan(&coalesceExists); err != nil {
+	if err := repo.db.QueryRow("SELECT EXISTS(SELECT 1 FROM scan_sessions WHERE session_id = 'scan-coalesce-precedence')").
+		Scan(&coalesceExists); err != nil {
 		t.Fatalf("check coalesce-precedence row: %v", err)
 	}
 	if !coalesceExists {
-		t.Error("scan-coalesce-precedence row was deleted; COALESCE(finished_at, started_at) should have chosen finished_at (new) over started_at (old)")
+		t.Error(
+			"scan-coalesce-precedence row was deleted; COALESCE(finished_at, started_at) should have chosen finished_at (new) over started_at (old)",
+		)
 	}
 }

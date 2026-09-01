@@ -63,7 +63,17 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 		ID       string `json:"id"`
 		RootPath string `json:"root_path"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/libraries", token, libReq, &lib); code != http.StatusCreated {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/libraries",
+		token,
+		libReq,
+		&lib,
+	); code != http.StatusCreated {
 		t.Fatalf("POST /api/v1/libraries: status %d, want 201", code)
 	}
 	if lib.ID == "" {
@@ -172,7 +182,11 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 		t.Fatalf("expected actionable operations for flac+mp3 pairs under balanced preset (summary=%+v)", plan.Summary)
 	}
 	if plan.Summary.OperationCount != plan.Summary.ActionableCount {
-		t.Fatalf("summary.actionable_count %d != operation_count %d", plan.Summary.ActionableCount, plan.Summary.OperationCount)
+		t.Fatalf(
+			"summary.actionable_count %d != operation_count %d",
+			plan.Summary.ActionableCount,
+			plan.Summary.OperationCount,
+		)
 	}
 	if plan.Summary.SummaryReason != "ACTIONABLE" {
 		t.Fatalf("summary_reason = %q, want ACTIONABLE", plan.Summary.SummaryReason)
@@ -181,8 +195,15 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 		t.Fatal("workflow step has no components")
 	}
 
-	t.Logf("http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d components=%d",
-		lib.ID, completed.ScanID, len(folders.Folders), plan.PlanID, plan.Summary.OperationCount, len(plan.Steps[0].Components))
+	t.Logf(
+		"http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d components=%d",
+		lib.ID,
+		completed.ScanID,
+		len(folders.Folders),
+		plan.PlanID,
+		plan.Summary.OperationCount,
+		len(plan.Steps[0].Components),
+	)
 }
 
 // buildBackendBinary compiles the backend into a fresh temp dir and returns
@@ -278,7 +299,7 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 			n, err := fmt.Sscanf(line, "ONSEI_BACKEND_READY port=%d token=%s version=%s http_port=%d",
 				&port, &tok, &ver, &httpPort)
 			if err != nil || n != 4 {
-				handshake <- handshakeResult{line: line, err: fmt.Errorf("parse handshake fields: n=%d err=%v", n, err)}
+				handshake <- handshakeResult{line: line, err: fmt.Errorf("parse handshake fields: n=%d err=%w", n, err)}
 				return
 			}
 			handshake <- handshakeResult{line: line, grpcPort: port, httpPort: httpPort}
@@ -288,7 +309,7 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 			}
 			return
 		}
-		handshake <- handshakeResult{err: fmt.Errorf("handshake not found before stdout EOF: %v", scanner.Err())}
+		handshake <- handshakeResult{err: fmt.Errorf("handshake not found before stdout EOF: %w", scanner.Err())}
 	}()
 
 	var hs handshakeResult
@@ -353,10 +374,10 @@ func postScanSSE(t *testing.T, client *http.Client, ctx context.Context, base, l
 	}
 
 	events := sseEvents{}
-	for _, block := range strings.Split(string(body), "\n\n") {
+	for block := range strings.SplitSeq(string(body), "\n\n") {
 		var evName string
 		var data json.RawMessage
-		for _, line := range strings.Split(block, "\n") {
+		for line := range strings.SplitSeq(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "event: "):
 				evName = strings.TrimPrefix(line, "event: ")
@@ -373,7 +394,14 @@ func postScanSSE(t *testing.T, client *http.Client, ctx context.Context, base, l
 
 // doJSON performs an authenticated JSON request and decodes the response
 // body into out (when non-nil), returning the HTTP status code.
-func doJSON(t *testing.T, client *http.Client, ctx context.Context, base, method, path, token string, body any, out any) int {
+func doJSON(
+	t *testing.T,
+	client *http.Client,
+	ctx context.Context,
+	base, method, path, token string,
+	body any,
+	out any,
+) int {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {

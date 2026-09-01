@@ -41,7 +41,7 @@ func TestSelectScopedProbeCandidates_OnlyScopedMissingMP3(t *testing.T) {
 
 func TestChunkBitrateUpdates_ChunksAt100(t *testing.T) {
 	updates := make([]bitrateUpdate, 0, 250)
-	for i := 0; i < 250; i++ {
+	for i := range 250 {
 		updates = append(updates, bitrateUpdate{pathPosix: fmt.Sprintf("/scope/%03d.mp3", i), bitrate: 128000})
 	}
 
@@ -70,7 +70,7 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 	const scopedTotal = 120
 	scopedEntries := make([]Entry, 0, scopedTotal)
 
-	for i := 0; i < scopedTotal; i++ {
+	for i := range scopedTotal {
 		p := filepath.Join(tmpDir, fmt.Sprintf("in-scope-%03d.mp3", i))
 		writeTestMP3Frame(t, p)
 		pPosix := filepath.ToSlash(p)
@@ -100,7 +100,9 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 	}
 
 	var scopedUpdated int
-	if err := repo.DB().QueryRow("SELECT COUNT(1) FROM entries WHERE path LIKE ? AND COALESCE(bitrate,0) > 0", filepath.ToSlash(filepath.Join(tmpDir, "in-scope-"))+"%").Scan(&scopedUpdated); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT COUNT(1) FROM entries WHERE path LIKE ? AND COALESCE(bitrate,0) > 0", filepath.ToSlash(filepath.Join(tmpDir, "in-scope-"))+"%").
+		Scan(&scopedUpdated); err != nil {
 		t.Fatalf("failed to count scoped updated bitrates: %v", err)
 	}
 	if scopedUpdated != scopedTotal {
@@ -108,7 +110,9 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 	}
 
 	var outOfScopeBitrate int64
-	if err := repo.DB().QueryRow("SELECT COALESCE(bitrate, 0) FROM entries WHERE path = ?", filepath.ToSlash(outOfScopePath)).Scan(&outOfScopeBitrate); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT COALESCE(bitrate, 0) FROM entries WHERE path = ?", filepath.ToSlash(outOfScopePath)).
+		Scan(&outOfScopeBitrate); err != nil {
 		t.Fatalf("failed to read out-of-scope bitrate: %v", err)
 	}
 	if outOfScopeBitrate != 0 {
@@ -178,7 +182,7 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 	defer repo.Close()
 
 	updates := make([]bitrateUpdate, 0, bitrateUpdateBatchSize+1)
-	for i := 0; i < bitrateUpdateBatchSize+1; i++ {
+	for i := range bitrateUpdateBatchSize + 1 {
 		p := fmt.Sprintf("/scope/%03d.mp3", i)
 		_, err = repo.DB().Exec(`
 			INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
@@ -215,7 +219,9 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 	}
 
 	var updatedCount int
-	if err := repo.DB().QueryRow("SELECT COUNT(1) FROM entries WHERE COALESCE(bitrate,0) > 0").Scan(&updatedCount); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT COUNT(1) FROM entries WHERE COALESCE(bitrate,0) > 0").
+		Scan(&updatedCount); err != nil {
 		t.Fatalf("failed to count updated rows after rollback: %v", err)
 	}
 	if updatedCount != 0 {
@@ -223,7 +229,9 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 	}
 
 	var firstPathBitrate int64
-	if err := repo.DB().QueryRow("SELECT COALESCE(bitrate,0) FROM entries WHERE path = ?", updates[0].pathPosix).Scan(&firstPathBitrate); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT COALESCE(bitrate,0) FROM entries WHERE path = ?", updates[0].pathPosix).
+		Scan(&firstPathBitrate); err != nil {
 		t.Fatalf("failed to read first-path bitrate after rollback: %v", err)
 	}
 	if firstPathBitrate != 0 {
@@ -252,7 +260,9 @@ func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
 	}
 
 	a := NewAnalyzer(repo)
-	err = a.EnrichScopedEntriesBitrate([]Entry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}})
+	err = a.EnrichScopedEntriesBitrate(
+		[]Entry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}},
+	)
 	if err == nil {
 		t.Fatal("expected enrich error, got nil")
 	}
@@ -382,7 +392,7 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 	// Insert 200 entries with NULL bitrate.
 	const totalEntries = 200
 	updates := make([]bitrateUpdate, 0, totalEntries)
-	for i := 0; i < totalEntries; i++ {
+	for i := range totalEntries {
 		p := fmt.Sprintf("/scope/%03d.mp3", i)
 		_, err = repo.DB().Exec(`
 			INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
@@ -401,15 +411,12 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, numGoroutines)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(goroutineIdx int) {
 			defer wg.Done()
 			start := goroutineIdx * perGoroutine
-			end := start + perGoroutine
-			if end > len(updates) {
-				end = len(updates)
-			}
+			end := min(start+perGoroutine, len(updates))
 			a := NewAnalyzer(repo)
 			if err := a.persistBitrateUpdates(updates[start:end], true); err != nil {
 				errCh <- err
@@ -426,7 +433,9 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 
 	// Verify all entries have bitrate set.
 	var updatedCount int
-	if err := repo.DB().QueryRow("SELECT COUNT(1) FROM entries WHERE COALESCE(bitrate,0) > 0").Scan(&updatedCount); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT COUNT(1) FROM entries WHERE COALESCE(bitrate,0) > 0").
+		Scan(&updatedCount); err != nil {
 		t.Fatalf("failed to count updated entries: %v", err)
 	}
 	if updatedCount != totalEntries {
@@ -443,12 +452,12 @@ func (mockSQLResult) LastInsertId() (int64, error) { return 0, nil }
 func (mockSQLResult) RowsAffected() (int64, error) { return 0, nil }
 
 type mockSQLTx struct {
-	execFn     func(string, ...interface{}) (mockSQLResult, error)
+	execFn     func(string, ...any) (mockSQLResult, error)
 	commitFn   func() error
 	rollbackFn func() error
 }
 
-func (tx mockSQLTx) Exec(q string, args ...interface{}) (mockSQLResult, error) {
+func (tx mockSQLTx) Exec(q string, args ...any) (mockSQLResult, error) {
 	return tx.execFn(q, args...)
 }
 func (tx mockSQLTx) Commit() error   { return tx.commitFn() }

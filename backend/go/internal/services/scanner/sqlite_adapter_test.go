@@ -44,7 +44,7 @@ func TestWriteStagingEntries_LargeBatch_SucceedsAtomically(t *testing.T) {
 
 	// Create 2500 entries (> batchSize of 1000 requires multiple batches)
 	var entries []StagingEntry
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		entries = append(entries, StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),
@@ -82,7 +82,7 @@ func TestWriteStagingEntries_LargeBatch_SucceedsAtomically(t *testing.T) {
 // TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError
 // simulates a mid-write insert failure in WriteStagingEntries and verifies:
 // - function returns error
-// - transaction rollback occurred (no partial rows for session)
+// - transaction rollback occurred (no partial rows for session).
 func TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -91,7 +91,7 @@ func TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError
 
 	// Create 50 entries
 	var entries []StagingEntry
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		entries = append(entries, StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),
@@ -137,9 +137,10 @@ func TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError
 	}
 }
 
-// RepositoryThatFailsStaging simulates a repository where WriteStagingEntries fails
+// RepositoryThatFailsStaging simulates a repository where WriteStagingEntries fails.
 type RepositoryThatFailsStaging struct {
 	MockRepository
+
 	writeStagingCalled bool
 	mergeCalled        bool
 	failStagingError   error
@@ -225,7 +226,7 @@ func TestScannerService_StagingWriteFailure_PreventsMergeAndEndsSessionFailed(t 
 	}
 }
 
-// Test the chunking size is exactly as expected (1000)
+// Test the chunking size is exactly as expected (1000).
 func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -233,7 +234,7 @@ func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	sessionID := "test-exact-batch"
 
 	var entries []StagingEntry
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		entries = append(entries, StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/file" + string(rune(i)),
@@ -267,7 +268,7 @@ func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	// Test with batchSize + 1 entries - should require two batches
 	sessionID2 := "test-one-over-batch"
 	var entries2 []StagingEntry
-	for i := 0; i < 1001; i++ {
+	for i := range 1001 {
 		entries2 = append(entries2, StagingEntry{
 			SessionID:  sessionID2,
 			Path:       "/music2/file" + string(rune(i)),
@@ -298,7 +299,7 @@ func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	}
 }
 
-// Test empty entries slice
+// Test empty entries slice.
 func TestWriteStagingEntries_EmptyEntries(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -324,7 +325,7 @@ func TestWriteStagingEntries_EmptyEntries(t *testing.T) {
 	}
 }
 
-// Verify that INSERT OR REPLACE behavior is preserved
+// Verify that INSERT OR REPLACE behavior is preserved.
 func TestWriteStagingEntries_InsertOrReplace(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -396,7 +397,7 @@ func TestWriteStagingEntries_InsertOrReplace(t *testing.T) {
 	}
 }
 
-// Test with nil entries slice
+// Test with nil entries slice.
 func TestWriteStagingEntries_NilEntries(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -409,7 +410,7 @@ func TestWriteStagingEntries_NilEntries(t *testing.T) {
 	}
 }
 
-// TestWriteStagingBatch_MultiTransaction verifies batch writes use separate transactions
+// TestWriteStagingBatch_MultiTransaction verifies batch writes use separate transactions.
 func TestWriteStagingBatch_MultiTransaction(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -468,7 +469,7 @@ func TestWriteStagingBatch_MultiTransaction(t *testing.T) {
 }
 
 // TestWriteStagingBatch_PartialPersistence verifies partial persistence on failure
-// Each batch is committed independently, so earlier batches persist on later failure
+// Each batch is committed independently, so earlier batches persist on later failure.
 func TestWriteStagingBatch_PartialPersistence(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -508,7 +509,7 @@ func TestWriteStagingBatch_PartialPersistence(t *testing.T) {
 	}
 }
 
-// TestCleanupStagingSession_RemovesAllEntriesForSession verifies cleanup removes all staging entries
+// TestCleanupStagingSession_RemovesAllEntriesForSession verifies cleanup removes all staging entries.
 func TestCleanupStagingSession_RemovesAllEntriesForSession(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -575,7 +576,7 @@ func TestCleanupStagingSession_RemovesAllEntriesForSession(t *testing.T) {
 	}
 }
 
-// TestCleanupStagingSession_PreservesOtherSessions verifies cleanup only affects target session
+// TestCleanupStagingSession_PreservesOtherSessions verifies cleanup only affects target session.
 func TestCleanupStagingSession_PreservesOtherSessions(t *testing.T) {
 	suite := setupTestDB(t)
 
@@ -648,7 +649,7 @@ func TestCleanupStagingSession_PreservesOtherSessions(t *testing.T) {
 	}
 }
 
-// Benchmark for large batch performance
+// Benchmark for large batch performance.
 func BenchmarkWriteStagingEntries_LargeBatch(b *testing.B) {
 	sqliteRepo, err := sqlite.NewRepository(":memory:")
 	if err != nil {
@@ -660,7 +661,7 @@ func BenchmarkWriteStagingEntries_LargeBatch(b *testing.B) {
 
 	// Create 5000 entries
 	var entries []StagingEntry
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		entries = append(entries, StagingEntry{
 			SessionID:  "bench-session",
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),

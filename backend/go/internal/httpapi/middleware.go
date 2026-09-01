@@ -62,6 +62,7 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 
 type responseState struct {
 	http.ResponseWriter
+
 	wroteHeader bool
 }
 
@@ -93,7 +94,11 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 			if recovered := recover(); recovered != nil {
 				log.Printf("http panic: %v", recovered)
 				if !state.wroteHeader {
-					writeJSON(state, http.StatusInternalServerError, errorResponse{Code: "INTERNAL", Message: "internal server error"})
+					writeJSON(
+						state,
+						http.StatusInternalServerError,
+						errorResponse{Code: "INTERNAL", Message: "internal server error"},
+					)
 				}
 			}
 		}()

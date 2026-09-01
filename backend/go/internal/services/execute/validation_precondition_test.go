@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// mockExecuteRepo implements ExecuteRepository and contentRevProvider for testing
+// mockExecuteRepo implements ExecuteRepository and contentRevProvider for testing.
 type mockExecuteRepo struct {
 	mu                 sync.Mutex
 	revByPath          map[string]int
@@ -92,8 +92,20 @@ func TestExecutePlan_PrevalidatesAllItemsBeforeMutation(t *testing.T) {
 	info2, _ := os.Stat(file2)
 
 	plan := &Plan{PlanID: "plan-003", Items: []PlanItem{
-		{Type: ItemTypeDelete, SourcePath: file1, PreconditionPath: file1, PreconditionSize: info1.Size(), PreconditionMtime: info1.ModTime().Unix()},
-		{Type: ItemTypeDelete, SourcePath: file2, PreconditionPath: file2, PreconditionSize: info2.Size() + 1, PreconditionMtime: info2.ModTime().Unix()},
+		{
+			Type:              ItemTypeDelete,
+			SourcePath:        file1,
+			PreconditionPath:  file1,
+			PreconditionSize:  info1.Size(),
+			PreconditionMtime: info1.ModTime().Unix(),
+		},
+		{
+			Type:              ItemTypeDelete,
+			SourcePath:        file2,
+			PreconditionPath:  file2,
+			PreconditionSize:  info2.Size() + 1,
+			PreconditionMtime: info2.ModTime().Unix(),
+		},
 	}}
 
 	svc := NewExecuteService(nil, ToolsConfig{})
@@ -179,7 +191,7 @@ func TestExecutePlan_PrecheckConcurrent_FirstHardErrorCancelsNewWork(t *testing.
 		{Type: ItemTypeDelete, SourcePath: goodFile, PreconditionPath: goodFile},
 	}}
 
-	var started int32
+	var started atomic.Int32
 	slowStarted := make(chan struct{}, 1)
 	failCalled := make(chan struct{}, 1)
 	failRelease := make(chan struct{})
@@ -187,7 +199,7 @@ func TestExecutePlan_PrecheckConcurrent_FirstHardErrorCancelsNewWork(t *testing.
 	releaseSlow := make(chan struct{})
 
 	statPath = func(path string) (os.FileInfo, error) {
-		atomic.AddInt32(&started, 1)
+		started.Add(1)
 		if path == slowPath {
 			slowStarted <- struct{}{}
 			<-releaseSlow
@@ -243,7 +255,7 @@ func TestExecutePlan_PrecheckConcurrent_FirstHardErrorCancelsNewWork(t *testing.
 		t.Fatal("ExecutePlan deadlocked waiting for in-flight prechecks")
 	}
 
-	if got := atomic.LoadInt32(&started); got < 2 {
+	if got := started.Load(); got < 2 {
 		t.Fatalf("expected at least failing and in-flight checks to run, started=%d", got)
 	}
 }
@@ -272,9 +284,9 @@ func TestExecutePlan_Phase1Fail_CancelsNewWork(t *testing.T) {
 		{Type: ItemTypeDelete, SourcePath: third, PreconditionPath: third},
 	}}
 
-	var started int32
+	var started atomic.Int32
 	statPath = func(path string) (os.FileInfo, error) {
-		if atomic.AddInt32(&started, 1) == 1 {
+		if started.Add(1) == 1 {
 			return nil, os.ErrNotExist
 		}
 		return originalStatPath(path)
@@ -287,7 +299,7 @@ func TestExecutePlan_Phase1Fail_CancelsNewWork(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected phase1 hard error")
 	}
-	if got := atomic.LoadInt32(&started); got != 1 {
+	if got := started.Load(); got != 1 {
 		t.Fatalf("expected cancellation to block new work admission, started=%d", got)
 	}
 }
@@ -309,9 +321,9 @@ func TestExecutePlan_FirstHardErrorReturned(t *testing.T) {
 	firstErr := errors.New("first hard error")
 	laterErr := errors.New("later hard error")
 
-	var calls int32
+	var calls atomic.Int32
 	statPath = func(path string) (os.FileInfo, error) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n == 1 {
 			return nil, firstErr
 		}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -37,12 +38,7 @@ func folderEvents(events []Event, eventType string) []string {
 }
 
 func containsFolder(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, s)
 }
 
 // eventTypes extracts all event types in order from a slice of events.
@@ -129,7 +125,16 @@ func findErrorEventByCode(t *testing.T, repo *sqlite.Repository, code string) *s
 	var retryable int
 	var createdAtStr string
 	var path sql.NullString
-	if err := row.Scan(&e.ID, &e.Scope, &e.RootPath, &path, &e.Code, &e.Message, &retryable, &createdAtStr); err != nil {
+	if err := row.Scan(
+		&e.ID,
+		&e.Scope,
+		&e.RootPath,
+		&path,
+		&e.Code,
+		&e.Message,
+		&retryable,
+		&createdAtStr,
+	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -181,7 +186,15 @@ func seedPlanWithScanRoot(t *testing.T, repo *sqlite.Repository, planID, rootPat
 }
 
 // seedDeleteItem creates a plan item for a delete operation.
-func seedDeleteItem(t *testing.T, repo *sqlite.Repository, planID string, itemIndex int, sourcePath, targetPath, precondPath string, contentRev, size int64, mtime int64) {
+func seedDeleteItem(
+	t *testing.T,
+	repo *sqlite.Repository,
+	planID string,
+	itemIndex int,
+	sourcePath, targetPath, precondPath string,
+	contentRev, size int64,
+	mtime int64,
+) {
 	t.Helper()
 	targetVal := "NULL"
 	if targetPath != "" {
@@ -201,7 +214,15 @@ func seedDeleteItem(t *testing.T, repo *sqlite.Repository, planID string, itemIn
 }
 
 // seedConvertItem creates a plan item for a convert_and_delete operation.
-func seedConvertItem(t *testing.T, repo *sqlite.Repository, planID string, itemIndex int, sourcePath, targetPath, precondPath string, contentRev, size int64, mtime int64) {
+func seedConvertItem(
+	t *testing.T,
+	repo *sqlite.Repository,
+	planID string,
+	itemIndex int,
+	sourcePath, targetPath, precondPath string,
+	contentRev, size int64,
+	mtime int64,
+) {
 	t.Helper()
 	_, err := repo.DB().Exec(`
 		INSERT INTO plan_items (plan_id, item_index, op_type, source_path, target_path, reason_code, precondition_path, precondition_content_rev, precondition_size, precondition_mtime)

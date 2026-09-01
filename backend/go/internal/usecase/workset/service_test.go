@@ -116,16 +116,28 @@ func TestCreateWorksetValidation(t *testing.T) {
 	insertFolder(t, repo, "lib-1", "f-a", "/music/albumA", "albumA", "albumA")
 	ctx := context.Background()
 
-	if _, err := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "lib-1", Title: "", FolderIDs: []string{"f-a"}}); err == nil {
+	if _, err := svc.CreateWorkset(
+		ctx,
+		CreateRequest{LibraryID: "lib-1", Title: "", FolderIDs: []string{"f-a"}},
+	); err == nil {
 		t.Fatal("empty title should fail")
 	}
-	if _, err := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "lib-1", Title: "ok", FolderIDs: []string{"f-a", "f-a"}}); err == nil {
+	if _, err := svc.CreateWorkset(
+		ctx,
+		CreateRequest{LibraryID: "lib-1", Title: "ok", FolderIDs: []string{"f-a", "f-a"}},
+	); err == nil {
 		t.Fatal("duplicate folder should fail")
 	}
-	if _, err := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "lib-1", Title: "ok", FolderIDs: []string{"nope"}}); err == nil {
+	if _, err := svc.CreateWorkset(
+		ctx,
+		CreateRequest{LibraryID: "lib-1", Title: "ok", FolderIDs: []string{"nope"}},
+	); err == nil {
 		t.Fatal("unknown folder should fail")
 	}
-	if _, err := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "nope", Title: "ok", FolderIDs: []string{"f-a"}}); err == nil {
+	if _, err := svc.CreateWorkset(
+		ctx,
+		CreateRequest{LibraryID: "nope", Title: "ok", FolderIDs: []string{"f-a"}},
+	); err == nil {
 		t.Fatal("unknown library should fail")
 	}
 }
@@ -133,7 +145,10 @@ func TestCreateWorksetValidation(t *testing.T) {
 func planWorkflowFixture() planusecase.Workflow {
 	profile := reconcile.DesiredProfile{
 		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
-		Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+		Encoded: &reconcile.AudioOutputSpec{
+			Codec:   reconcile.CodecMp3,
+			Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
+		},
 	}
 	return planusecase.Workflow{
 		SchemaVersion: 1,
@@ -162,7 +177,11 @@ func TestDraftSaveAndNeedsPlanning(t *testing.T) {
 	res, _ := svc.CreateWorkset(ctx, CreateRequest{LibraryID: "lib-1", Title: "t", FolderIDs: []string{"f-a"}})
 	id := res.Workset.WorksetID
 
-	if _, err := svc.SaveDraft(ctx, id, SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 1}); err != nil {
+	if _, err := svc.SaveDraft(
+		ctx,
+		id,
+		SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 1},
+	); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 	view, _ := svc.GetWorkset(ctx, id)
@@ -171,7 +190,11 @@ func TestDraftSaveAndNeedsPlanning(t *testing.T) {
 	}
 	// Same draft content saved again is a no-op hash but still bumps version
 	// via full replacement semantics.
-	if _, err := svc.SaveDraft(ctx, id, SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 2}); err != nil {
+	if _, err := svc.SaveDraft(
+		ctx,
+		id,
+		SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 2},
+	); err != nil {
 		t.Fatalf("SaveDraft 2: %v", err)
 	}
 }
@@ -197,7 +220,11 @@ func TestDraftSaveAllowsIncompleteButGenerationRejects(t *testing.T) {
 	id := res.Workset.WorksetID
 
 	// An incomplete policy is a legal editing state: saving it must succeed.
-	if _, err := svc.SaveDraft(ctx, id, SaveDraftRequest{Workflow: incompletePolicyFixture(), IfMatchVersion: 1}); err != nil {
+	if _, err := svc.SaveDraft(
+		ctx,
+		id,
+		SaveDraftRequest{Workflow: incompletePolicyFixture(), IfMatchVersion: 1},
+	); err != nil {
 		t.Fatalf("SaveDraft of incomplete policy should be allowed: %v", err)
 	}
 	// But it cannot produce a revision: generation rejects synchronously.
@@ -331,7 +358,11 @@ func TestStaleValidationBlockedAndSidecarIndependence(t *testing.T) {
 	id := res.Workset.WorksetID
 
 	// 1. Generate revision v1.
-	genRes, err := svc.StartGeneration(ctx, id, StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-stale-1"})
+	genRes, err := svc.StartGeneration(
+		ctx,
+		id,
+		StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-stale-1"},
+	)
 	if err != nil {
 		t.Fatalf("StartGeneration: %v", err)
 	}
@@ -348,8 +379,13 @@ func TestStaleValidationBlockedAndSidecarIndependence(t *testing.T) {
 	if view.CurrentRevision == nil {
 		t.Fatal("expected current revision")
 	}
-	if view.CurrentRevision.ValidationState != ValidationValid || view.CurrentRevision.Stale == nil || *view.CurrentRevision.Stale != false {
-		t.Fatalf("expected valid non-stale revision, got state=%q stale=%v", view.CurrentRevision.ValidationState, view.CurrentRevision.Stale)
+	if view.CurrentRevision.ValidationState != ValidationValid || view.CurrentRevision.Stale == nil ||
+		*view.CurrentRevision.Stale != false {
+		t.Fatalf(
+			"expected valid non-stale revision, got state=%q stale=%v",
+			view.CurrentRevision.ValidationState,
+			view.CurrentRevision.Stale,
+		)
 	}
 
 	// 2. Modifying non-audio sidecar (cover.jpg mtime or add txt) does NOT mark stale.
@@ -363,8 +399,13 @@ func TestStaleValidationBlockedAndSidecarIndependence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkset after sidecar change: %v", err)
 	}
-	if viewAfterSidecar.CurrentRevision.ValidationState != ValidationValid || *viewAfterSidecar.CurrentRevision.Stale != false {
-		t.Fatalf("non-audio file change should NOT make revision stale, got state=%q stale=%v", viewAfterSidecar.CurrentRevision.ValidationState, viewAfterSidecar.CurrentRevision.Stale)
+	if viewAfterSidecar.CurrentRevision.ValidationState != ValidationValid ||
+		*viewAfterSidecar.CurrentRevision.Stale != false {
+		t.Fatalf(
+			"non-audio file change should NOT make revision stale, got state=%q stale=%v",
+			viewAfterSidecar.CurrentRevision.ValidationState,
+			viewAfterSidecar.CurrentRevision.Stale,
+		)
 	}
 
 	// 3. Modifying audio file (size/mtime) DOES mark stale.
@@ -376,8 +417,13 @@ func TestStaleValidationBlockedAndSidecarIndependence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkset after audio change: %v", err)
 	}
-	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale || *viewAfterAudio.CurrentRevision.Stale != true {
-		t.Fatalf("audio file change MUST make revision stale, got state=%q stale=%v", viewAfterAudio.CurrentRevision.ValidationState, viewAfterAudio.CurrentRevision.Stale)
+	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale ||
+		*viewAfterAudio.CurrentRevision.Stale != true {
+		t.Fatalf(
+			"audio file change MUST make revision stale, got state=%q stale=%v",
+			viewAfterAudio.CurrentRevision.ValidationState,
+			viewAfterAudio.CurrentRevision.Stale,
+		)
 	}
 }
 
@@ -396,7 +442,11 @@ func TestMissingRootRemainsMissingAndNotStaleUntilAudioAppears(t *testing.T) {
 	}
 	id := res.Workset.WorksetID
 
-	genRes, err := svc.StartGeneration(ctx, id, StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-missing-1"})
+	genRes, err := svc.StartGeneration(
+		ctx,
+		id,
+		StartGenerationRequest{ExpectedDraftVersion: 1, IdempotencyKey: "gen-missing-1"},
+	)
 	if err != nil {
 		t.Fatalf("StartGeneration: %v", err)
 	}
@@ -418,7 +468,11 @@ func TestMissingRootRemainsMissingAndNotStaleUntilAudioAppears(t *testing.T) {
 		t.Fatalf("expected blocked count > 0, got %d", view.CurrentRevision.BlockedCount)
 	}
 	if view.CurrentRevision.ValidationState != ValidationValid || *view.CurrentRevision.Stale != false {
-		t.Fatalf("missing root with unchanged inventory must not be stale, got state=%q stale=%v", view.CurrentRevision.ValidationState, view.CurrentRevision.Stale)
+		t.Fatalf(
+			"missing root with unchanged inventory must not be stale, got state=%q stale=%v",
+			view.CurrentRevision.ValidationState,
+			view.CurrentRevision.Stale,
+		)
 	}
 
 	// When audio is scanned/added under that root, it becomes stale.
@@ -427,7 +481,12 @@ func TestMissingRootRemainsMissingAndNotStaleUntilAudioAppears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkset after audio appears: %v", err)
 	}
-	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale || *viewAfterAudio.CurrentRevision.Stale != true {
-		t.Fatalf("after audio appears, revision should become stale, got state=%q stale=%v", viewAfterAudio.CurrentRevision.ValidationState, viewAfterAudio.CurrentRevision.Stale)
+	if viewAfterAudio.CurrentRevision.ValidationState != ValidationStale ||
+		*viewAfterAudio.CurrentRevision.Stale != true {
+		t.Fatalf(
+			"after audio appears, revision should become stale, got state=%q stale=%v",
+			viewAfterAudio.CurrentRevision.ValidationState,
+			viewAfterAudio.CurrentRevision.Stale,
+		)
 	}
 }

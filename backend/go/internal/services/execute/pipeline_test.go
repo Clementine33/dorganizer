@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,7 @@ import (
 )
 
 // getValidExecutablePath returns a valid executable path for testing
-// This bypasses validateToolsConfig by using an existing executable
+// This bypasses validateToolsConfig by using an existing executable.
 func getValidExecutablePath(t *testing.T) string {
 	t.Helper()
 	// Use the test executable itself as a valid path
@@ -27,7 +28,7 @@ func getValidExecutablePath(t *testing.T) string {
 	return execPath
 }
 
-// mockPipelineRunner is a mock tool runner for testing pipeline behavior
+// mockPipelineRunner is a mock tool runner for testing pipeline behavior.
 type mockPipelineRunner struct {
 	mu sync.Mutex
 
@@ -41,8 +42,8 @@ type mockPipelineRunner struct {
 	// Tracking
 	convertCalls []string // tracks source files for each convert call
 	deleteCalls  []string // tracks files deleted
-	convertCount int32
-	deleteCount  int32
+	convertCount atomic.Int32
+	deleteCount  atomic.Int32
 }
 
 func newMockPipelineRunner() *mockPipelineRunner {
@@ -58,7 +59,7 @@ func (m *mockPipelineRunner) Convert(src, dst string) error {
 	idx := len(m.convertCalls) - 1
 	m.mu.Unlock()
 
-	atomic.AddInt32(&m.convertCount, 1)
+	m.convertCount.Add(1)
 
 	if m.convertDelay > 0 {
 		time.Sleep(m.convertDelay)
@@ -86,12 +87,12 @@ func (m *mockPipelineRunner) Delete(path string, soft bool) error {
 	// Check for per-path delete failure
 	if err, ok := m.deleteFailures[path]; ok {
 		m.mu.Unlock()
-		atomic.AddInt32(&m.deleteCount, 1)
+		m.deleteCount.Add(1)
 		return err
 	}
 	m.mu.Unlock()
 
-	atomic.AddInt32(&m.deleteCount, 1)
+	m.deleteCount.Add(1)
 	return os.Remove(path)
 }
 
@@ -125,10 +126,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	tmp := t.TempDir()
 
 	// Keep enough tail items beyond worker count so fail-fast can be observed.
-	numFiles := maxCPUWorkers() + 8
-	if numFiles < 8 {
-		numFiles = 8
-	}
+	numFiles := max(maxCPUWorkers()+8, 8)
 
 	var files []string
 	for i := 0; i < numFiles; i++ {
@@ -189,13 +187,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	midpoint := len(files) / 2
 	unprocessedTail := false
 	for i := midpoint; i < len(files); i++ {
-		found := false
-		for _, call := range convertCalls {
-			if call == files[i] {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(convertCalls, files[i])
 		if !found {
 			unprocessedTail = true
 			break
@@ -238,7 +230,7 @@ func TestExecutePlan_FailFast_StopsFeedingTasks(t *testing.T) {
 	// Create many test files (20) to observe fail-fast behavior clearly
 	const numFiles = 20
 	var files []string
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		file := filepath.Join(tmp, fmt.Sprintf("track%d.wav", i))
 		if err := os.WriteFile(file, []byte("audio"), 0644); err != nil {
 			t.Fatal(err)
@@ -295,13 +287,7 @@ func TestExecutePlan_FailFast_StopsFeedingTasks(t *testing.T) {
 	midpoint := numFiles / 2
 	unprocessedTail := false
 	for i := midpoint; i < numFiles; i++ {
-		found := false
-		for _, call := range convertCalls {
-			if call == files[i] {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(convertCalls, files[i])
 		if !found {
 			unprocessedTail = true
 			break
@@ -463,10 +449,7 @@ func TestExecutePlan_Overlap_PartialSuccessThenFail(t *testing.T) {
 	tmp := t.TempDir()
 
 	// Keep enough tail items beyond worker count to observe fail-fast stopping point.
-	numFiles := maxCPUWorkers() + 8
-	if numFiles < 10 {
-		numFiles = 10
-	}
+	numFiles := max(maxCPUWorkers()+8, 10)
 	var files []string
 	for i := 0; i < numFiles; i++ {
 		file := filepath.Join(tmp, fmt.Sprintf("track%d.wav", i))
@@ -520,13 +503,7 @@ func TestExecutePlan_Overlap_PartialSuccessThenFail(t *testing.T) {
 	midpoint := numFiles / 2
 	unprocessedTail := false
 	for i := midpoint; i < numFiles; i++ {
-		found := false
-		for _, call := range convertCalls {
-			if call == files[i] {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(convertCalls, files[i])
 		if !found {
 			unprocessedTail = true
 			break
@@ -666,7 +643,7 @@ func TestExecutePlan_FailedConvertNotCommitted(t *testing.T) {
 
 	// Create 3 files
 	var files []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		file := filepath.Join(tmp, fmt.Sprintf("file%d.wav", i))
 		if err := os.WriteFile(file, []byte("audio"), 0644); err != nil {
 			t.Fatal(err)
@@ -728,7 +705,7 @@ func TestExecutePlan_FailedConvertNotCommitted(t *testing.T) {
 	}
 
 	// No source deletions should happen on failed convert batch.
-	if count := atomic.LoadInt32(&mockRunner.deleteCount); count != 0 {
+	if count := mockRunner.deleteCount.Load(); count != 0 {
 		t.Errorf("expected 0 source deletes on failed convert batch, got %d", count)
 	}
 }

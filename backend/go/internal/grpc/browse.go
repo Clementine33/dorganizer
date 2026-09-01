@@ -10,14 +10,15 @@ import (
 	"strings"
 
 	"facette.io/natsort"
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
 
 // ListFolders returns immediate subdirectories of parentPath.
 func (s *OnseiServer) ListFolders(_ context.Context, req *pb.ListFoldersRequest) (*pb.ListFoldersResponse, error) {
-	parentPath := req.ParentPath
+	parentPath := req.GetParentPath()
 	if parentPath == "" {
 		// Return drive roots on Windows / "/" on Unix.
 		drives, err := listDriveRoots()
@@ -57,7 +58,7 @@ func (s *OnseiServer) ListFolders(_ context.Context, req *pb.ListFoldersRequest)
 
 // ListFiles returns audio files in folderPath.
 func (s *OnseiServer) ListFiles(_ context.Context, req *pb.ListFilesRequest) (*pb.ListFilesResponse, error) {
-	folderPath := req.FolderPath
+	folderPath := req.GetFolderPath()
 	if folderPath == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "folder_path is required")
 	}

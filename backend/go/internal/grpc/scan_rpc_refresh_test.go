@@ -4,12 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TestRefreshFolders_ValidationErrors tests request-level validation.
@@ -130,13 +132,7 @@ func TestRefreshFolders_StructuredPerFolderResult(t *testing.T) {
 	// Verify successful_folders contains the valid folder
 	successFolders := resp.GetSuccessfulFolders()
 	validFolderNorm := filepath.ToSlash(filepath.Clean(validFolder))
-	foundValid := false
-	for _, sf := range successFolders {
-		if sf == validFolderNorm {
-			foundValid = true
-			break
-		}
-	}
+	foundValid := slices.Contains(successFolders, validFolderNorm)
 	if !foundValid {
 		t.Errorf("expected successful_folders to contain %q, got %v", validFolderNorm, successFolders)
 	}
@@ -334,7 +330,11 @@ func TestRefreshFolders_AllFoldersSucceed(t *testing.T) {
 
 	// Verify all folders in successful_folders
 	if len(resp.GetSuccessfulFolders()) != 2 {
-		t.Errorf("expected 2 successful folders, got %d: %v", len(resp.GetSuccessfulFolders()), resp.GetSuccessfulFolders())
+		t.Errorf(
+			"expected 2 successful folders, got %d: %v",
+			len(resp.GetSuccessfulFolders()),
+			resp.GetSuccessfulFolders(),
+		)
 	}
 
 	// Verify no errors
@@ -378,7 +378,11 @@ func TestRefreshFolders_AllFoldersFail(t *testing.T) {
 
 	// Verify empty successful_folders
 	if len(resp.GetSuccessfulFolders()) != 0 {
-		t.Errorf("expected 0 successful folders, got %d: %v", len(resp.GetSuccessfulFolders()), resp.GetSuccessfulFolders())
+		t.Errorf(
+			"expected 0 successful folders, got %d: %v",
+			len(resp.GetSuccessfulFolders()),
+			resp.GetSuccessfulFolders(),
+		)
 	}
 
 	// Verify errors for each folder

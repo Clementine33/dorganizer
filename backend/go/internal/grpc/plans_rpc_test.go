@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
 func TestListPlans_EmptyRootPath_ReturnsInvalidArgument(t *testing.T) {
@@ -119,33 +120,33 @@ func TestListPlans_ValidRootPathWithData_ReturnsPlansSortedByCreatedAtDesc(t *te
 	}
 
 	// Verify response
-	if len(resp.Plans) != 3 {
-		t.Errorf("expected 3 plans, got %d", len(resp.Plans))
+	if len(resp.GetPlans()) != 3 {
+		t.Errorf("expected 3 plans, got %d", len(resp.GetPlans()))
 	}
 
 	// Verify plans are sorted by created_at DESC (newest first)
-	if len(resp.Plans) >= 1 {
-		if resp.Plans[0].PlanId != "plan-003" {
-			t.Errorf("expected first plan to be plan-003 (newest), got %s", resp.Plans[0].PlanId)
+	if len(resp.GetPlans()) >= 1 {
+		if resp.GetPlans()[0].GetPlanId() != "plan-003" {
+			t.Errorf("expected first plan to be plan-003 (newest), got %s", resp.GetPlans()[0].GetPlanId())
 		}
 	}
-	if len(resp.Plans) >= 2 {
-		if resp.Plans[1].PlanId != "plan-002" {
-			t.Errorf("expected second plan to be plan-002, got %s", resp.Plans[1].PlanId)
+	if len(resp.GetPlans()) >= 2 {
+		if resp.GetPlans()[1].GetPlanId() != "plan-002" {
+			t.Errorf("expected second plan to be plan-002, got %s", resp.GetPlans()[1].GetPlanId())
 		}
 	}
-	if len(resp.Plans) >= 3 {
-		if resp.Plans[2].PlanId != "plan-001" {
-			t.Errorf("expected third plan to be plan-001 (oldest), got %s", resp.Plans[2].PlanId)
+	if len(resp.GetPlans()) >= 3 {
+		if resp.GetPlans()[2].GetPlanId() != "plan-001" {
+			t.Errorf("expected third plan to be plan-001 (oldest), got %s", resp.GetPlans()[2].GetPlanId())
 		}
 	}
 
 	// Verify fields are populated correctly
-	for _, p := range resp.Plans {
-		if p.RootPath != rootPathPosix {
-			t.Errorf("expected root_path %s, got %s", rootPathPosix, p.RootPath)
+	for _, p := range resp.GetPlans() {
+		if p.GetRootPath() != rootPathPosix {
+			t.Errorf("expected root_path %s, got %s", rootPathPosix, p.GetRootPath())
 		}
-		if p.CreatedAt == "" {
+		if p.GetCreatedAt() == "" {
 			t.Error("created_at should not be empty")
 		}
 	}
@@ -180,8 +181,8 @@ func TestListPlans_ValidRootPathNoData_ReturnsEmptyList(t *testing.T) {
 	}
 
 	// Verify empty list is returned
-	if len(resp.Plans) != 0 {
-		t.Errorf("expected 0 plans, got %d", len(resp.Plans))
+	if len(resp.GetPlans()) != 0 {
+		t.Errorf("expected 0 plans, got %d", len(resp.GetPlans()))
 	}
 }
 
@@ -236,7 +237,7 @@ func TestListPlans_WithLimit_ReturnsCorrectNumberOfPlans(t *testing.T) {
 	}
 
 	// Verify only 2 plans are returned
-	if len(resp.Plans) != 2 {
-		t.Errorf("expected 2 plans, got %d", len(resp.Plans))
+	if len(resp.GetPlans()) != 2 {
+		t.Errorf("expected 2 plans, got %d", len(resp.GetPlans()))
 	}
 }

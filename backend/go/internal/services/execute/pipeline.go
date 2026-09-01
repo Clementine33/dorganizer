@@ -91,7 +91,7 @@ func getFolderForItem(rootPath string, item PlanItem) string {
 // Implements Task 4 requirements:
 // - Creates unique temp file in dst directory
 // - io.Copy + Sync + explicit Close error check
-// - os.Rename with Windows retry for ACCESS_DENIED/SHARING_VIOLATION
+// - os.Rename with Windows retry for ACCESS_DENIED/SHARING_VIOLATION.
 func (s *ExecuteService) commitReplace(scratchOut, dst string) error {
 	// Create unique temp file in same directory as dst
 	dstDir := filepath.Dir(dst)

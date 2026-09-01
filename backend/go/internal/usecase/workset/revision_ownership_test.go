@@ -41,7 +41,11 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 	}
 	id := res.Workset.WorksetID
 
-	if _, err := svc.SaveDraft(ctx, id, SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 1}); err != nil {
+	if _, err := svc.SaveDraft(
+		ctx,
+		id,
+		SaveDraftRequest{Workflow: planWorkflowFixture(), IfMatchVersion: 1},
+	); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 	view, _ := svc.GetWorkset(ctx, id)
@@ -49,7 +53,11 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 		t.Fatalf("version = %d, want 2", view.Version)
 	}
 
-	got, err := svc.StartGeneration(ctx, id, StartGenerationRequest{ExpectedDraftVersion: 2, IdempotencyKey: "own-gen-1"})
+	got, err := svc.StartGeneration(
+		ctx,
+		id,
+		StartGenerationRequest{ExpectedDraftVersion: 2, IdempotencyKey: "own-gen-1"},
+	)
 	if err != nil {
 		t.Fatalf("StartGeneration: %v", err)
 	}
@@ -109,7 +117,11 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 		t.Fatalf("GetRevision again: %v", err)
 	}
 	if len(again.ComponentRoots) != len(rev.ComponentRoots) {
-		t.Fatalf("ownership table length changed on re-read: %d vs %d", len(again.ComponentRoots), len(rev.ComponentRoots))
+		t.Fatalf(
+			"ownership table length changed on re-read: %d vs %d",
+			len(again.ComponentRoots),
+			len(rev.ComponentRoots),
+		)
 	}
 	for i := range rev.ComponentRoots {
 		if again.ComponentRoots[i] != rev.ComponentRoots[i] {

@@ -32,7 +32,7 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 // newHTTPTestRepository opens a repository on a fresh temp DB file.
 func newHTTPTestRepository(t *testing.T) *sqlite.Repository {
 	t.Helper()
-	tmpFile, err := os.CreateTemp("", "onsei-httpapi-*.db")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "onsei-httpapi-*.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,13 @@ func newHTTPTestRepository(t *testing.T) *sqlite.Repository {
 }
 
 // doRequest performs a request against the engine and returns the recorder.
-func doRequest(t *testing.T, engine http.Handler, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+func doRequest(
+	t *testing.T,
+	engine http.Handler,
+	method, path string,
+	body any,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
 	if body != nil {

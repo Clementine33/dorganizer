@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -51,15 +52,37 @@ type WorkflowRunResult struct {
 // roots concurrently (results collected in request order), and returns
 // persisted-snapshot records without touching the database. Callers persist
 // via their own transaction boundary.
-func RunWorkflow(ctx context.Context, repo *sqlite.Repository, configDir string, wf *Workflow, roots []string, opts RunOptions) (*WorkflowRunResult, error) {
+func RunWorkflow(
+	ctx context.Context,
+	repo *sqlite.Repository,
+	configDir string,
+	wf *Workflow,
+	roots []string,
+	opts RunOptions,
+) (*WorkflowRunResult, error) {
 	if wf.SchemaVersion != WorkflowSchemaVersion {
-		return nil, NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW_SCHEMA", fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion), nil)
+		return nil, NewError(
+			ErrKindInvalidArgument,
+			"INVALID_WORKFLOW_SCHEMA",
+			fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion),
+			nil,
+		)
 	}
 	if len(wf.Steps) != 1 || wf.Steps[0].StepType != StepTypeReconcileAudio {
-		return nil, NewError(ErrKindInvalidArgument, "UNSUPPORTED_STEP", "schema v1 supports only the reconcile_audio_outputs step", nil)
+		return nil, NewError(
+			ErrKindInvalidArgument,
+			"UNSUPPORTED_STEP",
+			"schema v1 supports only the reconcile_audio_outputs step",
+			nil,
+		)
 	}
 	if len(roots) == 0 {
-		return nil, NewError(ErrKindInvalidArgument, "SCOPE_REQUIRED", "workflow requires at least one planning root", nil)
+		return nil, NewError(
+			ErrKindInvalidArgument,
+			"SCOPE_REQUIRED",
+			"workflow requires at least one planning root",
+			nil,
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -152,7 +175,12 @@ func RunWorkflow(ctx context.Context, repo *sqlite.Repository, configDir string,
 			return nil, ctx.Err()
 		}
 		if o.err != nil {
-			return nil, NewError(ErrKindInternal, "COLLECT_FAILED", fmt.Sprintf("analyze planning root %s: %v", o.root, o.err), o.err)
+			return nil, NewError(
+				ErrKindInternal,
+				"COLLECT_FAILED",
+				fmt.Sprintf("analyze planning root %s: %v", o.root, o.err),
+				o.err,
+			)
 		}
 		rootStatus := "ok"
 		rootErrorCode := ""
@@ -250,11 +278,13 @@ func rootExistsInInventory(repo *sqlite.Repository, root string) (bool, error) {
 
 func joinRoots(roots []string) string {
 	out := ""
+	var outSb253 strings.Builder
 	for i, r := range roots {
 		if i > 0 {
-			out += " + "
+			outSb253.WriteString(" + ")
 		}
-		out += r
+		outSb253.WriteString(r)
 	}
+	out += outSb253.String()
 	return out
 }

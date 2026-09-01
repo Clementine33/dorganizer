@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -117,7 +118,18 @@ func scanWorkset(scanner interface{ Scan(...any) error }) (*Workset, error) {
 	var w Workset
 	var libraryID, currentRevisionID, creationKey sql.NullString
 	var createdAt, updatedAt string
-	if err := scanner.Scan(&w.ID, &w.Title, &libraryID, &w.RootPath, &w.RootPathKey, &w.Version, &currentRevisionID, &creationKey, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(
+		&w.ID,
+		&w.Title,
+		&libraryID,
+		&w.RootPath,
+		&w.RootPathKey,
+		&w.Version,
+		&currentRevisionID,
+		&creationKey,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
 		return nil, err
 	}
 	w.LibraryID = libraryID.String
@@ -226,7 +238,13 @@ func InsertWorksetTx(tx *sql.Tx, w *Workset, members []WorksetMember, draft Work
 // libraryID is non-empty only worksets owned by that library are returned.
 // The result set has at most limit rows; the caller derives the next cursor
 // from the last row.
-func (r *Repository) ListWorksets(cursorUpdatedAt string, cursorID string, limit int, libraryID string, includeOrphaned bool) ([]*Workset, error) {
+func (r *Repository) ListWorksets(
+	cursorUpdatedAt string,
+	cursorID string,
+	limit int,
+	libraryID string,
+	includeOrphaned bool,
+) ([]*Workset, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -240,7 +258,10 @@ func (r *Repository) ListWorksets(cursorUpdatedAt string, cursorID string, limit
 		conds = append(conds, "library_id IS NOT NULL")
 	}
 	if cursorUpdatedAt != "" || cursorID != "" {
-		conds = append(conds, `(julianday(updated_at) < julianday(?) OR (julianday(updated_at) = julianday(?) AND id < ?))`)
+		conds = append(
+			conds,
+			`(julianday(updated_at) < julianday(?) OR (julianday(updated_at) = julianday(?) AND id < ?))`,
+		)
 		args = append(args, cursorUpdatedAt, cursorUpdatedAt, cursorID)
 	}
 	if len(conds) > 0 {
@@ -268,9 +289,11 @@ func (r *Repository) ListWorksets(cursorUpdatedAt string, cursorID string, limit
 
 func joinConds(conds []string) string {
 	out := conds[0]
+	var outSb271 strings.Builder
 	for _, c := range conds[1:] {
-		out += " AND " + c
+		outSb271.WriteString(" AND " + c)
 	}
+	out += outSb271.String()
 	return out
 }
 
@@ -288,7 +311,14 @@ func (r *Repository) ListWorksetMembers(worksetID string) ([]*WorksetMember, err
 	var out []*WorksetMember
 	for rows.Next() {
 		var m WorksetMember
-		if err := rows.Scan(&m.WorksetID, &m.MemberIndex, &m.RelPath, &m.FolderID, &m.FolderPath, &m.FolderName); err != nil {
+		if err := rows.Scan(
+			&m.WorksetID,
+			&m.MemberIndex,
+			&m.RelPath,
+			&m.FolderID,
+			&m.FolderPath,
+			&m.FolderName,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, &m)
@@ -324,7 +354,13 @@ func (r *Repository) UpdateWorksetTitle(id, title string, expectedVersion int, n
 // UpdateWorksetDraft replaces the full workflow draft and bumps the aggregate
 // version in one transaction. A draft save must never be visible without its
 // version bump, so the upsert and the guarded update share one commit.
-func (r *Repository) UpdateWorksetDraft(id string, schemaVersion int, stepsJSON, draftHash string, expectedVersion int, now time.Time) error {
+func (r *Repository) UpdateWorksetDraft(
+	id string,
+	schemaVersion int,
+	stepsJSON, draftHash string,
+	expectedVersion int,
+	now time.Time,
+) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -450,7 +486,15 @@ func (r *Repository) ListWorksetRevisions(worksetID string, beforeIndex int, lim
 	for rows.Next() {
 		var rev WorksetRevision
 		var createdAt string
-		if err := rows.Scan(&rev.PlanID, &rev.WorksetID, &rev.RevisionIndex, &rev.DraftHash, &rev.MemberHash, &rev.WorksetsVersion, &createdAt); err != nil {
+		if err := rows.Scan(
+			&rev.PlanID,
+			&rev.WorksetID,
+			&rev.RevisionIndex,
+			&rev.DraftHash,
+			&rev.MemberHash,
+			&rev.WorksetsVersion,
+			&createdAt,
+		); err != nil {
 			return nil, err
 		}
 		rev.CreatedAt = parseTimestamp(createdAt)
@@ -487,12 +531,23 @@ func (r *Repository) PersistWorksetRevision(genID, worksetID string, now time.Ti
 	}
 	defer tx.Rollback()
 
-	if err := InsertWorkflowPlanTx(tx, p.PlanID, "workflow", p.RootPath, p.SnapshotToken, p.LibraryID, p.Steps, p.Roots, p.Components); err != nil {
+	if err := InsertWorkflowPlanTx(
+		tx,
+		p.PlanID,
+		"workflow",
+		p.RootPath,
+		p.SnapshotToken,
+		p.LibraryID,
+		p.Steps,
+		p.Roots,
+		p.Components,
+	); err != nil {
 		return err
 	}
 
 	var next int
-	if err := tx.QueryRow("SELECT COALESCE(MAX(revision_index), 0) + 1 FROM workset_revisions WHERE workset_id = ?", worksetID).Scan(&next); err != nil {
+	if err := tx.QueryRow("SELECT COALESCE(MAX(revision_index), 0) + 1 FROM workset_revisions WHERE workset_id = ?", worksetID).
+		Scan(&next); err != nil {
 		return fmt.Errorf("next revision index: %w", err)
 	}
 	if _, err := tx.Exec(`
@@ -531,9 +586,27 @@ func scanGeneration(scanner interface{ Scan(...any) error }) (*PlanGeneration, e
 	var startedAt, finishedAt, revisionID sql.NullString
 	var cancelRequested int
 	var createdAt, updatedAt string
-	if err := scanner.Scan(&g.GenerationID, &g.WorksetID, &g.Status, &g.IdempotencyKey, &g.RequestHash, &g.ExpectedDraftVersion, &g.RequestJSON,
-		&g.TotalRoots, &g.CompletedRoots, &g.CurrentRoot, &g.ErrorCount, &cancelRequested, &revisionID, &g.ErrorCode, &g.ErrorMessage,
-		&startedAt, &finishedAt, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(
+		&g.GenerationID,
+		&g.WorksetID,
+		&g.Status,
+		&g.IdempotencyKey,
+		&g.RequestHash,
+		&g.ExpectedDraftVersion,
+		&g.RequestJSON,
+		&g.TotalRoots,
+		&g.CompletedRoots,
+		&g.CurrentRoot,
+		&g.ErrorCount,
+		&cancelRequested,
+		&revisionID,
+		&g.ErrorCode,
+		&g.ErrorMessage,
+		&startedAt,
+		&finishedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
 		return nil, err
 	}
 	g.CancelRequested = cancelRequested != 0
@@ -573,7 +646,11 @@ func (r *Repository) CreateGeneration(g *PlanGeneration) error {
 // GetGenerationByWorksetKey returns the generation owned by a workset and an
 // idempotency key. Returns nil when no row matches.
 func (r *Repository) GetGenerationByWorksetKey(worksetID, key string) (*PlanGeneration, error) {
-	row := r.db.QueryRow(`SELECT `+generationColumns+` FROM plan_generations WHERE workset_id = ? AND idempotency_key = ?`, worksetID, key)
+	row := r.db.QueryRow(
+		`SELECT `+generationColumns+` FROM plan_generations WHERE workset_id = ? AND idempotency_key = ?`,
+		worksetID,
+		key,
+	)
 	g, err := scanGeneration(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -686,7 +763,11 @@ func (r *Repository) NextQueuedGeneration() (*PlanGeneration, error) {
 }
 
 // UpdateGenerationProgress records root-level progress of a running session.
-func (r *Repository) UpdateGenerationProgress(generationID string, completedRoots, errorCount int, currentRoot string) error {
+func (r *Repository) UpdateGenerationProgress(
+	generationID string,
+	completedRoots, errorCount int,
+	currentRoot string,
+) error {
 	_, err := r.db.Exec(`
 		UPDATE plan_generations SET completed_roots = ?, error_count = ?, current_root = ?, updated_at = ?
 		WHERE generation_id = ?

@@ -40,7 +40,10 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 	if planKind == "workflow" || schemaVersion > 0 {
 		_ = sink.Emit(newEvent("error", "execute", "EXECUTE_NOT_SUPPORTED",
 			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID)))
-		s.persistExecuteErrorGlobal("EXECUTE_NOT_SUPPORTED", fmt.Sprintf("workflow plan execution is not implemented: %s", req.PlanID))
+		s.persistExecuteErrorGlobal(
+			"EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan execution is not implemented: %s", req.PlanID),
+		)
 		return Result{}, NewError(ErrKindFailedPrecondition, "EXECUTE_NOT_SUPPORTED",
 			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID), nil)
 	}
@@ -102,7 +105,10 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 	// The lower-level service reports only item-level facts; the usecase owns folder outcome.
 	if execPlan.RootPath != "" {
 		for i, item := range execPlan.Items {
-			folder := attributeFolderPath(slashRootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
+			folder := attributeFolderPath(
+				slashRootPath,
+				firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath),
+			)
 			if folder != "" {
 				handler.lastItemIndexByFolder[folder] = i
 			}
@@ -125,14 +131,14 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			s.persistExecuteErrorGlobal("CONFIG_INVALID", msg)
 		}
 		return Result{
-				PlanID:       planID,
-				RootPath:     slashRootPath,
-				Status:       "failed",
-				ErrorCode:    firstNonEmpty(getExecResultErrorCode(result), "EXECUTION_FAILED"),
-				ErrorMessage: firstNonEmpty(getExecResultErrorMsg(result), execErr.Error()),
-			}, NewError(ErrKindFailedPrecondition,
-				firstNonEmpty(getExecResultErrorCode(result), "EXECUTE_FAILED"),
-				fmt.Sprintf("execute plan failed: %v", execErr), execErr)
+			PlanID:       planID,
+			RootPath:     slashRootPath,
+			Status:       "failed",
+			ErrorCode:    firstNonEmpty(getExecResultErrorCode(result), "EXECUTION_FAILED"),
+			ErrorMessage: firstNonEmpty(getExecResultErrorMsg(result), execErr.Error()),
+		}, NewError(ErrKindFailedPrecondition,
+			firstNonEmpty(getExecResultErrorCode(result), "EXECUTE_FAILED"),
+			fmt.Sprintf("execute plan failed: %v", execErr), execErr)
 	}
 
 	// 9. Usecase-owned outcome decision: if all folders failed, treat as overall failure.
@@ -145,13 +151,13 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			_ = sink.Emit(newEvent("error", "execute", "EXECUTION_FAILED",
 				"all folders failed"))
 			return Result{
-					PlanID:       planID,
-					RootPath:     slashRootPath,
-					Status:       "failed",
-					ErrorCode:    "EXECUTION_FAILED",
-					ErrorMessage: "all folders failed",
-				}, NewError(ErrKindFailedPrecondition, "EXECUTION_FAILED",
-					"all folders failed", nil)
+				PlanID:       planID,
+				RootPath:     slashRootPath,
+				Status:       "failed",
+				ErrorCode:    "EXECUTION_FAILED",
+				ErrorMessage: "all folders failed",
+			}, NewError(ErrKindFailedPrecondition, "EXECUTION_FAILED",
+				"all folders failed", nil)
 		}
 	}
 

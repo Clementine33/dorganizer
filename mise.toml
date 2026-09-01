@@ -1,5 +1,6 @@
 [tools]
 node = "26"
 go = "1.25.0"
+golangci-lint = "2.13.2"
 pnpm = "11.22.0"
 task = "3.53.1"

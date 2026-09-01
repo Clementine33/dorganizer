@@ -22,7 +22,7 @@ func rjEntry(rel string, size int64, bitrate int64) AudioEntry {
 func rjEntries(bitrateOverride map[string]int64) []AudioEntry {
 	entries := []AudioEntry{}
 	for _, partition := range []string{"SEあり", "SEなし"} {
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			file := num2(i)
 			wav := rjEntry(partition+"/wav/"+file+".wav", 200000000, 0)
 			mp3 := rjEntry(partition+"/mp3/"+file+".mp3", 20000000, 320000)
@@ -62,7 +62,9 @@ func wavMp3Profile() Policy {
 
 func mp3OnlyProfile() Policy {
 	p := wavMp3Profile()
-	mp3 := DesiredProfile{Encoded: &AudioOutputSpec{Codec: CodecMp3, Quality: &Quality{Kind: QualityBitrate, Bitrate: 320}}}
+	mp3 := DesiredProfile{
+		Encoded: &AudioOutputSpec{Codec: CodecMp3, Quality: &Quality{Kind: QualityBitrate, Bitrate: 320}},
+	}
 	p.Matched = mp3
 	p.Unmatched = mp3
 	return p
@@ -189,7 +191,11 @@ func TestReconcile_RebuildAll_EncodedLane(t *testing.T) {
 		t.Fatal("missing component partition")
 	}
 	if unmatched.Status != StatusOK || len(unmatched.Operations) != 6 {
-		t.Fatalf("unmatched component should stay satisfied-delete-only, got status=%s ops=%d", unmatched.Status, len(unmatched.Operations))
+		t.Fatalf(
+			"unmatched component should stay satisfied-delete-only, got status=%s ops=%d",
+			unmatched.Status,
+			len(unmatched.Operations),
+		)
 	}
 	if matched.Status != StatusOK {
 		t.Fatalf("matched component blocked: %s", matched.Message)
@@ -358,7 +364,11 @@ func TestReconcile_UnknownBitrate(t *testing.T) {
 		t.Fatalf("expected matched and unmatched components, got %d", len(res.Components))
 	}
 	if matched.Status != StatusBlocked || matched.ReasonCode != ReasonQualityUnknown {
-		t.Fatalf("unknown bitrate without source should block with QUALITY_UNKNOWN, got %s %s", matched.Status, matched.ReasonCode)
+		t.Fatalf(
+			"unknown bitrate without source should block with QUALITY_UNKNOWN, got %s %s",
+			matched.Status,
+			matched.ReasonCode,
+		)
 	}
 	if len(matched.Operations) != 0 {
 		t.Fatalf("blocked matched component must have zero operations, got %d", len(matched.Operations))
@@ -631,7 +641,13 @@ func TestReconcile_LosslessToFlacDeletesOnlyNonTargetLossless(t *testing.T) {
 		}
 	}
 	if !flacKept || !wavRemove || !mp3Rebuild {
-		t.Fatalf("missing flac keep=%v wav remove=%v mp3 rebuild=%v: %+v", flacKept, wavRemove, mp3Rebuild, res.Components[0].Operations)
+		t.Fatalf(
+			"missing flac keep=%v wav remove=%v mp3 rebuild=%v: %+v",
+			flacKept,
+			wavRemove,
+			mp3Rebuild,
+			res.Components[0].Operations,
+		)
 	}
 }
 

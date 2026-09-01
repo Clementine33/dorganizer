@@ -139,7 +139,11 @@ func TestPatchLibraryRootInvalidatesDerivedFoldersAndPlanAssociation(t *testing.
 		t.Fatalf("UpdateLibraryScanState failed: %v", err)
 	}
 	if err := repo.CreatePlan(&sqlite.Plan{
-		PlanID: "plan-old-root", RootPath: "/music/album", PlanType: "single_delete", Status: "ready", CreatedAt: time.Now(),
+		PlanID:    "plan-old-root",
+		RootPath:  "/music/album",
+		PlanType:  "single_delete",
+		Status:    "ready",
+		CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("CreatePlan failed: %v", err)
 	}

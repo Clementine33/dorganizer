@@ -27,10 +27,16 @@ func TestExecuteEventHandler_ItemCompletion_FolderComplete(t *testing.T) {
 	handler.lastItemIndexByFolder[folderANorm] = 1
 
 	// Item 0 succeeds — not yet the last item
-	handler.OnItemCompleted(0, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file0.mp3"))})
+	handler.OnItemCompleted(
+		0,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file0.mp3"))},
+	)
 
 	// Item 1 succeeds — last item → folder complete
-	handler.OnItemCompleted(1, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file1.mp3"))})
+	handler.OnItemCompleted(
+		1,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "file1.mp3"))},
+	)
 
 	sink := handler.sink.(*testEventSink)
 	completed := folderEvents(sink.events, "folder_completed")
@@ -62,9 +68,16 @@ func TestExecuteEventHandler_ItemCompletion_FolderFailed(t *testing.T) {
 	handler.lastItemIndexByFolder[folderBNorm] = 0
 
 	// Item 0 precondition fails
-	handler.OnPreconditionFailed(0, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))}, sentinelError{msg: "stale"})
+	handler.OnPreconditionFailed(
+		0,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))},
+		sentinelError{msg: "stale"},
+	)
 	// Item 0 completes
-	handler.OnItemCompleted(0, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))})
+	handler.OnItemCompleted(
+		0,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "file.mp3"))},
+	)
 
 	sink := handler.sink.(*testEventSink)
 	completed := folderEvents(sink.events, "folder_completed")
@@ -99,11 +112,21 @@ func TestExecuteEventHandler_ItemCompletion_CrossFolderOrdering(t *testing.T) {
 	handler.lastItemIndexByFolder[folderBNorm] = 1
 
 	// Item 0 (AlbumA) succeeds → triggers folder_completed for AlbumA
-	handler.OnItemCompleted(0, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "a.mp3"))})
+	handler.OnItemCompleted(
+		0,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderA, "a.mp3"))},
+	)
 
 	// Item 1 (AlbumB) fails precondition → triggers error + folder_failed for AlbumB
-	handler.OnPreconditionFailed(1, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "b.mp3"))}, sentinelError{msg: "stale"})
-	handler.OnItemCompleted(1, exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "b.mp3"))})
+	handler.OnPreconditionFailed(
+		1,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "b.mp3"))},
+		sentinelError{msg: "stale"},
+	)
+	handler.OnItemCompleted(
+		1,
+		exesvc.PlanItem{Type: exesvc.ItemTypeDelete, SourcePath: filepath.ToSlash(filepath.Join(folderB, "b.mp3"))},
+	)
 
 	sink := handler.sink.(*testEventSink)
 

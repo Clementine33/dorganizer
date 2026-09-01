@@ -6,13 +6,21 @@
 - `scripts/dev-web.mjs` boots backend + Vite together (`ONSEI_DATA_DIR` → `<repo>/.dev_data`).
 - Flutter app (`frontend/flutter_app`) is legacy, planned for removal — don't invest.
 
+## Go module structure & engineering rules
+- **Core goal**: Low coupling across modules, high cohesion within each file. Each file has one clear responsibility.
+- **Service decomposition**: `service.go` holds only types, constructors, and DI wiring (≤80 lines); use cases split into separate files named by business verb (e.g., `run.go`, `persist.go`, `load_plan.go`).
+- **No semantic-less files**: Never create `helpers.go`, `util.go`, or `common.go` dumps.
+- **Split heuristics**: Split when a file hosts ≥2 responsibilities that change at different frequencies, or when a struct + method cluster exceeds single-screen readability. Never split purely to satisfy line limits.
+- **Line limits (guidelines)**: Functions ≤100 lines; files ≤400 lines (comfortable) / >600 (should split).
+- **Linter & CI gate**: `task lint:go` runs `golangci-lint` (based on maratori config, in `backend/go/.golangci.yml`). Gated in CI (`ci:quality`). Mechanical fixes: `task lint:go:fix`.
+
 ## Versions: mise is the single source
 - node/go/pnpm/task are pinned in `mise.toml`; CI provisions from the same file via `jdx/mise-action`. Bump versions in `mise.toml` only — `package.json` intentionally has no `packageManager` (pnpm's self-download once corrupted the store).
 - Keep `go.mod`'s `go` directive aligned with the mise pin. After editing `mise.toml` run `mise install`; a fresh checkout needs `mise trust` once.
 
 ## Commands (verified)
-- Quality, same shape as CI: `task test:go` · `task typecheck:web` · `task test:web` · `task build:web` · `task ci:quality`
-- Backend (from root): `task -d backend/go test` · `test:e2e` · `proto` (regen Go stubs); focused test: `go test ./<pkg> -run <Test>`
+- Quality, same shape as CI: `task test:go` · `task lint:go` · `task typecheck:web` · `task test:web` · `task build:web` · `task ci:quality`
+- Backend (from root): `task -d backend/go test` · `task -d backend/go lint` · `test:e2e` · `proto` (regen Go stubs); focused test: `go test ./<pkg> -run <Test>`
 - Web (from `frontend/web`): `pnpm typecheck` · `pnpm test` · `pnpm build`; dev: `task dev:web`; e2e: `task e2e:web` (install Chromium once: `pnpm exec playwright install chromium`)
 
 ## Proto caveat

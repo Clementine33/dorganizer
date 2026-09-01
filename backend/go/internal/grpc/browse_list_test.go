@@ -24,8 +24,8 @@ func TestListFolders_NaturalSort(t *testing.T) {
 		t.Fatalf("ListFolders returned error: %v", err)
 	}
 
-	got := make([]string, 0, len(resp.Folders))
-	for _, abs := range resp.Folders {
+	got := make([]string, 0, len(resp.GetFolders()))
+	for _, abs := range resp.GetFolders() {
 		got = append(got, filepath.Base(abs))
 	}
 
@@ -77,8 +77,8 @@ func TestListFiles_DepthThenNaturalSortOnRelativePath(t *testing.T) {
 		t.Fatalf("ListFiles returned error: %v", err)
 	}
 
-	got := make([]string, 0, len(resp.Files))
-	for _, abs := range resp.Files {
+	got := make([]string, 0, len(resp.GetFiles()))
+	for _, abs := range resp.GetFiles() {
 		rel, err := filepath.Rel(root, abs)
 		if err != nil {
 			t.Fatalf("filepath.Rel(%q, %q): %v", root, abs, err)
@@ -167,40 +167,40 @@ func TestListFiles_ReturnsBitrateEntriesForMP3(t *testing.T) {
 	}
 
 	// Legacy files field must still be populated.
-	if len(resp.Files) != 2 {
-		t.Fatalf("expected 2 files, got %d: %v", len(resp.Files), resp.Files)
+	if len(resp.GetFiles()) != 2 {
+		t.Fatalf("expected 2 files, got %d: %v", len(resp.GetFiles()), resp.GetFiles())
 	}
 
 	// Entries must contain path + bitrate for each file, in the same order.
-	if len(resp.Entries) != len(resp.Files) {
-		t.Fatalf("entries length %d != files length %d", len(resp.Entries), len(resp.Files))
+	if len(resp.GetEntries()) != len(resp.GetFiles()) {
+		t.Fatalf("entries length %d != files length %d", len(resp.GetEntries()), len(resp.GetFiles()))
 	}
-	for i := range resp.Files {
-		if resp.Entries[i].Path != resp.Files[i] {
+	for i := range resp.GetFiles() {
+		if resp.GetEntries()[i].GetPath() != resp.GetFiles()[i] {
 			t.Errorf("entry[%d] path mismatch: entries=%q files=%q",
-				i, resp.Entries[i].Path, resp.Files[i])
+				i, resp.GetEntries()[i].GetPath(), resp.GetFiles()[i])
 		}
 	}
 
 	// Bitrate assertions (bps).
 	entryByRel := make(map[string]*pb.FileListEntry)
-	for _, e := range resp.Entries {
-		rel, err := filepath.Rel(root, e.Path)
+	for _, e := range resp.GetEntries() {
+		rel, err := filepath.Rel(root, e.GetPath())
 		if err != nil {
-			t.Fatalf("filepath.Rel(%q, %q): %v", root, e.Path, err)
+			t.Fatalf("filepath.Rel(%q, %q): %v", root, e.GetPath(), err)
 		}
 		entryByRel[filepath.ToSlash(rel)] = e
 	}
 
 	if e, ok := entryByRel["1.mp3"]; !ok {
 		t.Fatal("missing entry for 1.mp3")
-	} else if e.Bitrate != 128000 {
-		t.Fatalf("expected bitrate 128000 (bps) for 1.mp3, got %d", e.Bitrate)
+	} else if e.GetBitrate() != 128000 {
+		t.Fatalf("expected bitrate 128000 (bps) for 1.mp3, got %d", e.GetBitrate())
 	}
 
 	if e, ok := entryByRel["2.mp3"]; !ok {
 		t.Fatal("missing entry for 2.mp3")
-	} else if e.Bitrate != 256000 {
-		t.Fatalf("expected bitrate 256000 (bps) for 2.mp3, got %d", e.Bitrate)
+	} else if e.GetBitrate() != 256000 {
+		t.Fatalf("expected bitrate 256000 (bps) for 2.mp3, got %d", e.GetBitrate())
 	}
 }

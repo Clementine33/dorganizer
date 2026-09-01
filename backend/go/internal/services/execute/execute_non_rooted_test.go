@@ -196,8 +196,20 @@ func TestExecutePlan_BatchFailure_SkipsConvertedSourceDelete(t *testing.T) {
 	}
 
 	plan := &Plan{PlanID: "plan-batch-fail-barrier", Items: []PlanItem{
-		{Type: ItemTypeConvert, SourcePath: srcA, TargetPath: filepath.Join(tmp, "a.m4a"), PreconditionPath: srcA, PreconditionSize: 4},
-		{Type: ItemTypeConvert, SourcePath: srcB, TargetPath: filepath.Join(tmp, "b.m4a"), PreconditionPath: srcB, PreconditionSize: 4},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcA,
+			TargetPath:       filepath.Join(tmp, "a.m4a"),
+			PreconditionPath: srcA,
+			PreconditionSize: 4,
+		},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcB,
+			TargetPath:       filepath.Join(tmp, "b.m4a"),
+			PreconditionPath: srcB,
+			PreconditionSize: 4,
+		},
 	}}
 
 	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
@@ -238,8 +250,20 @@ func TestExecutePlan_BatchSuccess_ConvertedSourcesDeletedBeforeExplicitDelete(t 
 	}
 
 	plan := &Plan{PlanID: "plan-batch-success-barrier", Items: []PlanItem{
-		{Type: ItemTypeConvert, SourcePath: srcA, TargetPath: filepath.Join(tmp, "a.m4a"), PreconditionPath: srcA, PreconditionSize: 4},
-		{Type: ItemTypeConvert, SourcePath: srcB, TargetPath: filepath.Join(tmp, "b.m4a"), PreconditionPath: srcB, PreconditionSize: 4},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcA,
+			TargetPath:       filepath.Join(tmp, "a.m4a"),
+			PreconditionPath: srcA,
+			PreconditionSize: 4,
+		},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcB,
+			TargetPath:       filepath.Join(tmp, "b.m4a"),
+			PreconditionPath: srcB,
+			PreconditionSize: 4,
+		},
 		{Type: ItemTypeDelete, SourcePath: explicitDelete, PreconditionPath: explicitDelete, PreconditionSize: 4},
 	}}
 
@@ -333,8 +357,20 @@ func TestExecutePlan_DeleteBarrierFailure_RoutesToOnDeleteFailed(t *testing.T) {
 	}
 
 	plan := &Plan{PlanID: "plan-delete-barrier-fail", Items: []PlanItem{
-		{Type: ItemTypeConvert, SourcePath: srcA, TargetPath: filepath.Join(tmp, "a.m4a"), PreconditionPath: srcA, PreconditionSize: 4},
-		{Type: ItemTypeConvert, SourcePath: srcB, TargetPath: filepath.Join(tmp, "b.m4a"), PreconditionPath: srcB, PreconditionSize: 4},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcA,
+			TargetPath:       filepath.Join(tmp, "a.m4a"),
+			PreconditionPath: srcA,
+			PreconditionSize: 4,
+		},
+		{
+			Type:             ItemTypeConvert,
+			SourcePath:       srcB,
+			TargetPath:       filepath.Join(tmp, "b.m4a"),
+			PreconditionPath: srcB,
+			PreconditionSize: 4,
+		},
 	}}
 
 	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
@@ -362,10 +398,16 @@ func TestExecutePlan_DeleteBarrierFailure_RoutesToOnDeleteFailed(t *testing.T) {
 		t.Error("FAIL: OnDeleteFailed was NOT called - delete-barrier failure did not route correctly")
 	}
 	if len(stage3CommitFailedCalls) > 0 {
-		t.Errorf("FAIL: OnStage3CommitFailed was called (count=%d) - should NOT be called for delete failures", len(stage3CommitFailedCalls))
+		t.Errorf(
+			"FAIL: OnStage3CommitFailed was called (count=%d) - should NOT be called for delete failures",
+			len(stage3CommitFailedCalls),
+		)
 	}
 	if len(stage2EncodeFailedCalls) > 0 {
-		t.Errorf("FAIL: OnStage2EncodeFailed was called (count=%d) - should NOT be called for delete failures", len(stage2EncodeFailedCalls))
+		t.Errorf(
+			"FAIL: OnStage2EncodeFailed was called (count=%d) - should NOT be called for delete failures",
+			len(stage2EncodeFailedCalls),
+		)
 	}
 
 	// Verify OnDeleteFailed was called for item index 0 (srcA)
@@ -412,8 +454,20 @@ func TestExecutePlan_NonRootedDeleteBarrierFailure_StopsExecution(t *testing.T) 
 		PlanID:   "plan-nonrooted-delete-barrier-fail-stop",
 		RootPath: "", // Non-rooted mode
 		Items: []PlanItem{
-			{Type: ItemTypeConvert, SourcePath: srcA, TargetPath: filepath.Join(tmp, "a.m4a"), PreconditionPath: srcA, PreconditionSize: 4},
-			{Type: ItemTypeConvert, SourcePath: srcB, TargetPath: filepath.Join(tmp, "b.m4a"), PreconditionPath: srcB, PreconditionSize: 4},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       srcA,
+				TargetPath:       filepath.Join(tmp, "a.m4a"),
+				PreconditionPath: srcA,
+				PreconditionSize: 4,
+			},
+			{
+				Type:             ItemTypeConvert,
+				SourcePath:       srcB,
+				TargetPath:       filepath.Join(tmp, "b.m4a"),
+				PreconditionPath: srcB,
+				PreconditionSize: 4,
+			},
 		},
 	}
 
@@ -451,7 +505,9 @@ func TestExecutePlan_NonRootedDeleteBarrierFailure_StopsExecution(t *testing.T) 
 
 	// CRITICAL ASSERTION: srcB should also remain (execution stopped before processing it)
 	if _, statErr := os.Stat(srcB); os.IsNotExist(statErr) {
-		t.Error("FAIL: srcB should remain (non-rooted mode should stop execution after first delete barrier failure), but it was deleted")
+		t.Error(
+			"FAIL: srcB should remain (non-rooted mode should stop execution after first delete barrier failure), but it was deleted",
+		)
 	}
 
 	// Verify OnDeleteFailed was called for item index 0
@@ -463,7 +519,7 @@ func TestExecutePlan_NonRootedDeleteBarrierFailure_StopsExecution(t *testing.T) 
 	t.Logf("VERIFIED: Non-rooted delete barrier failure stopped execution - both sources preserved")
 }
 
-// TestConvertFailure_DoesNotDeleteSourceFile validates that conversion failure does NOT delete source file
+// TestConvertFailure_DoesNotDeleteSourceFile validates that conversion failure does NOT delete source file.
 func TestConvertFailure_DoesNotDeleteSourceFile(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")

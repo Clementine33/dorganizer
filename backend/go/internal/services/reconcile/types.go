@@ -70,6 +70,7 @@ type FileTuple struct {
 // GroupedFile is an AudioEntry with derived grouping facts.
 type GroupedFile struct {
 	AudioEntry
+
 	ParentPath string
 	Stem       string
 	Ext        string
@@ -131,10 +132,10 @@ type DesiredProfile struct {
 // user declares desired outputs and a set of literal content tags only;
 // conversion/cleanup mechanics are derived by the planner.
 type Policy struct {
-	SchemaVersion   int            `json:"schema_version"`
-	ClassifierTags  []string       `json:"classifier_tags,omitempty"`
-	Matched         DesiredProfile `json:"matched"`
-	Unmatched       DesiredProfile `json:"unmatched"`
+	SchemaVersion  int            `json:"schema_version"`
+	ClassifierTags []string       `json:"classifier_tags,omitempty"`
+	Matched        DesiredProfile `json:"matched"`
+	Unmatched      DesiredProfile `json:"unmatched"`
 }
 
 // Component states.

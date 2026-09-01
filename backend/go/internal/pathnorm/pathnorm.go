@@ -22,7 +22,8 @@ func IsWithinRoot(root, candidate string) bool {
 	}
 
 	normalizedRoot := NormalizeToPOSIX(root)
-	windowsPath := IsWindowsUNCPath(root) || isWindowsDrivePath(normalizedRoot) || strings.HasPrefix(normalizedRoot, "//?/")
+	windowsPath := IsWindowsUNCPath(root) || isWindowsDrivePath(normalizedRoot) ||
+		strings.HasPrefix(normalizedRoot, "//?/")
 	rootIsDrive := isWindowsDriveRoot(normalizedRoot)
 	normalizedRoot = path.Clean(normalizedRoot)
 	if rootIsDrive {
@@ -104,8 +105,8 @@ func CleanRootPath(p string) string {
 	if isWindowsDriveRoot(p) {
 		return p
 	}
-	if strings.HasPrefix(p, "//?") {
-		rest := strings.TrimPrefix(p, "//?")
+	if after, ok := strings.CutPrefix(p, "//?"); ok {
+		rest := after
 		if rest == "" {
 			return "//?"
 		}
@@ -115,8 +116,8 @@ func CleanRootPath(p string) string {
 		}
 		return "//?" + "/" + strings.TrimPrefix(cleaned, "/")
 	}
-	if strings.HasPrefix(p, "//") {
-		rest := strings.TrimPrefix(p, "//")
+	if after, ok := strings.CutPrefix(p, "//"); ok {
+		rest := after
 		if rest == "" {
 			return "//"
 		}

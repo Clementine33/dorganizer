@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -551,7 +552,18 @@ func TestExecute_ConvertPlanWithoutToolsConfig_Fails(t *testing.T) {
 
 	planID := "plan-convert-no-tools-001"
 	seedPlan(t, repo, planID, tmpDir, "single_convert")
-	seedConvertItem(t, repo, planID, 0, testFile, filepath.Join(tmpDir, "test.mp3"), testFile, 1, info.Size(), info.ModTime().Unix())
+	seedConvertItem(
+		t,
+		repo,
+		planID,
+		0,
+		testFile,
+		filepath.Join(tmpDir, "test.mp3"),
+		testFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -666,7 +678,11 @@ func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
 	// Create deterministic fake encoder
 	encoderPath := createFakeEncoder(t, tmpDir)
 
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(encoderPath, "\\", "\\\\") + `"}}`
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(
+		encoderPath,
+		"\\",
+		"\\\\",
+	) + `"}}`
 	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +702,18 @@ func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
 
 	planID := "plan-convert-soft-001"
 	seedPlan(t, repo, planID, tmpDir, "single_convert")
-	seedConvertItem(t, repo, planID, 0, testFile, filepath.Join(tmpDir, "test.mp3"), testFile, 1, info.Size(), info.ModTime().Unix())
+	seedConvertItem(
+		t,
+		repo,
+		planID,
+		0,
+		testFile,
+		filepath.Join(tmpDir, "test.mp3"),
+		testFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -717,7 +744,11 @@ func TestExecute_ConvertWithFakeEncoder_HardDelete(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	encoderPath := createFakeEncoder(t, tmpDir)
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(encoderPath, "\\", "\\\\") + `"}}`
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(
+		encoderPath,
+		"\\",
+		"\\\\",
+	) + `"}}`
 	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +768,18 @@ func TestExecute_ConvertWithFakeEncoder_HardDelete(t *testing.T) {
 
 	planID := "plan-convert-hard-001"
 	seedPlan(t, repo, planID, tmpDir, "single_convert")
-	seedConvertItem(t, repo, planID, 0, testFile, filepath.Join(tmpDir, "test.mp3"), testFile, 1, info.Size(), info.ModTime().Unix())
+	seedConvertItem(
+		t,
+		repo,
+		planID,
+		0,
+		testFile,
+		filepath.Join(tmpDir, "test.mp3"),
+		testFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -789,7 +831,18 @@ func TestExecute_ConvertFailure_PreservesSource(t *testing.T) {
 
 	planID := "plan-convert-fail-001"
 	seedPlan(t, repo, planID, tmpDir, "single_convert")
-	seedConvertItem(t, repo, planID, 0, testFile, filepath.Join(tmpDir, "test.mp3"), testFile, 1, info.Size(), info.ModTime().Unix())
+	seedConvertItem(
+		t,
+		repo,
+		planID,
+		0,
+		testFile,
+		filepath.Join(tmpDir, "test.mp3"),
+		testFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -1322,7 +1375,18 @@ func TestExecute_ConfigInvalid_RemainsGlobal(t *testing.T) {
 
 	planID := "plan-config-global-001"
 	seedPlan(t, repo, planID, tmpDir, "single_convert")
-	seedConvertItem(t, repo, planID, 0, testFile, filepath.Join(tmpDir, "test.mp3"), testFile, 1, info.Size(), info.ModTime().Unix())
+	seedConvertItem(
+		t,
+		repo,
+		planID,
+		0,
+		testFile,
+		filepath.Join(tmpDir, "test.mp3"),
+		testFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -1388,7 +1452,18 @@ func TestExecute_SoftDelete_UsesScanRootPath(t *testing.T) {
 	seedPlanWithScanRoot(t, repo, planID, filepath.ToSlash(scopeDir), filepath.ToSlash(tmpDir), "single_delete")
 
 	persistedTargetPath := filepath.ToSlash(filepath.Join(tmpDir, "Delete", "music", "album", "test.mp3"))
-	seedDeleteItem(t, repo, planID, 0, sourceFile, persistedTargetPath, sourceFile, 1, info.Size(), info.ModTime().Unix())
+	seedDeleteItem(
+		t,
+		repo,
+		planID,
+		0,
+		sourceFile,
+		persistedTargetPath,
+		sourceFile,
+		1,
+		info.Size(),
+		info.ModTime().Unix(),
+	)
 
 	svc := NewService(repo, tmpDir)
 	sink := &testEventSink{}
@@ -1607,10 +1682,8 @@ func TestExecute_StructuredError_PreconditionFailed(t *testing.T) {
 
 func assertContains(t *testing.T, slice []string, want string, msg string) {
 	t.Helper()
-	for _, s := range slice {
-		if s == want {
-			return
-		}
+	if slices.Contains(slice, want) {
+		return
 	}
 	t.Errorf("%s: %q not found in %v", msg, want, slice)
 }

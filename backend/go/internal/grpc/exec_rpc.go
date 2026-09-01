@@ -3,11 +3,12 @@ package grpc
 import (
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
 )
 
 // mapExecuteError maps an execute usecase error to a gRPC status error.
@@ -32,7 +33,7 @@ func mapExecuteError(err error) error {
 // This is a thin transport adapter that maps protobuf requests/responses to the execute usecase.
 func (s *OnseiServer) ExecutePlan(req *pb.ExecutePlanRequest, stream grpc.ServerStreamingServer[pb.JobEvent]) error {
 	usecaseReq := executeusecase.Request{
-		PlanID:     req.PlanId,
+		PlanID:     req.GetPlanId(),
 		SoftDelete: req.GetSoftDelete(),
 	}
 

@@ -13,7 +13,7 @@ import (
 // Tests can override to inject deterministic errors.
 var dirEntryInfoFunc func(fs.DirEntry) (fs.FileInfo, error)
 
-// DirEntry represents a directory entry from walking
+// DirEntry represents a directory entry from walking.
 type DirEntry struct {
 	Path       string
 	ParentPath string
@@ -23,7 +23,7 @@ type DirEntry struct {
 	Mtime      int64
 }
 
-// walkDirItem represents a directory to be processed in parallel walk
+// walkDirItem represents a directory to be processed in parallel walk.
 type walkDirItem struct {
 	path string
 }
@@ -46,7 +46,12 @@ type walkResult struct {
 //   - emit: callback for each DirEntry found; returning error cancels the walk
 //
 // Returns error if walk fails or if emit returns error.
-func WalkRootEntriesParallel(ctx context.Context, rootPath, basePath string, dirConcurrency int, emit func(DirEntry) error) error {
+func WalkRootEntriesParallel(
+	ctx context.Context,
+	rootPath, basePath string,
+	dirConcurrency int,
+	emit func(DirEntry) error,
+) error {
 	if dirConcurrency <= 0 {
 		dirConcurrency = 4 // Default as per plan
 	}
@@ -66,10 +71,8 @@ func WalkRootEntriesParallel(ctx context.Context, rootPath, basePath string, dir
 	var wg sync.WaitGroup
 
 	// Start worker pool
-	for i := 0; i < dirConcurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range dirConcurrency {
+		wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -151,7 +154,7 @@ func WalkRootEntriesParallel(ctx context.Context, rootPath, basePath string, dir
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	// Coordinator loop: owns work accounting and all enqueue operations.
@@ -286,7 +289,7 @@ func WalkFolderEntries(ctx context.Context, folderPath, basePath string, emit fu
 	return walk(folderPath)
 }
 
-// Allowed audio extensions
+// Allowed audio extensions.
 var AllowedExtensions = map[string]bool{
 	".wav":  true,
 	".flac": true,
@@ -295,14 +298,14 @@ var AllowedExtensions = map[string]bool{
 	".m4a":  true,
 }
 
-// FileEntry represents a scanned file
+// FileEntry represents a scanned file.
 type FileEntry struct {
 	Path      string
 	PathPosix string
 	FileSize  int64
 }
 
-// ScanDirectory scans a directory for audio files
+// ScanDirectory scans a directory for audio files.
 func ScanDirectory(rootPath string) ([]FileEntry, error) {
 	var entries []FileEntry
 

@@ -16,6 +16,11 @@ type SQLiteRepositoryAdapter struct {
 	testExecSeam func(callCount int) error
 }
 
+// NewSQLiteRepositoryAdapter creates a scanner repository adapter for sqlite.
+func NewSQLiteRepositoryAdapter(repo *sqlite.Repository) *SQLiteRepositoryAdapter {
+	return &SQLiteRepositoryAdapter{repo: repo}
+}
+
 // execFn is a testable wrapper around sql.Stmt.Exec for deterministic failure injection.
 func (a *SQLiteRepositoryAdapter) execStmt(stmt *sql.Stmt, callCount int, args ...any) (sql.Result, error) {
 	if a.testExecSeam != nil {
@@ -24,11 +29,6 @@ func (a *SQLiteRepositoryAdapter) execStmt(stmt *sql.Stmt, callCount int, args .
 		}
 	}
 	return stmt.Exec(args...)
-}
-
-// NewSQLiteRepositoryAdapter creates a scanner repository adapter for sqlite.
-func NewSQLiteRepositoryAdapter(repo *sqlite.Repository) *SQLiteRepositoryAdapter {
-	return &SQLiteRepositoryAdapter{repo: repo}
 }
 
 const defaultBatchSize = 1000
@@ -59,10 +59,7 @@ func (a *SQLiteRepositoryAdapter) WriteStagingEntries(_ string, entries []Stagin
 
 	// Process entries in chunks to stay within SQLite parameter limits and improve performance
 	for batchStart := 0; batchStart < len(entries); batchStart += defaultBatchSize {
-		batchEnd := batchStart + defaultBatchSize
-		if batchEnd > len(entries) {
-			batchEnd = len(entries)
-		}
+		batchEnd := min(batchStart+defaultBatchSize, len(entries))
 
 		batch := entries[batchStart:batchEnd]
 		execCount := 0
@@ -72,7 +69,19 @@ func (a *SQLiteRepositoryAdapter) WriteStagingEntries(_ string, entries []Stagin
 				isDir = 1
 			}
 			execCount++
-			if _, err := a.execStmt(stmt, execCount, e.SessionID, e.Path, e.RootPath, e.ParentPath, e.Name, isDir, e.Size, e.Mtime, e.Format); err != nil {
+			if _, err := a.execStmt(
+				stmt,
+				execCount,
+				e.SessionID,
+				e.Path,
+				e.RootPath,
+				e.ParentPath,
+				e.Name,
+				isDir,
+				e.Size,
+				e.Mtime,
+				e.Format,
+			); err != nil {
 				return fmt.Errorf("insert staging entry %q: %w", e.Path, err)
 			}
 		}
@@ -98,7 +107,9 @@ func (a *SQLiteRepositoryAdapter) MergeStaging(sessionID, rootPath string, stale
 
 	// scan_id is set to sessionID during merge updates/inserts.
 	var mergedCount int
-	if err := a.repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE scan_id = ?", sessionID).Scan(&mergedCount); err != nil {
+	if err := a.repo.DB().
+		QueryRow("SELECT COUNT(*) FROM entries WHERE scan_id = ?", sessionID).
+		Scan(&mergedCount); err != nil {
 		return 0, err
 	}
 	return mergedCount, nil
@@ -152,7 +163,7 @@ type pipelineRepo interface {
 	CleanupStagingSession(sessionID string) error
 }
 
-// Compile-time interface check
+// Compile-time interface check.
 var _ pipelineRepo = (*SQLiteRepositoryAdapter)(nil)
 
 // WriteStagingBatch writes a batch of staging entries in a single transaction.
@@ -184,7 +195,17 @@ func (a *SQLiteRepositoryAdapter) WriteStagingBatch(sessionID string, batch []St
 		if e.IsDir {
 			isDir = 1
 		}
-		if _, err := stmt.Exec(e.SessionID, e.Path, e.RootPath, e.ParentPath, e.Name, isDir, e.Size, e.Mtime, e.Format); err != nil {
+		if _, err := stmt.Exec(
+			e.SessionID,
+			e.Path,
+			e.RootPath,
+			e.ParentPath,
+			e.Name,
+			isDir,
+			e.Size,
+			e.Mtime,
+			e.Format,
+		); err != nil {
 			return fmt.Errorf("insert staging entry %q: %w", e.Path, err)
 		}
 	}

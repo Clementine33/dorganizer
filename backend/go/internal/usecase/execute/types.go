@@ -52,17 +52,6 @@ type Error struct {
 	Cause   error
 }
 
-func (e *Error) Error() string {
-	if e.Cause != nil {
-		return e.Kind + ": " + e.Message + ": " + e.Cause.Error()
-	}
-	return e.Kind + ": " + e.Message
-}
-
-func (e *Error) Unwrap() error {
-	return e.Cause
-}
-
 // ErrorKind values for execute.Error.Kind, used to map to gRPC status codes.
 const (
 	ErrKindInvalidArgument    = "invalid_argument"
@@ -74,6 +63,17 @@ const (
 // NewError creates an execute-level error with a kind that the adapter can map to gRPC.
 func NewError(kind, code, message string, cause error) *Error {
 	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
+}
+
+func (e *Error) Error() string {
+	if e.Cause != nil {
+		return e.Kind + ": " + e.Message + ": " + e.Cause.Error()
+	}
+	return e.Kind + ": " + e.Message
+}
+
+func (e *Error) Unwrap() error {
+	return e.Cause
 }
 
 // AsError extracts a *Error from an error chain. Returns nil, false if not an execute.Error.

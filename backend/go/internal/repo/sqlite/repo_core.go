@@ -8,14 +8,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/pathnorm"
 	_ "modernc.org/sqlite"
+
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
-// timeFormat is the format used for storing timestamps in SQLite
+// timeFormat is the format used for storing timestamps in SQLite.
 const timeFormat = time.RFC3339Nano
 
-// parseTimestamp parses a timestamp string with fallback to SQLite's default format
+// parseTimestamp parses a timestamp string with fallback to SQLite's default format.
 func parseTimestamp(s string) time.Time {
 	if s == "" {
 		return time.Time{}
@@ -69,7 +70,7 @@ type PlanSuccessfulFolder struct {
 	FolderPath  string
 }
 
-// PlanItem represents a single operation in a plan
+// PlanItem represents a single operation in a plan.
 type PlanItem struct {
 	PlanID                 string
 	ItemIndex              int
@@ -83,7 +84,7 @@ type PlanItem struct {
 	PreconditionMtime      int64
 }
 
-// ScanSession represents a scan operation
+// ScanSession represents a scan operation.
 type ScanSession struct {
 	SessionID    string
 	RootPath     string
@@ -96,7 +97,7 @@ type ScanSession struct {
 	FinishedAt   time.Time
 }
 
-// ExecuteSession represents an execute operation
+// ExecuteSession represents an execute operation.
 type ExecuteSession struct {
 	SessionID    string
 	PlanID       string
@@ -108,7 +109,7 @@ type ExecuteSession struct {
 	ErrorMessage string
 }
 
-// ErrorEvent represents an error during operations
+// ErrorEvent represents an error during operations.
 type ErrorEvent struct {
 	ID        int64
 	Scope     string // scan, slim, prune, execute
@@ -120,7 +121,7 @@ type ErrorEvent struct {
 	CreatedAt time.Time
 }
 
-// CleanupStats holds counts of rows deleted by each cleanup operation
+// CleanupStats holds counts of rows deleted by each cleanup operation.
 type CleanupStats struct {
 	DeletedErrorEvents  int64
 	DeletedScanSessions int64
@@ -254,7 +255,14 @@ func migrateLibraryRootPathKeys(db *sql.DB) error {
 	for _, l := range libs {
 		key := pathnorm.RootPathKey(l.root)
 		if first, ok := seen[key]; ok {
-			return fmt.Errorf("library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database", first, l.root, l.id, l.root, key)
+			return fmt.Errorf(
+				"library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database",
+				first,
+				l.root,
+				l.id,
+				l.root,
+				key,
+			)
 		}
 		seen[key] = l.id
 		if _, err := db.Exec("UPDATE libraries SET root_path_key = ? WHERE id = ?", key, l.id); err != nil {
@@ -262,7 +270,9 @@ func migrateLibraryRootPathKeys(db *sql.DB) error {
 		}
 	}
 
-	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)"); err != nil {
+	if _, err := db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)",
+	); err != nil {
 		return err
 	}
 	return nil
@@ -377,7 +387,9 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 		}
 	}
 
-	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)"); err != nil {
+	if _, err := db.Exec(
+		"CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)",
+	); err != nil {
 		return err
 	}
 	return nil
@@ -1057,12 +1069,12 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
-// DB returns the underlying database connection
+// DB returns the underlying database connection.
 func (r *Repository) DB() *sql.DB {
 	return r.db
 }
 
-// EnsureDBPath creates the database file at given path
+// EnsureDBPath creates the database file at given path.
 func EnsureDBPath(path string) error {
 	dir := path
 	for len(dir) > 0 && dir[len(dir)-1] != '/' && dir[len(dir)-1] != '\\' {

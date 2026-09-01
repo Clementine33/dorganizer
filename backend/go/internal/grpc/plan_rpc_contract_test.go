@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
 
 // TestPlanOperations_RejectedWorkflow guards the breaking migration: the

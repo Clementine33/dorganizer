@@ -7,7 +7,7 @@ import (
 	errdomain "github.com/onsei/organizer/backend/internal/errors"
 )
 
-// TestExecuteReturnsToolNotFoundCode tests that convert with missing tool returns TOOL_NOT_FOUND
+// TestExecuteReturnsToolNotFoundCode tests that convert with missing tool returns TOOL_NOT_FOUND.
 func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
 	// Use a non-existent qaac path to trigger TOOL_NOT_FOUND
 	svc := NewService(ToolsConfig{Encoder: "qaac", QAACPath: "/nonexistent/qaac.exe"})
@@ -30,7 +30,7 @@ func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
 	}
 }
 
-// TestDeleteSoftDelete tests soft delete functionality
+// TestDeleteSoftDelete tests soft delete functionality.
 func TestDeleteSoftDelete(t *testing.T) {
 	svc := NewService(ToolsConfig{})
 
@@ -46,7 +46,7 @@ func TestDeleteSoftDelete(t *testing.T) {
 	_ = err
 }
 
-// TestConvertWithoutToolPath tests that empty tool path returns TOOL_NOT_FOUND
+// TestConvertWithoutToolPath tests that empty tool path returns TOOL_NOT_FOUND.
 func TestConvertWithoutToolPath(t *testing.T) {
 	svc := NewService(ToolsConfig{Encoder: "qaac"})
 	tmp := t.TempDir()

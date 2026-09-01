@@ -105,7 +105,7 @@ func TestScanServiceEmitsEventsAndResult(t *testing.T) {
 	svc := NewService(repo)
 
 	musicDir := filepath.Join(dir, "music")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		album := filepath.Join(musicDir, fmt.Sprintf("album-%02d", i))
 		if err := os.MkdirAll(album, 0755); err != nil {
 			t.Fatalf("mkdir %s: %v", album, err)

@@ -82,7 +82,12 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 	}
 	defer func() {
-		log.Printf("execute.precheck_items_count=%d execute.precheck_stat_ms=%d sqlite.busy_locked_count=%d", precheckItemsCount, precheckStatMs, sqliteBusyLockedCount)
+		log.Printf(
+			"execute.precheck_items_count=%d execute.precheck_stat_ms=%d sqlite.busy_locked_count=%d",
+			precheckItemsCount,
+			precheckStatMs,
+			sqliteBusyLockedCount,
+		)
 	}()
 
 	// Update runner with rootPath for soft delete support
@@ -172,7 +177,12 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 				}
 
 				if s.repo != nil {
-					_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", ff.err.Error())
+					_ = s.repo.UpdateExecuteSessionStatus(
+						sessionID,
+						"failed",
+						"EXEC_PRECONDITION_FAILED",
+						ff.err.Error(),
+					)
 				}
 				errMsg := ff.err.Error()
 				if ff.index >= 0 {
@@ -192,10 +202,19 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 			if precheckErr != nil {
 				recordSQLiteBusyLocked(precheckErr.err)
 				if precheckErr.index >= 0 && precheckErr.index < len(plan.Items) && s.eventHandler != nil {
-					s.eventHandler.OnPreconditionFailed(precheckErr.index, plan.Items[precheckErr.index], precheckErr.err)
+					s.eventHandler.OnPreconditionFailed(
+						precheckErr.index,
+						plan.Items[precheckErr.index],
+						precheckErr.err,
+					)
 				}
 				if s.repo != nil {
-					_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", precheckErr.err.Error())
+					_ = s.repo.UpdateExecuteSessionStatus(
+						sessionID,
+						"failed",
+						"EXEC_PRECONDITION_FAILED",
+						precheckErr.err.Error(),
+					)
 				}
 				errMsg := precheckErr.err.Error()
 				if precheckErr.index >= 0 {
@@ -224,7 +243,14 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 		batchItems := currentBatch
 		batchIndices := currentBatchIndices
-		result, err := s.executeConvertPoolWithTracking(plan, sessionID, currentBatch, currentBatchIndices, failedFolders, make(map[string]bool))
+		result, err := s.executeConvertPoolWithTracking(
+			plan,
+			sessionID,
+			currentBatch,
+			currentBatchIndices,
+			failedFolders,
+			make(map[string]bool),
+		)
 		if plan.RootPath != "" {
 			for i, batchItem := range batchItems {
 				notifyItemCompleted(batchIndices[i], batchItem)
@@ -334,7 +360,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 					notifyItemCompleted(i, item)
 				}
 				if firstExecutionErr == nil {
-					firstExecutionErr = fmt.Errorf("delete item failed: %v", delErr)
+					firstExecutionErr = fmt.Errorf("delete item failed: %w", delErr)
 				}
 				if plan.RootPath == "" || folderPath == "" {
 					if s.repo != nil {
@@ -451,5 +477,6 @@ func isSQLiteBusyLockedError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "sqlite_locked")
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "sqlite_locked")
 }

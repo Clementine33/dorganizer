@@ -64,7 +64,11 @@ func formatTime(t time.Time) string {
 // percentage. Because the snapshot is emitted first, a reconnect after a
 // disconnect resumes from the current truth; the detail GET remains the
 // fallback when no SSE transport is available.
-func (s *serviceImpl) Subscribe(ctx context.Context, worksetID, generationID string, emit func(event string, data any) error) error {
+func (s *serviceImpl) Subscribe(
+	ctx context.Context,
+	worksetID, generationID string,
+	emit func(event string, data any) error,
+) error {
 	// Scoped access check first: a session belonging to another workset is 404.
 	g, err := s.loadGeneration(worksetID, generationID)
 	if err != nil {
@@ -132,7 +136,10 @@ func emitTerminal(emit func(event string, data any) error, status string, g *sql
 	case sqlite.GenStatusCompleted:
 		return emit("completed", map[string]any{"generation_id": g.GenerationID, "revision_id": g.RevisionID})
 	case sqlite.GenStatusFailed:
-		return emit("failed", map[string]any{"generation_id": g.GenerationID, "error_code": g.ErrorCode, "error_message": g.ErrorMessage})
+		return emit(
+			"failed",
+			map[string]any{"generation_id": g.GenerationID, "error_code": g.ErrorCode, "error_message": g.ErrorMessage},
+		)
 	case sqlite.GenStatusCanceled:
 		return emit("canceled", map[string]any{"generation_id": g.GenerationID})
 	case sqlite.GenStatusInterrupted:

@@ -68,7 +68,7 @@ func TestRunStartupRetentionCleanup_PropagatesRepoError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if err != errTestCleanup {
+	if !errors.Is(err, errTestCleanup) {
 		t.Fatalf("expected errTestCleanup, got %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -10,19 +11,20 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	grpcserver "github.com/onsei/organizer/backend/internal/grpc"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/scanner"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	grpcserver "github.com/onsei/organizer/backend/internal/grpc"
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/execute"
+	"github.com/onsei/organizer/backend/internal/services/scanner"
 )
 
-// TestE2EGrpcHarnessBoot verifies gRPC harness can initiate real streaming calls
+// TestE2EGrpcHarnessBoot verifies gRPC harness can initiate real streaming calls.
 func TestE2EGrpcHarnessBoot(t *testing.T) {
 	client, _, rootDir, cleanup := newE2EGrpcClient(t)
 	defer cleanup()
@@ -41,7 +43,7 @@ func TestE2EGrpcHarnessBoot(t *testing.T) {
 	}
 }
 
-// newE2EGrpcClient creates an in-memory gRPC client connected to a bufconn server
+// newE2EGrpcClient creates an in-memory gRPC client connected to a bufconn server.
 func newE2EGrpcClient(t *testing.T) (pb.OnseiServiceClient, *sqlite.Repository, string, func()) {
 	t.Helper()
 
@@ -80,12 +82,12 @@ func newE2EGrpcClient(t *testing.T) (pb.OnseiServiceClient, *sqlite.Repository, 
 	return pb.NewOnseiServiceClient(conn), repo, tmpDir, cleanup
 }
 
-// collectScanEvents collects all events from a scan stream until EOF or error
+// collectScanEvents collects all events from a scan stream until EOF or error.
 func collectScanEvents(stream pb.OnseiService_ScanClient) ([]*pb.JobEvent, error) {
 	var events []*pb.JobEvent
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return events, nil
 		}
 		if err != nil {
@@ -95,12 +97,12 @@ func collectScanEvents(stream pb.OnseiService_ScanClient) ([]*pb.JobEvent, error
 	}
 }
 
-// collectExecuteEvents collects all events from an execute stream until EOF or error
+// collectExecuteEvents collects all events from an execute stream until EOF or error.
 func collectExecuteEvents(stream pb.OnseiService_ExecutePlanClient) ([]*pb.JobEvent, error) {
 	var events []*pb.JobEvent
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return events, nil
 		}
 		if err != nil {
@@ -227,14 +229,14 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 	// Validate scan stream includes started and completed, no error
 	var scanStarted, scanCompleted bool
 	for _, ev := range scanEvents {
-		if ev.EventType == "started" {
+		if ev.GetEventType() == "started" {
 			scanStarted = true
 		}
-		if ev.EventType == "completed" {
+		if ev.GetEventType() == "completed" {
 			scanCompleted = true
 		}
-		if ev.EventType == "error" || ev.Code != "" {
-			t.Fatalf("scan returned error event: %s - %s", ev.Code, ev.Message)
+		if ev.GetEventType() == "error" || ev.GetCode() != "" {
+			t.Fatalf("scan returned error event: %s - %s", ev.GetCode(), ev.GetMessage())
 		}
 	}
 	if !scanStarted {
@@ -277,7 +279,7 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 	// the repository. The gRPC PlanOperations surface was removed with the
 	// slim/prune migration; ExecutePlan consumes the same persisted plan_items.
 	planID := "plan-e2e-delete"
-	actionableCount := 0
+	var actionableCount int
 	{
 		var deletePaths []string
 		for _, f := range testFiles {
@@ -329,14 +331,14 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 	// Step 6: Validate execute stream includes started and completed, no error
 	var execStarted, execCompleted bool
 	for _, ev := range execEvents {
-		if ev.EventType == "started" {
+		if ev.GetEventType() == "started" {
 			execStarted = true
 		}
-		if ev.EventType == "completed" {
+		if ev.GetEventType() == "completed" {
 			execCompleted = true
 		}
-		if ev.EventType == "error" || ev.Code != "" {
-			t.Fatalf("execute returned error event: %s - %s", ev.Code, ev.Message)
+		if ev.GetEventType() == "error" || ev.GetCode() != "" {
+			t.Fatalf("execute returned error event: %s - %s", ev.GetCode(), ev.GetMessage())
 		}
 	}
 	if !execStarted {
@@ -382,7 +384,7 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 
 // TestScanPlanExecuteWithPrune tests prune workflow
 
-// TestExecuteTerminalStates tests that execute service handles terminal states correctly
+// TestExecuteTerminalStates tests that execute service handles terminal states correctly.
 func TestExecuteTerminalStates(t *testing.T) {
 	svc := execute.NewService(execute.ToolsConfig{})
 
@@ -726,13 +728,16 @@ func TestExecutePlanGrpc_StalePrecondition(t *testing.T) {
 	// Step 5: Assert stream contains error event with event_type="error" and code="EXEC_PRECONDITION_FAILED"
 	var foundErrorEvent bool
 	for _, ev := range execEvents {
-		if ev.EventType == "error" && ev.Code == "EXEC_PRECONDITION_FAILED" {
+		if ev.GetEventType() == "error" && ev.GetCode() == "EXEC_PRECONDITION_FAILED" {
 			foundErrorEvent = true
 			break
 		}
 	}
 	if !foundErrorEvent {
-		t.Errorf("expected stream to contain error event with type='error' and code='EXEC_PRECONDITION_FAILED', got events: %v", execEvents)
+		t.Errorf(
+			"expected stream to contain error event with type='error' and code='EXEC_PRECONDITION_FAILED', got events: %v",
+			execEvents,
+		)
 	}
 
 	// Step 6: Assert terminal error status code is codes.FailedPrecondition
@@ -771,5 +776,10 @@ func TestExecutePlanGrpc_StalePrecondition(t *testing.T) {
 		t.Errorf("expected error_code 'EXEC_PRECONDITION_FAILED', got '%s'", session.ErrorCode)
 	}
 
-	t.Logf("gRPC stale precondition test complete: plan_id=%s, events=%d, terminal_error=%v", planID, len(execEvents), execErr)
+	t.Logf(
+		"gRPC stale precondition test complete: plan_id=%s, events=%d, terminal_error=%v",
+		planID,
+		len(execEvents),
+		execErr,
+	)
 }

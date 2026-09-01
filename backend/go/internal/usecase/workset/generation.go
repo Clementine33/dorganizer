@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,7 +19,11 @@ type generationInput struct {
 	memberHash string
 }
 
-func (s *serviceImpl) StartGeneration(ctx context.Context, id string, req StartGenerationRequest) (*StartGenerationResult, error) {
+func (s *serviceImpl) StartGeneration(
+	ctx context.Context,
+	id string,
+	req StartGenerationRequest,
+) (*StartGenerationResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -48,7 +53,7 @@ func (s *serviceImpl) StartGeneration(ctx context.Context, id string, req StartG
 func (s *serviceImpl) prepareGeneration(id string) (*generationInput, error) {
 	w, err := s.repo.GetWorkset(id)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
@@ -72,14 +77,24 @@ func (s *serviceImpl) prepareGeneration(id string) (*generationInput, error) {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active generation", err)
 	}
 	if active != nil {
-		return nil, NewError(ErrKindConflict, "GENERATION_IN_PROGRESS", "a generation is already queued or running for this workset", nil)
+		return nil, NewError(
+			ErrKindConflict,
+			"GENERATION_IN_PROGRESS",
+			"a generation is already queued or running for this workset",
+			nil,
+		)
 	}
 	scanning, err := s.repo.HasActiveScanForRoot(w.RootPath)
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check library scan", err)
 	}
 	if scanning {
-		return nil, NewError(ErrKindConflict, "SCAN_IN_PROGRESS", "wait for the library scan to finish before generating", nil)
+		return nil, NewError(
+			ErrKindConflict,
+			"SCAN_IN_PROGRESS",
+			"wait for the library scan to finish before generating",
+			nil,
+		)
 	}
 	members, err := s.repo.ListWorksetMembers(id)
 	if err != nil {
@@ -94,7 +109,10 @@ func (s *serviceImpl) prepareGeneration(id string) (*generationInput, error) {
 	}, nil
 }
 
-func (s *serviceImpl) replayCurrentRevision(ctx context.Context, input *generationInput) (*StartGenerationResult, bool, error) {
+func (s *serviceImpl) replayCurrentRevision(
+	ctx context.Context,
+	input *generationInput,
+) (*StartGenerationResult, bool, error) {
 	w := input.workset
 	if w.CurrentRevisionID == "" {
 		return nil, false, nil
@@ -104,7 +122,8 @@ func (s *serviceImpl) replayCurrentRevision(ctx context.Context, input *generati
 		return nil, false, err
 	}
 	rev, err := s.repo.GetWorksetRevision(w.ID, w.CurrentRevisionID)
-	if err != nil || rev.DraftHash != input.draftHash || rev.MemberHash != input.memberHash || !rootsMatch(w, fingerprints, s.repo) {
+	if err != nil || rev.DraftHash != input.draftHash || rev.MemberHash != input.memberHash ||
+		!rootsMatch(w, fingerprints, s.repo) {
 		return nil, false, nil
 	}
 	summary, _, err := s.loadCurrentRevision(w)
@@ -122,16 +141,25 @@ func (s *serviceImpl) replayGeneration(worksetID, key, requestHash string) (*Sta
 	if err != nil {
 		return nil, false, NewError(ErrKindInternal, "INTERNAL", "failed to check generation idempotency", err)
 	}
-	if existing == nil || (existing.Status != sqlite.GenStatusCompleted && existing.Status != sqlite.GenStatusQueued && existing.Status != sqlite.GenStatusRunning) {
+	if existing == nil ||
+		(existing.Status != sqlite.GenStatusCompleted && existing.Status != sqlite.GenStatusQueued && existing.Status != sqlite.GenStatusRunning) {
 		return nil, false, nil
 	}
 	if existing.RequestHash != requestHash {
-		return nil, false, NewError(ErrKindConflict, "IDEMPOTENCY_KEY_REUSED", "idempotency key was used with a different request", nil)
+		return nil, false, NewError(
+			ErrKindConflict,
+			"IDEMPOTENCY_KEY_REUSED",
+			"idempotency key was used with a different request",
+			nil,
+		)
 	}
 	return &StartGenerationResult{Generation: toGenerationView(existing), Created: false}, true, nil
 }
 
-func (s *serviceImpl) persistGeneration(worksetID, key, requestHash string, input *generationInput) (*StartGenerationResult, error) {
+func (s *serviceImpl) persistGeneration(
+	worksetID, key, requestHash string,
+	input *generationInput,
+) (*StartGenerationResult, error) {
 	now := time.Now()
 	gen := &sqlite.PlanGeneration{
 		GenerationID:         "gen-" + newToken(),
@@ -139,18 +167,25 @@ func (s *serviceImpl) persistGeneration(worksetID, key, requestHash string, inpu
 		IdempotencyKey:       key,
 		RequestHash:          requestHash,
 		ExpectedDraftVersion: input.workset.Version,
-		RequestJSON:          mustJSON(map[string]any{"draft_hash": input.draftHash, "member_hash": input.memberHash, "roots": len(input.members)}),
-		TotalRoots:           len(input.members),
-		CreatedAt:            now,
+		RequestJSON: mustJSON(
+			map[string]any{"draft_hash": input.draftHash, "member_hash": input.memberHash, "roots": len(input.members)},
+		),
+		TotalRoots: len(input.members),
+		CreatedAt:  now,
 	}
 	if err := s.repo.CreateGeneration(gen); err != nil {
-		if err == sqlite.ErrGenerationIdemConflict {
+		if errors.Is(err, sqlite.ErrGenerationIdemConflict) {
 			existing, loadErr := s.repo.GetGenerationByWorksetKey(worksetID, key)
 			if loadErr == nil && existing != nil {
 				if existing.RequestHash == requestHash {
 					return &StartGenerationResult{Generation: toGenerationView(existing), Created: false}, nil
 				}
-				return nil, NewError(ErrKindConflict, "IDEMPOTENCY_KEY_REUSED", "idempotency key was used with a different request", nil)
+				return nil, NewError(
+					ErrKindConflict,
+					"IDEMPOTENCY_KEY_REUSED",
+					"idempotency key was used with a different request",
+					nil,
+				)
 			}
 			return nil, NewError(ErrKindConflict, "IDEMPOTENCY_KEY_REUSED", "idempotency key conflict", err)
 		}
@@ -163,7 +198,7 @@ func (s *serviceImpl) persistGeneration(worksetID, key, requestHash string, inpu
 func (s *serviceImpl) loadGeneration(worksetID, generationID string) (*sqlite.PlanGeneration, error) {
 	g, err := s.repo.GetGeneration(generationID)
 	if err != nil {
-		if err == sqlite.ErrGenerationNotFound {
+		if errors.Is(err, sqlite.ErrGenerationNotFound) {
 			return nil, NewError(ErrKindNotFound, "GENERATION_NOT_FOUND", "generation not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load generation", err)
@@ -212,7 +247,10 @@ func (s *serviceImpl) CancelGeneration(ctx context.Context, worksetID, generatio
 // given member folder paths (same entry collection and fingerprint function as
 // the workflow runner). This is the dedup/stale authority: after a scan, the
 // values reflect the current entries table.
-func (s *serviceImpl) rootFingerprints(ctx context.Context, members []*sqlite.WorksetMember) (map[string]reconcile.ReconcileResult, error) {
+func (s *serviceImpl) rootFingerprints(
+	ctx context.Context,
+	members []*sqlite.WorksetMember,
+) (map[string]reconcile.ReconcileResult, error) {
 	out := make(map[string]reconcile.ReconcileResult, len(members))
 	for _, m := range members {
 		if err := ctx.Err(); err != nil {
@@ -220,7 +258,12 @@ func (s *serviceImpl) rootFingerprints(ctx context.Context, members []*sqlite.Wo
 		}
 		entries, err := collectWorkflowEntries(s.repo, m.FolderPath)
 		if err != nil {
-			return nil, NewError(ErrKindInternal, "INTERNAL", fmt.Sprintf("failed to fingerprint %s: %v", m.FolderPath, err), err)
+			return nil, NewError(
+				ErrKindInternal,
+				"INTERNAL",
+				fmt.Sprintf("failed to fingerprint %s: %v", m.FolderPath, err),
+				err,
+			)
 		}
 		audio := reconcile.AudioEntries(entries)
 		digest, count := reconcile.InventoryFingerprint(audio)

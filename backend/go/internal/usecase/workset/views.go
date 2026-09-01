@@ -2,6 +2,7 @@ package workset
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -105,7 +106,8 @@ func feedMatches(feed string, v *WorksetView) bool {
 	if feedErrory(v) {
 		return feed == FeedError
 	}
-	if v.PlanningState == PlanningUnplanned || v.PlanningState == PlanningNeedsPlanning || v.PlanningState == PlanningPlanning {
+	if v.PlanningState == PlanningUnplanned || v.PlanningState == PlanningNeedsPlanning ||
+		v.PlanningState == PlanningPlanning {
 		return feed == FeedPending
 	}
 	return feed == FeedNormal
@@ -122,7 +124,8 @@ func feedErrory(v *WorksetView) bool {
 		if v.CurrentRevision.Stale != nil && *v.CurrentRevision.Stale {
 			return true
 		}
-		if v.CurrentRevision.ValidationState == ValidationStale || v.CurrentRevision.ValidationState == ValidationUnavailable {
+		if v.CurrentRevision.ValidationState == ValidationStale ||
+			v.CurrentRevision.ValidationState == ValidationUnavailable {
 			return true
 		}
 		if v.CurrentRevision.BlockedCount > 0 {
@@ -144,7 +147,7 @@ func (s *serviceImpl) GetWorkset(ctx context.Context, id string) (*WorksetView, 
 	}
 	w, err := s.repo.GetWorkset(id)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)

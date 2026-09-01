@@ -32,6 +32,7 @@ frontend/flutter_app/.dev_data
 **/nul
 docs/
 .claude/
+.pi/
 .superpowers/
 .codegraph/
 

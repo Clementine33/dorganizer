@@ -21,7 +21,8 @@ func TestNewRepository(t *testing.T) {
 
 		for _, table := range tables {
 			var count int
-			err := repo.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count)
+			err := repo.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).
+				Scan(&count)
 			if err != nil {
 				t.Errorf("failed to check table %s: %v", table, err)
 			}

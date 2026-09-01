@@ -183,11 +183,21 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.PlanType != "" || req.TargetFormat != "" || req.PruneMatchedExcluded {
-		writeError(w, http.StatusBadRequest, "LEGACY_FIELDS_NOT_SUPPORTED", "plan_type/target_format/prune_matched_excluded are removed; use workflow or single_action")
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"LEGACY_FIELDS_NOT_SUPPORTED",
+			"plan_type/target_format/prune_matched_excluded are removed; use workflow or single_action",
+		)
 		return
 	}
 	if (req.Workflow == nil) == (req.SingleAction == nil) {
-		writeError(w, http.StatusBadRequest, "INVALID_PLAN_REQUEST", "exactly one of workflow or single_action is required")
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"INVALID_PLAN_REQUEST",
+			"exactly one of workflow or single_action is required",
+		)
 		return
 	}
 
@@ -348,12 +358,22 @@ func validatePlanSourceFiles(w http.ResponseWriter, rootPath string, sourceFiles
 		withinLibrary := pathnorm.IsWithinRoot(rootPath, sourceFile)
 		isLibraryRoot := pathnorm.IsWithinRoot(sourceFile, rootPath)
 		if !withinLibrary || isLibraryRoot {
-			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must be inside the selected library")
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"SOURCE_FILE_OUTSIDE_LIBRARY",
+				"source_file must be inside the selected library",
+			)
 			return nil, false
 		}
 		resolvedWithinLibrary, err := pathnorm.IsResolvedWithinRoot(rootPath, sourceFile)
 		if err != nil || !resolvedWithinLibrary {
-			writeError(w, http.StatusBadRequest, "SOURCE_FILE_OUTSIDE_LIBRARY", "source_file must resolve inside the selected library")
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"SOURCE_FILE_OUTSIDE_LIBRARY",
+				"source_file must resolve inside the selected library",
+			)
 			return nil, false
 		}
 		out = append(out, pathnorm.NormalizeToPOSIX(sourceFile))

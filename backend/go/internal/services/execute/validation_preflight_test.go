@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestToolsConfig_InvalidEncoder_Fails validates that invalid encoder fails
+// TestToolsConfig_InvalidEncoder_Fails validates that invalid encoder fails.
 func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -46,7 +46,7 @@ func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 	}
 }
 
-// TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop validates qaac selected but qaac_path missing fails before item loop
+// TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop validates qaac selected but qaac_path missing fails before item loop.
 func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -87,7 +87,7 @@ func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 }
 
-// TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop validates lame selected but lame_path missing fails before item loop
+// TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop validates lame selected but lame_path missing fails before item loop.
 func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -128,7 +128,7 @@ func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 }
 
-// TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop validates qaac selected but qaac_path invalid fails before item loop
+// TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop validates qaac selected but qaac_path invalid fails before item loop.
 func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -169,7 +169,7 @@ func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 }
 
-// TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop validates lame selected but lame_path invalid fails before item loop
+// TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop validates lame selected but lame_path invalid fails before item loop.
 func TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -223,7 +223,7 @@ func containsStringHelper(s, substr string) bool {
 	return false
 }
 
-// TestDeleteOnlyPlan_SkipsToolsConfigValidation validates delete-only plans don't require tools config
+// TestDeleteOnlyPlan_SkipsToolsConfigValidation validates delete-only plans don't require tools config.
 func TestDeleteOnlyPlan_SkipsToolsConfigValidation(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -262,7 +262,7 @@ func TestDeleteOnlyPlan_SkipsToolsConfigValidation(t *testing.T) {
 	}
 }
 
-// TestConvertPlan_EmptyEncoder_FailsPreflight validates convert plans fail at preflight if encoder is empty
+// TestConvertPlan_EmptyEncoder_FailsPreflight validates convert plans fail at preflight if encoder is empty.
 func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")

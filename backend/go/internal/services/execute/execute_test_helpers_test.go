@@ -58,7 +58,7 @@ func (m *mockBatchBarrierRunner) getConvertCalls() []string {
 	return out
 }
 
-// mockEventHandler tracks callback invocations for testing event routing
+// mockEventHandler tracks callback invocations for testing event routing.
 type mockEventHandler struct {
 	mu                        sync.Mutex
 	onDeleteFailedCalls       []int // item indices where OnDeleteFailed was called

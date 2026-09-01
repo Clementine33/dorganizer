@@ -45,7 +45,13 @@ func req(t *testing.T, h http.Handler, method, path, token string, body any) *ht
 	return reqWithIfMatch(t, h, method, path, token, body, "")
 }
 
-func reqWithIfMatch(t *testing.T, h http.Handler, method, path, token string, body any, ifMatch string) *httptest.ResponseRecorder {
+func reqWithIfMatch(
+	t *testing.T,
+	h http.Handler,
+	method, path, token string,
+	body any,
+	ifMatch string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var rdr *bytes.Reader
 	if body != nil {
@@ -69,13 +75,15 @@ func reqWithIfMatch(t *testing.T, h http.Handler, method, path, token string, bo
 
 func seedLibrary(t *testing.T, repo *sqlite.Repository) string {
 	t.Helper()
-	repo.DB().Exec(`INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at) VALUES ('lib-1', 'Onsei', '/music', '/music', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	repo.DB().
+		Exec(`INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at) VALUES ('lib-1', 'Onsei', '/music', '/music', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
 	return "lib-1"
 }
 
 func seedFolder(t *testing.T, repo *sqlite.Repository, libID string) {
 	t.Helper()
-	repo.DB().Exec(`INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at) VALUES ('f-a', ?, '/music/albumA', 'albumA', 'albumA', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, libID)
+	repo.DB().
+		Exec(`INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at) VALUES ('f-a', ?, '/music/albumA', 'albumA', 'albumA', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, libID)
 }
 
 func TestWorksetHTTPLifecycle(t *testing.T) {
@@ -149,13 +157,28 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 			"policy":    inlinePolicyFixture(),
 		}},
 	}}
-	p2 := reqWithIfMatch(t, h, http.MethodPut, "/api/v1/worksets/"+createResp.Workset.WorksetID+"/draft", testToken, saveBody, "1")
+	p2 := reqWithIfMatch(
+		t,
+		h,
+		http.MethodPut,
+		"/api/v1/worksets/"+createResp.Workset.WorksetID+"/draft",
+		testToken,
+		saveBody,
+		"1",
+	)
 	if p2.Code != http.StatusOK {
 		t.Fatalf("put draft status = %d, body=%s", p2.Code, p2.Body.String())
 	}
 
 	// POST revisions requires Idempotency-Key.
-	gen := req(t, h, http.MethodPost, "/api/v1/worksets/"+createResp.Workset.WorksetID+"/revisions", testToken, map[string]any{"expected_draft_version": 2})
+	gen := req(
+		t,
+		h,
+		http.MethodPost,
+		"/api/v1/worksets/"+createResp.Workset.WorksetID+"/revisions",
+		testToken,
+		map[string]any{"expected_draft_version": 2},
+	)
 	if gen.Code != http.StatusBadRequest {
 		t.Fatalf("revisions without key status = %d, want 400", gen.Code)
 	}
@@ -165,7 +188,14 @@ func TestWorksetAuthRequired(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	seedLibrary(t, repo)
 	seedFolder(t, repo, "lib-1")
-	w := req(t, h, http.MethodPost, "/api/v1/worksets", "", map[string]any{"library_id": "lib-1", "title": "t", "folder_ids": []string{"f-a"}})
+	w := req(
+		t,
+		h,
+		http.MethodPost,
+		"/api/v1/worksets",
+		"",
+		map[string]any{"library_id": "lib-1", "title": "t", "folder_ids": []string{"f-a"}},
+	)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth status = %d, want 401", w.Code)
 	}
@@ -203,7 +233,14 @@ func TestPolicySlotsListAndUpdate(t *testing.T) {
 	}
 
 	// PUT out-of-range slot is rejected.
-	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/4", testToken, map[string]any{"name": "x", "policy": map[string]any{}})
+	w = req(
+		t,
+		h,
+		http.MethodPut,
+		"/api/v1/policy-slots/4",
+		testToken,
+		map[string]any{"name": "x", "policy": map[string]any{}},
+	)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_SLOT") {
 		t.Fatalf("slot 4 = %d %s, want 400 INVALID_SLOT", w.Code, w.Body.String())
 	}
@@ -215,7 +252,14 @@ func TestPolicySlotsListAndUpdate(t *testing.T) {
 		"matched":         map[string]any{"lossless": map[string]any{"codec": "wav"}},
 		"unmatched":       map[string]any{"lossless": map[string]any{"codec": "wav"}},
 	}
-	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/1", testToken, map[string]any{"name": "s1", "policy": badPolicy})
+	w = req(
+		t,
+		h,
+		http.MethodPut,
+		"/api/v1/policy-slots/1",
+		testToken,
+		map[string]any{"name": "s1", "policy": badPolicy},
+	)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_POLICY") {
 		t.Fatalf("empty tags = %d %s, want 400 INVALID_POLICY", w.Code, w.Body.String())
 	}
@@ -225,9 +269,18 @@ func TestPolicySlotsListAndUpdate(t *testing.T) {
 		"schema_version":  1,
 		"classifier_tags": []string{"SEなし", "se_nashi"},
 		"matched":         map[string]any{"lossless": map[string]any{"codec": "wav"}},
-		"unmatched":       map[string]any{"encoded": map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}}},
+		"unmatched": map[string]any{
+			"encoded": map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}},
+		},
 	}
-	w = req(t, h, http.MethodPut, "/api/v1/policy-slots/1", testToken, map[string]any{"name": "默认", "policy": goodPolicy})
+	w = req(
+		t,
+		h,
+		http.MethodPut,
+		"/api/v1/policy-slots/1",
+		testToken,
+		map[string]any{"name": "默认", "policy": goodPolicy},
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("put slot 1 = %d, body=%s", w.Code, w.Body.String())
 	}

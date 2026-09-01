@@ -8,13 +8,13 @@ import (
 	errdomain "github.com/onsei/organizer/backend/internal/errors"
 )
 
-// capturedCmd stores the captured command for testing
+// capturedCmd stores the captured command for testing.
 type capturedCmd struct {
 	argv []string
 	err  error
 }
 
-// toolRunnerWithCapture is a ToolRunner that captures commands instead of executing them
+// toolRunnerWithCapture is a ToolRunner that captures commands instead of executing them.
 type toolRunnerWithCapture struct {
 	toolsConfig  ToolsConfig
 	capturedQAAC *capturedCmd
@@ -29,7 +29,7 @@ func newToolRunnerWithCapture(config ToolsConfig) *toolRunnerWithCapture {
 	}
 }
 
-// Convert implements the conversion by capturing the argv
+// Convert implements the conversion by capturing the argv.
 func (r *toolRunnerWithCapture) Convert(src, dst string) error {
 	encoder := r.toolsConfig.Encoder
 	switch encoder {
@@ -46,7 +46,7 @@ func (r *toolRunnerWithCapture) Convert(src, dst string) error {
 	}
 }
 
-// convertWithQAACCapture captures argv without executing
+// convertWithQAACCapture captures argv without executing.
 func (r *toolRunnerWithCapture) convertWithQAAC(src, dst string) error {
 	r.capturedQAAC.argv = []string{
 		r.toolsConfig.QAACPath,
@@ -60,7 +60,7 @@ func (r *toolRunnerWithCapture) convertWithQAAC(src, dst string) error {
 	return r.capturedQAAC.err
 }
 
-// convertWithLAMECapture captures argv without executing
+// convertWithLAMECapture captures argv without executing.
 func (r *toolRunnerWithCapture) convertWithLAME(src, dst string) error {
 	r.capturedLAME.argv = []string{
 		r.toolsConfig.LAMEPath,
@@ -75,7 +75,7 @@ func (r *toolRunnerWithCapture) Delete(path string, soft bool) error {
 	return os.Remove(path)
 }
 
-// TestQAAC_ExactArgv_AssertsCorrectArguments validates qaac command uses exact expected argv
+// TestQAAC_ExactArgv_AssertsCorrectArguments validates qaac command uses exact expected argv.
 func TestQAAC_ExactArgv_AssertsCorrectArguments(t *testing.T) {
 	runner := newToolRunnerWithCapture(ToolsConfig{
 		Encoder:  "qaac",
@@ -108,7 +108,7 @@ func TestQAAC_ExactArgv_AssertsCorrectArguments(t *testing.T) {
 	}
 }
 
-// TestLAME_ExactArgv_AssertsCorrectArguments validates lame command uses exact expected argv
+// TestLAME_ExactArgv_AssertsCorrectArguments validates lame command uses exact expected argv.
 func TestLAME_ExactArgv_AssertsCorrectArguments(t *testing.T) {
 	runner := newToolRunnerWithCapture(ToolsConfig{
 		Encoder:  "lame",

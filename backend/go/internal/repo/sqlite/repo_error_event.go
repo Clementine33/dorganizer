@@ -6,13 +6,13 @@ import (
 
 // ==================== Error Event Methods ====================
 
-// CreateErrorEvent logs an error event
+// CreateErrorEvent logs an error event.
 func (r *Repository) CreateErrorEvent(e *ErrorEvent) error {
 	retryable := 0
 	if e.Retryable {
 		retryable = 1
 	}
-	var path interface{}
+	var path any
 	if e.Path != nil {
 		path = *e.Path
 	}
@@ -28,7 +28,7 @@ func (r *Repository) CreateErrorEvent(e *ErrorEvent) error {
 	return nil
 }
 
-// ListErrorEventsByRoot returns error events for a root
+// ListErrorEventsByRoot returns error events for a root.
 func (r *Repository) ListErrorEventsByRoot(rootPath string) ([]*ErrorEvent, error) {
 	rows, err := r.db.Query(`
 		SELECT id, scope, root_path, path, code, message, retryable, created_at
@@ -45,7 +45,16 @@ func (r *Repository) ListErrorEventsByRoot(rootPath string) ([]*ErrorEvent, erro
 		var retryable int
 		var createdAtStr string
 		var path sql.NullString
-		if err := rows.Scan(&e.ID, &e.Scope, &e.RootPath, &path, &e.Code, &e.Message, &retryable, &createdAtStr); err != nil {
+		if err := rows.Scan(
+			&e.ID,
+			&e.Scope,
+			&e.RootPath,
+			&path,
+			&e.Code,
+			&e.Message,
+			&retryable,
+			&createdAtStr,
+		); err != nil {
 			return nil, err
 		}
 		if path.Valid {

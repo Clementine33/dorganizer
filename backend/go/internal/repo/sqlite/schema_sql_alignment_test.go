@@ -81,7 +81,10 @@ func TestSchemaSQL_ContainsRuntimeEntriesColumnsAndIndex(t *testing.T) {
 		{"idx_entries_parent_path", "create index if not exists idx_entries_parent_path on entries(parent_path)"},
 		{"idx_entries_path_posix", "create index if not exists idx_entries_path_posix on entries(path_posix)"},
 		{"idx_entries_path", "create index if not exists idx_entries_path on entries(path)"},
-		{"idx_entries_root_dir_path", "create index if not exists idx_entries_root_dir_path on entries(root_path, is_dir, path)"},
+		{
+			"idx_entries_root_dir_path",
+			"create index if not exists idx_entries_root_dir_path on entries(root_path, is_dir, path)",
+		},
 	}
 
 	for _, req := range indexChecks {

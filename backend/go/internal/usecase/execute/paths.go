@@ -47,19 +47,15 @@ func attributeFolderPath(rootPath, candidatePath string) string {
 	prefix := rootNorm + "/"
 	var relPath string
 
-	var isContained, isSame bool
+	var isContained bool
 	if runtime.GOOS == "windows" {
 		isContained = strings.HasPrefix(strings.ToLower(candidateNorm), strings.ToLower(prefix))
-		isSame = strings.EqualFold(candidateNorm, rootNorm)
 	} else {
 		isContained = strings.HasPrefix(candidateNorm, prefix)
-		isSame = candidateNorm == rootNorm
 	}
 
 	if isContained {
 		relPath = candidateNorm[len(prefix):]
-	} else if isSame {
-		return ""
 	} else {
 		return ""
 	}

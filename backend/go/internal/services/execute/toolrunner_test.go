@@ -15,14 +15,14 @@ import (
 // Soft Delete Retry/Failure Strategy Tests
 // =============================================================================
 
-// mockRenameLockedBusy simulates Locked/Busy error on every rename call
+// mockRenameLockedBusy simulates Locked/Busy error on every rename call.
 type mockRenameLockedBusy struct {
 	mu        sync.Mutex
-	callCount int32
+	callCount atomic.Int32
 }
 
 func (m *mockRenameLockedBusy) rename(oldpath, newpath string) error {
-	atomic.AddInt32(&m.callCount, 1)
+	m.callCount.Add(1)
 	// Simulate Windows ERROR_LOCK_VIOLATION (33) or similar locked/busy condition
 	return &os.PathError{
 		Op:   "rename",
@@ -32,17 +32,17 @@ func (m *mockRenameLockedBusy) rename(oldpath, newpath string) error {
 }
 
 func (m *mockRenameLockedBusy) getCallCount() int {
-	return int(atomic.LoadInt32(&m.callCount))
+	return int(m.callCount.Load())
 }
 
-// mockRenamePermissionDenied simulates Permission Denied error
+// mockRenamePermissionDenied simulates Permission Denied error.
 type mockRenamePermissionDenied struct {
 	mu        sync.Mutex
-	callCount int32
+	callCount atomic.Int32
 }
 
 func (m *mockRenamePermissionDenied) rename(oldpath, newpath string) error {
-	atomic.AddInt32(&m.callCount, 1)
+	m.callCount.Add(1)
 	// Simulate Permission Denied
 	return &os.PathError{
 		Op:   "rename",
@@ -52,7 +52,7 @@ func (m *mockRenamePermissionDenied) rename(oldpath, newpath string) error {
 }
 
 func (m *mockRenamePermissionDenied) getCallCount() int {
-	return int(atomic.LoadInt32(&m.callCount))
+	return int(m.callCount.Load())
 }
 
 // TestDelete_SoftDelete_LockedBusy_RetriesUpToMax tests that when os.Rename
@@ -62,7 +62,7 @@ func (m *mockRenamePermissionDenied) getCallCount() int {
 // Expected behavior (TDD RED - not yet implemented):
 // - Rename fails with Locked/Busy -> retry with exponential backoff
 // - After 3 failed attempts, return error
-// - Do NOT fall back to hard delete
+// - Do NOT fall back to hard delete.
 func TestDelete_SoftDelete_LockedBusy_RetriesUpToMax(t *testing.T) {
 	// Save original rename function and restore after test
 	originalRename := renameFunc
@@ -110,7 +110,7 @@ func TestDelete_SoftDelete_LockedBusy_RetriesUpToMax(t *testing.T) {
 //
 // Expected behavior (TDD RED - not yet implemented):
 // - Rename fails with Permission Denied -> no retry, immediate failure
-// - Return error without falling back to hard delete
+// - Return error without falling back to hard delete.
 func TestDelete_SoftDelete_PermissionDenied_NoRetry(t *testing.T) {
 	// Save original rename function and restore after test
 	originalRename := renameFunc

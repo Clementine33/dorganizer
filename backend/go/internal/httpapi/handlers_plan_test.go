@@ -28,10 +28,10 @@ func inlinePolicyFixture() map[string]any {
 	return map[string]any{
 		"kind": "inline",
 		"policy": map[string]any{
-			"schema_version":   1,
-			"classifier_tags":  []string{"SEなし"},
-			"matched":          profile,
-			"unmatched":        profile,
+			"schema_version":  1,
+			"classifier_tags": []string{"SEなし"},
+			"matched":         profile,
+			"unmatched":       profile,
 		},
 	}
 }
@@ -123,7 +123,11 @@ func newPlanTestServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 
 // seedWorkflowFolder seeds a library with one folder holding flac+mp3 pairs
 // (no wav, no bitrate facts) so a balanced preset is actionable.
-func seedWorkflowFolder(t *testing.T, engine http.Handler, repo *sqlite.Repository) (libID string, folder *sqlite.LibraryFolder) {
+func seedWorkflowFolder(
+	t *testing.T,
+	engine http.Handler,
+	repo *sqlite.Repository,
+) (libID string, folder *sqlite.LibraryFolder) {
 	t.Helper()
 	libID = createLibraryViaAPI(t, engine, "Music", "/music")
 
@@ -166,7 +170,7 @@ func TestCreateWorkflowPlanWithFolderIDs(t *testing.T) {
 			"schema_version": 1,
 			"steps": []any{map[string]any{
 				"step_type": "reconcile_audio_outputs",
-				"policy": inlinePolicyFixture(),
+				"policy":    inlinePolicyFixture(),
 			}},
 		},
 	}, nil)
@@ -233,24 +237,45 @@ func TestCreateWorkflowPlanSchemaErrors(t *testing.T) {
 		{
 			name: "bad schema version",
 			body: map[string]any{
-				"library_id": libID, "folder_ids": []string{folder.ID},
-				"workflow": map[string]any{"schema_version": 99, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}}},
+				"library_id": libID,
+				"folder_ids": []string{folder.ID},
+				"workflow": map[string]any{
+					"schema_version": 99,
+					"steps": []any{
+						map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()},
+					},
+				},
 			},
 			code: "INVALID_WORKFLOW_SCHEMA", status: http.StatusBadRequest,
 		},
 		{
 			name: "unsupported step",
 			body: map[string]any{
-				"library_id": libID, "folder_ids": []string{folder.ID},
-				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "rename_files", "policy": inlinePolicyFixture()}}},
+				"library_id": libID,
+				"folder_ids": []string{folder.ID},
+				"workflow": map[string]any{
+					"schema_version": 1,
+					"steps": []any{
+						map[string]any{"step_type": "rename_files", "policy": inlinePolicyFixture()},
+					},
+				},
 			},
 			code: "UNSUPPORTED_STEP", status: http.StatusBadRequest,
 		},
 		{
 			name: "unsupported policy source",
 			body: map[string]any{
-				"library_id": libID, "folder_ids": []string{folder.ID},
-				"workflow": map[string]any{"schema_version": 1, "steps": []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "nope", "version": 1}}}},
+				"library_id": libID,
+				"folder_ids": []string{folder.ID},
+				"workflow": map[string]any{
+					"schema_version": 1,
+					"steps": []any{
+						map[string]any{
+							"step_type": "reconcile_audio_outputs",
+							"policy":    map[string]any{"kind": "preset", "name": "nope", "version": 1},
+						},
+					},
+				},
 			},
 			code: "INVALID_POLICY_SOURCE", status: http.StatusBadRequest,
 		},
@@ -279,7 +304,9 @@ func TestCreateWorkflowPlanRequiresScope(t *testing.T) {
 		"library_id": libID,
 		"workflow": map[string]any{
 			"schema_version": 1,
-			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}},
+			"steps": []any{
+				map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()},
+			},
 		},
 	}, nil)
 	if w.Code != http.StatusBadRequest {
@@ -342,7 +369,9 @@ func TestCreatePlanServiceNotConfigured(t *testing.T) {
 		"library_id": libID,
 		"workflow": map[string]any{
 			"schema_version": 1,
-			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()}},
+			"steps": []any{
+				map[string]any{"step_type": "reconcile_audio_outputs", "policy": inlinePolicyFixture()},
+			},
 		},
 	}, nil)
 	if w.Code != http.StatusInternalServerError {
@@ -394,7 +423,11 @@ func TestGetWorkflowPlanDetailRoundTrip(t *testing.T) {
 		t.Fatalf("detail steps = %d, want 1", len(detail.Steps))
 	}
 	if len(detail.Steps[0].Components) != len(plan.Steps[0].Components) {
-		t.Fatalf("detail components %d != create components %d", len(detail.Steps[0].Components), len(plan.Steps[0].Components))
+		t.Fatalf(
+			"detail components %d != create components %d",
+			len(detail.Steps[0].Components),
+			len(plan.Steps[0].Components),
+		)
 	}
 	if detail.Steps[0].PolicyHash != plan.Steps[0].PolicyHash {
 		t.Fatalf("detail policy_hash %q != create %q", detail.Steps[0].PolicyHash, plan.Steps[0].PolicyHash)

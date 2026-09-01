@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -19,8 +20,22 @@ func newWorksetFixture(t *testing.T, libID, title string) (*Workset, []WorksetMe
 		UpdatedAt:   now,
 	}
 	members := []WorksetMember{
-		{WorksetID: w.ID, MemberIndex: 0, RelPath: "albumA", FolderID: "f-a", FolderPath: "/music/albumA", FolderName: "albumA"},
-		{WorksetID: w.ID, MemberIndex: 1, RelPath: "albumB", FolderID: "f-b", FolderPath: "/music/albumB", FolderName: "albumB"},
+		{
+			WorksetID:   w.ID,
+			MemberIndex: 0,
+			RelPath:     "albumA",
+			FolderID:    "f-a",
+			FolderPath:  "/music/albumA",
+			FolderName:  "albumA",
+		},
+		{
+			WorksetID:   w.ID,
+			MemberIndex: 1,
+			RelPath:     "albumB",
+			FolderID:    "f-b",
+			FolderPath:  "/music/albumB",
+			FolderName:  "albumB",
+		},
 	}
 	draft := WorksetDraft{
 		WorksetID:             w.ID,
@@ -91,7 +106,7 @@ func TestCreateWorksetIdempotency(t *testing.T) {
 	// Same key on a second workset must conflict.
 	w2, members2, draft2 := newWorksetFixture(t, "lib-1", "dup2")
 	w2.CreationIdemKey = "idem-1"
-	if err := repo.CreateWorkset(w2, members2, draft2); err != ErrWorksetIdemConflict {
+	if err := repo.CreateWorkset(w2, members2, draft2); !errors.Is(err, ErrWorksetIdemConflict) {
 		t.Fatalf("second create err = %v, want ErrWorksetIdemConflict", err)
 	}
 
@@ -117,7 +132,11 @@ func TestClearExpiredWorksetIdemKey(t *testing.T) {
 
 	// Backdate the workset beyond the 30-day window.
 	old := time.Now().Add(-31 * 24 * time.Hour)
-	if _, err := repo.db.Exec("UPDATE worksets SET created_at = ? WHERE id = ?", old.Format(timeFormat), w.ID); err != nil {
+	if _, err := repo.db.Exec(
+		"UPDATE worksets SET created_at = ? WHERE id = ?",
+		old.Format(timeFormat),
+		w.ID,
+	); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 
@@ -148,7 +167,7 @@ func TestWorksetVersionGuard(t *testing.T) {
 	}
 
 	// Stale version must conflict.
-	if err := repo.UpdateWorksetTitle(w.ID, "renamed", 99, time.Now()); err != ErrVersionConflict {
+	if err := repo.UpdateWorksetTitle(w.ID, "renamed", 99, time.Now()); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("stale version err = %v, want ErrVersionConflict", err)
 	}
 
@@ -180,7 +199,7 @@ func TestWorksetListPagination(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	now := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		w, members, draft := newWorksetFixture(t, "lib-1", string(rune('a'+i)))
 		w.ID = "ws-list-" + string(rune('a'+i))
 		w.CreatedAt = now.Add(time.Duration(i) * time.Second)
@@ -249,8 +268,20 @@ func TestWorksetRevisionLifecycle(t *testing.T) {
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
 		}},
 		Roots: []WorkflowRootRecord{
-			{RootIndex: 0, RootPath: "/music/albumA", RootIdentity: "albumA", InventoryFingerprint: "fp-a", EntryCount: 2},
-			{RootIndex: 1, RootPath: "/music/albumB", RootIdentity: "albumB", InventoryFingerprint: "fp-b", EntryCount: 1},
+			{
+				RootIndex:            0,
+				RootPath:             "/music/albumA",
+				RootIdentity:         "albumA",
+				InventoryFingerprint: "fp-a",
+				EntryCount:           2,
+			},
+			{
+				RootIndex:            1,
+				RootPath:             "/music/albumB",
+				RootIdentity:         "albumB",
+				InventoryFingerprint: "fp-b",
+				EntryCount:           1,
+			},
 		},
 	})
 	if err != nil {
@@ -281,10 +312,23 @@ func TestWorksetRevisionLifecycle(t *testing.T) {
 		t.Fatalf("CreateGeneration 2: %v", err)
 	}
 	if err := repo.PersistWorksetRevision(g2.GenerationID, w.ID, now.Add(time.Second), WorksetRevisionPersist{
-		PlanID: "plan-2", RootPath: "/music/albumA", SnapshotToken: "snap-2", LibraryID: "lib-1",
-		DraftHash: "hash-2", MemberHash: "members-1", WorksetsVersion: 2,
-		Steps: []WorkflowStepRecord{{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"}},
-		Roots: []WorkflowRootRecord{{RootIndex: 0, RootPath: "/music/albumA", RootIdentity: "albumA", InventoryFingerprint: "fp-a2", EntryCount: 3}},
+		PlanID:          "plan-2",
+		RootPath:        "/music/albumA",
+		SnapshotToken:   "snap-2",
+		LibraryID:       "lib-1",
+		DraftHash:       "hash-2",
+		MemberHash:      "members-1",
+		WorksetsVersion: 2,
+		Steps:           []WorkflowStepRecord{{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"}},
+		Roots: []WorkflowRootRecord{
+			{
+				RootIndex:            0,
+				RootPath:             "/music/albumA",
+				RootIdentity:         "albumA",
+				InventoryFingerprint: "fp-a2",
+				EntryCount:           3,
+			},
+		},
 	}); err != nil {
 		t.Fatalf("PersistWorksetRevision 2: %v", err)
 	}
@@ -320,7 +364,7 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 
 	// Same workset+key conflict.
 	g2 := &PlanGeneration{GenerationID: "gen-2", WorksetID: w.ID, IdempotencyKey: "key-1", CreatedAt: now}
-	if err := repo.CreateGeneration(g2); err != ErrGenerationIdemConflict {
+	if err := repo.CreateGeneration(g2); !errors.Is(err, ErrGenerationIdemConflict) {
 		t.Fatalf("dup key err = %v, want ErrGenerationIdemConflict", err)
 	}
 
@@ -425,7 +469,19 @@ func TestListPlansExcludesWorksetPlans(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	// Standalone plan.
-	if err := repo.CreatePlan(&Plan{PlanID: "plan-standalone", RootPath: "/music", ScanRootPath: "/music", PlanType: "workflow", SnapshotToken: "s", Status: "ready", PlanKind: "workflow", WorkflowSchemaVersion: 1, CreatedAt: time.Now()}); err != nil {
+	if err := repo.CreatePlan(
+		&Plan{
+			PlanID:                "plan-standalone",
+			RootPath:              "/music",
+			ScanRootPath:          "/music",
+			PlanType:              "workflow",
+			SnapshotToken:         "s",
+			Status:                "ready",
+			PlanKind:              "workflow",
+			WorkflowSchemaVersion: 1,
+			CreatedAt:             time.Now(),
+		},
+	); err != nil {
 		t.Fatalf("create standalone: %v", err)
 	}
 	// Workset revision plan (workset_id set directly, association inserted later).

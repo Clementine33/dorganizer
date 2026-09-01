@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	appconfig "github.com/onsei/organizer/backend/internal/config"
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
@@ -26,7 +29,6 @@ import (
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
-	"google.golang.org/grpc"
 )
 
 var version = "dev"
@@ -67,9 +69,15 @@ func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
 		return err
 	}
 	elapsed := time.Since(start)
-	log.Printf("startup retention cleanup: deleted error_events=%d scan_sessions=%d generations=%d plans=%d cutoff=%s elapsed_ms=%d",
-		stats.DeletedErrorEvents, stats.DeletedScanSessions, stats.DeletedGenerations, stats.DeletedPlans,
-		cutoff.Format(time.RFC3339), elapsed.Milliseconds())
+	log.Printf(
+		"startup retention cleanup: deleted error_events=%d scan_sessions=%d generations=%d plans=%d cutoff=%s elapsed_ms=%d",
+		stats.DeletedErrorEvents,
+		stats.DeletedScanSessions,
+		stats.DeletedGenerations,
+		stats.DeletedPlans,
+		cutoff.Format(time.RFC3339),
+		elapsed.Milliseconds(),
+	)
 	return nil
 }
 
@@ -233,9 +241,12 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		if runtime.GOOS == "windows" {
 			const wsacancelled = 10004
-			if opErr, ok := err.(*net.OpError); ok {
-				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
-					if errno, ok := sysErr.Err.(syscall.Errno); ok && int(errno) == wsacancelled {
+			opErr := &net.OpError{}
+			if errors.As(err, &opErr) {
+				sysErr := &os.SyscallError{}
+				if errors.As(opErr.Err, &sysErr) {
+					var errno syscall.Errno
+					if errors.As(sysErr.Err, &errno) {
 						return
 					}
 				}
@@ -251,7 +262,13 @@ func main() {
 // drainServers shuts down both servers concurrently so neither consumes the
 // other's graceful window. httpShutdown runs with ctx; at the deadline (ctx
 // done) httpClose and grpcStop force-stop each server so the drain returns.
-func drainServers(ctx context.Context, httpShutdown func(context.Context) error, httpClose func() error, grpcGraceful func(), grpcStop func()) {
+func drainServers(
+	ctx context.Context,
+	httpShutdown func(context.Context) error,
+	httpClose func() error,
+	grpcGraceful func(),
+	grpcStop func(),
+) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {

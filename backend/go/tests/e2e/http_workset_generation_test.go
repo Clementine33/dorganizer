@@ -36,7 +36,17 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	// Create + scan the library.
 	libReq := map[string]string{"name": "E2E", "root_path": filepath.ToSlash(rootPath)}
 	var lib struct{ ID string }
-	if code := doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/libraries", token, libReq, &lib); code != http.StatusCreated {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/libraries",
+		token,
+		libReq,
+		&lib,
+	); code != http.StatusCreated {
 		t.Fatalf("create lib: %d", code)
 	}
 	events := postScanSSE(t, client, ctx, base, lib.ID, token)
@@ -50,7 +60,18 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			Path string `json:"path"`
 		} `json:"folders"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/libraries/"+lib.ID+"/folders", token, nil, &folders); code != http.StatusOK || len(folders.Folders) == 0 {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/folders",
+		token,
+		nil,
+		&folders,
+	); code != http.StatusOK ||
+		len(folders.Folders) == 0 {
 		t.Fatalf("folders: code=%d n=%d", code, len(folders.Folders))
 	}
 	var albumFolderID string
@@ -72,7 +93,17 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		} `json:"workset"`
 		Created bool `json:"created"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/worksets", token, wsReq, &wsResp); code != http.StatusCreated {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/worksets",
+		token,
+		wsReq,
+		&wsResp,
+	); code != http.StatusCreated {
 		t.Fatalf("create workset: %d", code)
 	}
 	wsID := wsResp.Workset.WorksetID
@@ -82,8 +113,18 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 
 	// Start generation on the seeded balanced draft. Idempotency-Key required.
 	genReq := map[string]any{"expected_draft_version": 1}
-	if code := doJSONWithHeaders(t, client, ctx, base, http.MethodPost,
-		"/api/v1/worksets/"+wsID+"/revisions", token, map[string]string{"Idempotency-Key": "gen-key-1"}, genReq, nil); code != http.StatusAccepted {
+	if code := doJSONWithHeaders(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/worksets/"+wsID+"/revisions",
+		token,
+		map[string]string{"Idempotency-Key": "gen-key-1"},
+		genReq,
+		nil,
+	); code != http.StatusAccepted {
 		t.Fatalf("start generation: %d", code)
 	}
 
@@ -117,7 +158,17 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/worksets/"+wsID+"/planning-sessions/"+lastGenID, token, nil, &genDetail)
+		code := doJSON(
+			t,
+			client,
+			ctx,
+			base,
+			http.MethodGet,
+			"/api/v1/worksets/"+wsID+"/planning-sessions/"+lastGenID,
+			token,
+			nil,
+			&genDetail,
+		)
 		if code != http.StatusOK {
 			t.Fatalf("generation detail: %d", code)
 		}
@@ -135,8 +186,8 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 
 	// Review the nested immutable revision.
 	var rev struct {
-		PlanID   string `json:"plan_id"`
-		Roots    []struct {
+		PlanID string `json:"plan_id"`
+		Roots  []struct {
 			RootIndex int    `json:"root_index"`
 			RootPath  string `json:"root_path"`
 		} `json:"roots"`
@@ -150,7 +201,17 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			} `json:"summary"`
 		} `json:"workflow"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/worksets/"+wsID+"/revisions/"+genDetail.RevisionID, token, nil, &rev); code != http.StatusOK {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/worksets/"+wsID+"/revisions/"+genDetail.RevisionID,
+		token,
+		nil,
+		&rev,
+	); code != http.StatusOK {
 		t.Fatalf("revision detail: %d", code)
 	}
 	if rev.Workflow.Summary.SummaryReason == "" {
@@ -181,14 +242,34 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			PlanID string `json:"plan_id"`
 		} `json:"revision"`
 	}
-	code := doJSONWithHeaders(t, client, ctx, base, http.MethodPost,
-		"/api/v1/worksets/"+wsID+"/revisions", token, map[string]string{"Idempotency-Key": "gen-key-2"}, genReq, &replay)
+	code := doJSONWithHeaders(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/worksets/"+wsID+"/revisions",
+		token,
+		map[string]string{"Idempotency-Key": "gen-key-2"},
+		genReq,
+		&replay,
+	)
 	if code != http.StatusOK || replay.Created || replay.Revision.PlanID != genDetail.RevisionID {
 		t.Fatalf("replay: code=%d replay=%+v", code, replay)
 	}
 
 	// Delete the library (no active generation) succeeds and orphans the workset.
-	if code := doJSON(t, client, ctx, base, http.MethodDelete, "/api/v1/libraries/"+lib.ID, token, nil, nil); code != http.StatusNoContent {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodDelete,
+		"/api/v1/libraries/"+lib.ID,
+		token,
+		nil,
+		nil,
+	); code != http.StatusNoContent {
 		t.Fatalf("delete library: %d", code)
 	}
 	var orphan struct {
@@ -197,10 +278,21 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			ValidationState string `json:"validation_state"`
 		} `json:"current_revision"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/worksets/"+wsID, token, nil, &orphan); code != http.StatusOK {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/worksets/"+wsID,
+		token,
+		nil,
+		&orphan,
+	); code != http.StatusOK {
 		t.Fatalf("orphan detail: %d", code)
 	}
-	if orphan.PlanningState != "orphaned" || orphan.CurrentRevision == nil || orphan.CurrentRevision.ValidationState != "unavailable" {
+	if orphan.PlanningState != "orphaned" || orphan.CurrentRevision == nil ||
+		orphan.CurrentRevision.ValidationState != "unavailable" {
 		t.Fatalf("orphan: %+v", orphan)
 	}
 
@@ -212,7 +304,12 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		"/api/v1/worksets/"+wsID+"/draft", token, map[string]string{"If-Match": "1"},
 		map[string]any{"workflow": map[string]any{
 			"schema_version": 1,
-			"steps":          []any{map[string]any{"step_type": "reconcile_audio_outputs", "policy": map[string]any{"kind": "preset", "name": "compact", "version": 1}}},
+			"steps": []any{
+				map[string]any{
+					"step_type": "reconcile_audio_outputs",
+					"policy":    map[string]any{"kind": "preset", "name": "compact", "version": 1},
+				},
+			},
 		}}, &draftResp)
 	if code != http.StatusConflict || draftResp.Code != "ORPHANED_WORKSET" {
 		t.Fatalf("orphan draft save: code=%d resp=%+v", code, draftResp)
@@ -220,7 +317,15 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 }
 
 // doJSONWithHeaders is doJSON with extra request headers (If-Match, Idempotency-Key).
-func doJSONWithHeaders(t *testing.T, client *http.Client, ctx context.Context, base, method, path, token string, headers map[string]string, body any, out any) int {
+func doJSONWithHeaders(
+	t *testing.T,
+	client *http.Client,
+	ctx context.Context,
+	base, method, path, token string,
+	headers map[string]string,
+	body any,
+	out any,
+) int {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {

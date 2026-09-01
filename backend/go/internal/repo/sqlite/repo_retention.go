@@ -8,7 +8,7 @@ import (
 
 // ==================== Retention Cleanup ====================
 
-// DeleteErrorEventsOlderThanTx deletes error_events rows with created_at < cutoff within tx
+// DeleteErrorEventsOlderThanTx deletes error_events rows with created_at < cutoff within tx.
 func (r *Repository) DeleteErrorEventsOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
 	result, err := tx.Exec(
 		"DELETE FROM error_events WHERE julianday(created_at) < julianday(?)",

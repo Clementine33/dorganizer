@@ -92,7 +92,12 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, sqlite.ErrLibraryHasWorksets) {
-			writeError(w, http.StatusConflict, "LIBRARY_HAS_WORKSETS", "cannot change the library root while worksets are linked; delete the library to orphan its worksets first")
+			writeError(
+				w,
+				http.StatusConflict,
+				"LIBRARY_HAS_WORKSETS",
+				"cannot change the library root while worksets are linked; delete the library to orphan its worksets first",
+			)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update library")
@@ -109,7 +114,12 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, sqlite.ErrGenerationInProgress) {
-			writeError(w, http.StatusConflict, "GENERATION_IN_PROGRESS", "cancel active generations before deleting the library")
+			writeError(
+				w,
+				http.StatusConflict,
+				"GENERATION_IN_PROGRESS",
+				"cancel active generations before deleting the library",
+			)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to delete library")

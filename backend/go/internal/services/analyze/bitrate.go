@@ -50,19 +50,14 @@ func (a *Analyzer) enrichMissingMP3Bitrate(entries []Entry, batchUpdate bool) er
 		return nil
 	}
 
-	workers := 4
-	if len(idx) < workers {
-		workers = len(idx)
-	}
+	workers := min(len(idx), 4)
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	updates := make([]bitrateUpdate, 0, len(idx))
 	var updatesMu sync.Mutex
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range jobs {
 				bitrate, err := probeBitrate(entries[i].PathPosix)
 				if err != nil || bitrate <= 0 {
@@ -73,7 +68,7 @@ func (a *Analyzer) enrichMissingMP3Bitrate(entries []Entry, batchUpdate bool) er
 				updates = append(updates, bitrateUpdate{pathPosix: entries[i].PathPosix, bitrate: bitrate})
 				updatesMu.Unlock()
 			}
-		}()
+		})
 	}
 
 	for _, i := range idx {
@@ -111,10 +106,7 @@ func chunkBitrateUpdates(updates []bitrateUpdate, chunkSize int) [][]bitrateUpda
 
 	chunks := make([][]bitrateUpdate, 0, (len(updates)+chunkSize-1)/chunkSize)
 	for start := 0; start < len(updates); start += chunkSize {
-		end := start + chunkSize
-		if end > len(updates) {
-			end = len(updates)
-		}
+		end := min(start+chunkSize, len(updates))
 		chunks = append(chunks, updates[start:end])
 	}
 
@@ -156,7 +148,8 @@ func (a *Analyzer) persistBitrateUpdates(updates []bitrateUpdate, batchUpdate bo
 func (a *Analyzer) persistBitrateUpdatesOnce(updates []bitrateUpdate, batchUpdate bool) error {
 	if !batchUpdate {
 		for _, update := range updates {
-			if _, err := a.repo.DB().Exec("UPDATE entries SET bitrate = ?, updated_at = datetime('now') WHERE path = ?", update.bitrate, update.pathPosix); err != nil {
+			if _, err := a.repo.DB().
+				Exec("UPDATE entries SET bitrate = ?, updated_at = datetime('now') WHERE path = ?", update.bitrate, update.pathPosix); err != nil {
 				return err
 			}
 		}
@@ -195,12 +188,12 @@ func (a *Analyzer) persistBitrateUpdatesOnce(updates []bitrateUpdate, batchUpdat
 	return nil
 }
 
-func buildBatchBitrateUpdateQuery(chunk []bitrateUpdate) (string, []interface{}) {
+func buildBatchBitrateUpdateQuery(chunk []bitrateUpdate) (string, []any) {
 	var b strings.Builder
 	b.Grow(128 + len(chunk)*32)
 
 	b.WriteString("UPDATE entries SET bitrate = CASE path")
-	args := make([]interface{}, 0, len(chunk)*3)
+	args := make([]any, 0, len(chunk)*3)
 	for _, u := range chunk {
 		b.WriteString(" WHEN ? THEN ?")
 		args = append(args, u.pathPosix, u.bitrate)

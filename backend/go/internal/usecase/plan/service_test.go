@@ -30,9 +30,26 @@ func seedWorkflowEntries(t *testing.T, repo *sqlite.Repository) {
 	}
 	for _, p := range []string{"SEあり", "SEなし"} {
 		for _, n := range []string{"00", "01"} {
-			rows = append(rows,
-				row{"/music/" + p + "/wav/" + n + ".wav", "/music/" + p + "/wav", n + ".wav", "wav", 100000, 1700000000, 0},
-				row{"/music/" + p + "/mp3/" + n + ".mp3", "/music/" + p + "/mp3", n + ".mp3", "mpeg", 12000, 1700000000, 320000},
+			rows = append(
+				rows,
+				row{
+					"/music/" + p + "/wav/" + n + ".wav",
+					"/music/" + p + "/wav",
+					n + ".wav",
+					"wav",
+					100000,
+					1700000000,
+					0,
+				},
+				row{
+					"/music/" + p + "/mp3/" + n + ".mp3",
+					"/music/" + p + "/mp3",
+					n + ".mp3",
+					"mpeg",
+					12000,
+					1700000000,
+					320000,
+				},
 			)
 		}
 	}
@@ -69,7 +86,10 @@ func balancedWorkflowRequest() Request {
 func inlinePolicyPtr(tags ...string) *reconcile.Policy {
 	profile := reconcile.DesiredProfile{
 		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
-		Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+		Encoded: &reconcile.AudioOutputSpec{
+			Codec:   reconcile.CodecMp3,
+			Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
+		},
 	}
 	return &reconcile.Policy{
 		SchemaVersion:  1,

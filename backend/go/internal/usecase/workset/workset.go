@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,7 +30,7 @@ func newToken() string {
 	var rnd [4]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
 		// Fall back to the timestamp-only form rather than failing creation.
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
 	}
 	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
 }
@@ -42,14 +44,19 @@ func (s *serviceImpl) CreateWorkset(ctx context.Context, req CreateRequest) (*Cr
 		return nil, err
 	}
 	if len(req.FolderIDs) == 0 || len(req.FolderIDs) > MaxMembers {
-		return nil, NewError(ErrKindInvalidArgument, "INVALID_FOLDER_COUNT", fmt.Sprintf("worksets require between 1 and %d album folders", MaxMembers), nil)
+		return nil, NewError(
+			ErrKindInvalidArgument,
+			"INVALID_FOLDER_COUNT",
+			fmt.Sprintf("worksets require between 1 and %d album folders", MaxMembers),
+			nil,
+		)
 	}
 	if err := validateIdemKey(req.IdempotencyKey); err != nil {
 		return nil, err
 	}
 	lib, err := s.repo.GetLibrary(req.LibraryID)
 	if err != nil {
-		if err == sqlite.ErrLibraryNotFound {
+		if errors.Is(err, sqlite.ErrLibraryNotFound) {
 			return nil, NewError(ErrKindNotFound, "LIBRARY_NOT_FOUND", "library not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load library", err)
@@ -89,7 +96,12 @@ func (s *serviceImpl) replayCreate(ctx context.Context, key string) (*CreateResu
 	return nil, false, nil
 }
 
-func (s *serviceImpl) persistWorkset(ctx context.Context, title, idemKey string, lib *sqlite.Library, members []sqlite.WorksetMember) (*CreateResult, error) {
+func (s *serviceImpl) persistWorkset(
+	ctx context.Context,
+	title, idemKey string,
+	lib *sqlite.Library,
+	members []sqlite.WorksetMember,
+) (*CreateResult, error) {
 	now := time.Now()
 	ws := &sqlite.Workset{
 		ID:              "ws-" + newToken(),
@@ -109,7 +121,7 @@ func (s *serviceImpl) persistWorkset(ctx context.Context, title, idemKey string,
 		rows = append(rows, m)
 	}
 	if err := s.repo.CreateWorkset(ws, rows, s.seedDraft(ws.ID, now)); err != nil {
-		if err == sqlite.ErrWorksetIdemConflict {
+		if errors.Is(err, sqlite.ErrWorksetIdemConflict) {
 			if result, replayed, _ := s.replayCreate(ctx, idemKey); replayed {
 				return result, nil
 			}
@@ -139,13 +151,23 @@ func (s *serviceImpl) resolveMembers(lib *sqlite.Library, folderIDs []string) ([
 	for _, id := range folderIDs {
 		f, err := s.repo.GetLibraryFolder(lib.ID, id)
 		if err != nil {
-			if err == sqlite.ErrLibraryFolderNotFound {
-				return nil, NewError(ErrKindInvalidArgument, "LIBRARY_FOLDER_NOT_FOUND", fmt.Sprintf("folder %s not found in library", id), nil)
+			if errors.Is(err, sqlite.ErrLibraryFolderNotFound) {
+				return nil, NewError(
+					ErrKindInvalidArgument,
+					"LIBRARY_FOLDER_NOT_FOUND",
+					fmt.Sprintf("folder %s not found in library", id),
+					nil,
+				)
 			}
 			return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load library folder", err)
 		}
 		if !pathnorm.IsWithinRoot(lib.RootPath, f.Path) {
-			return nil, NewError(ErrKindInvalidArgument, "FOLDER_OUTSIDE_LIBRARY", fmt.Sprintf("folder %s is outside library root", f.Path), nil)
+			return nil, NewError(
+				ErrKindInvalidArgument,
+				"FOLDER_OUTSIDE_LIBRARY",
+				fmt.Sprintf("folder %s is outside library root", f.Path),
+				nil,
+			)
 		}
 		rel := strings.TrimPrefix(f.RelativePath, "/")
 		if rel == "" {
@@ -178,7 +200,12 @@ func validateTitle(title string) error {
 
 func validateIdemKey(key string) error {
 	if key != "" && (len(key) > 255 || strings.ContainsAny(key, " \t\r\n")) {
-		return NewError(ErrKindInvalidArgument, "INVALID_IDEMPOTENCY_KEY", "idempotency key is too long or malformed", nil)
+		return NewError(
+			ErrKindInvalidArgument,
+			"INVALID_IDEMPOTENCY_KEY",
+			"idempotency key is too long or malformed",
+			nil,
+		)
 	}
 	return nil
 }
@@ -194,7 +221,7 @@ func (s *serviceImpl) RenameWorkset(ctx context.Context, id string, req RenameRe
 	}
 	w, err := s.repo.GetWorkset(id)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
@@ -203,7 +230,7 @@ func (s *serviceImpl) RenameWorkset(ctx context.Context, id string, req RenameRe
 		return nil, NewError(ErrKindConflict, "ORPHANED_WORKSET", "orphaned worksets are read-only", nil)
 	}
 	if err := s.repo.UpdateWorksetTitle(id, title, req.IfMatchVersion, time.Now()); err != nil {
-		if err == sqlite.ErrVersionConflict {
+		if errors.Is(err, sqlite.ErrVersionConflict) {
 			return nil, NewError(ErrKindConflict, "VERSION_CONFLICT", "workset version conflict", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to rename workset", err)

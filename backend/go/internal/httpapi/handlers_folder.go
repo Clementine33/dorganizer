@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"facette.io/natsort"
+
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 

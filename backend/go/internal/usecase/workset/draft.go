@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,11 +26,17 @@ func (s *serviceImpl) seedDraft(worksetID string, now time.Time) sqlite.WorksetD
 		ClassifierTags: appconfig.LoadPruneLiteralTags(s.configDir),
 		Matched: reconcile.DesiredProfile{
 			Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
-			Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+			Encoded: &reconcile.AudioOutputSpec{
+				Codec:   reconcile.CodecMp3,
+				Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
+			},
 		},
 		Unmatched: reconcile.DesiredProfile{
 			Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
-			Encoded:  &reconcile.AudioOutputSpec{Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}},
+			Encoded: &reconcile.AudioOutputSpec{
+				Codec:   reconcile.CodecMp3,
+				Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
+			},
 		},
 	}
 	wf := planusecase.Workflow{
@@ -55,7 +62,7 @@ func (s *serviceImpl) GetDraft(ctx context.Context, id string) (*Draft, error) {
 	}
 	w, err := s.repo.GetWorkset(id)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
@@ -88,7 +95,7 @@ func (s *serviceImpl) SaveDraft(ctx context.Context, id string, req SaveDraftReq
 	}
 	w, err := s.repo.GetWorkset(id)
 	if err != nil {
-		if err == sqlite.ErrWorksetNotFound {
+		if errors.Is(err, sqlite.ErrWorksetNotFound) {
 			return nil, NewError(ErrKindNotFound, "WORKSET_NOT_FOUND", "workset not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
@@ -106,12 +113,24 @@ func (s *serviceImpl) SaveDraft(ctx context.Context, id string, req SaveDraftReq
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active generation", err)
 	}
 	if active != nil {
-		return nil, NewError(ErrKindConflict, "GENERATION_IN_PROGRESS", "cancel or wait for the active generation before editing the draft", nil)
+		return nil, NewError(
+			ErrKindConflict,
+			"GENERATION_IN_PROGRESS",
+			"cancel or wait for the active generation before editing the draft",
+			nil,
+		)
 	}
 	stepsJSON := mustJSON(req.Workflow)
 	draftHash := hashJSON([]byte(stepsJSON))
-	if err := s.repo.UpdateWorksetDraft(id, req.Workflow.SchemaVersion, stepsJSON, draftHash, req.IfMatchVersion, time.Now()); err != nil {
-		if err == sqlite.ErrVersionConflict {
+	if err := s.repo.UpdateWorksetDraft(
+		id,
+		req.Workflow.SchemaVersion,
+		stepsJSON,
+		draftHash,
+		req.IfMatchVersion,
+		time.Now(),
+	); err != nil {
+		if errors.Is(err, sqlite.ErrVersionConflict) {
 			return nil, NewError(ErrKindConflict, "VERSION_CONFLICT", "workset version conflict", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to save draft", err)
@@ -148,14 +167,29 @@ func parseWorkflowJSON(s string) (planusecase.Workflow, error) {
 // applied only when the draft must run.
 func validateWorkflow(wf planusecase.Workflow) error {
 	if wf.SchemaVersion != planusecase.WorkflowSchemaVersion {
-		return NewError(ErrKindInvalidArgument, "INVALID_WORKFLOW_SCHEMA", fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion), nil)
+		return NewError(
+			ErrKindInvalidArgument,
+			"INVALID_WORKFLOW_SCHEMA",
+			fmt.Sprintf("unsupported workflow schema version %d", wf.SchemaVersion),
+			nil,
+		)
 	}
 	if len(wf.Steps) != 1 || wf.Steps[0].StepType != planusecase.StepTypeReconcileAudio {
-		return NewError(ErrKindInvalidArgument, "UNSUPPORTED_STEP", "schema v1 supports only the reconcile_audio_outputs step", nil)
+		return NewError(
+			ErrKindInvalidArgument,
+			"UNSUPPORTED_STEP",
+			"schema v1 supports only the reconcile_audio_outputs step",
+			nil,
+		)
 	}
 	policy := wf.Steps[0].Policy
 	if policy.Kind != "inline" || policy.InlinePolicy == nil {
-		return NewError(ErrKindInvalidArgument, "INVALID_POLICY_SOURCE", "workflow policy must be a complete inline policy", nil)
+		return NewError(
+			ErrKindInvalidArgument,
+			"INVALID_POLICY_SOURCE",
+			"workflow policy must be a complete inline policy",
+			nil,
+		)
 	}
 	return nil
 }

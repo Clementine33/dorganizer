@@ -18,7 +18,7 @@ import (
 func TestScanRootCtxEmitsProgressAndCounts(t *testing.T) {
 	const n = 20
 	tmp := t.TempDir()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		album := filepath.Join(tmp, fmt.Sprintf("album-%02d", i))
 		if err := os.MkdirAll(album, 0755); err != nil {
 			t.Fatalf("mkdir %s: %v", album, err)
@@ -66,7 +66,7 @@ func TestScanRootCtxEmitsProgressAndCounts(t *testing.T) {
 func TestScanRootCtxCancellationCleansStaging(t *testing.T) {
 	const files = 2000
 	tmp := t.TempDir()
-	for i := 0; i < files; i++ {
+	for i := range files {
 		dir := filepath.Join(tmp, fmt.Sprintf("d%03d", i%50))
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -102,7 +102,9 @@ func TestScanRootCtxCancellationCleansStaging(t *testing.T) {
 	}
 
 	var status, errorCode string
-	if err := repo.DB().QueryRow("SELECT status, error_code FROM scan_sessions ORDER BY started_at DESC LIMIT 1").Scan(&status, &errorCode); err != nil {
+	if err := repo.DB().
+		QueryRow("SELECT status, error_code FROM scan_sessions ORDER BY started_at DESC LIMIT 1").
+		Scan(&status, &errorCode); err != nil {
 		t.Fatalf("query scan session: %v", err)
 	}
 	if status != "canceled" {

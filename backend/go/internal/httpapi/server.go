@@ -59,8 +59,14 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("GET /api/v1/worksets/{id}/revisions", protect(http.HandlerFunc(s.listRevisions)))
 	mux.Handle("GET /api/v1/worksets/{id}/revisions/{planId}", protect(http.HandlerFunc(s.getRevision)))
 	mux.Handle("GET /api/v1/worksets/{id}/planning-sessions/{genId}", protect(http.HandlerFunc(s.getGeneration)))
-	mux.Handle("GET /api/v1/worksets/{id}/planning-sessions/{genId}/events", protect(http.HandlerFunc(s.generationEvents)))
-	mux.Handle("POST /api/v1/worksets/{id}/planning-sessions/{genId}/cancel", protect(http.HandlerFunc(s.cancelGeneration)))
+	mux.Handle(
+		"GET /api/v1/worksets/{id}/planning-sessions/{genId}/events",
+		protect(http.HandlerFunc(s.generationEvents)),
+	)
+	mux.Handle(
+		"POST /api/v1/worksets/{id}/planning-sessions/{genId}/cancel",
+		protect(http.HandlerFunc(s.cancelGeneration)),
+	)
 	return recoveryMiddleware(corsMiddleware(deps.CORSOrigins)(routingCompatibilityMiddleware(mux)))
 }
 

@@ -18,7 +18,7 @@ type classifierCustomTagItem struct {
 }
 
 type classifierTagLibraryResponse struct {
-	DefaultTags []string                   `json:"default_tags"`
+	DefaultTags []string                  `json:"default_tags"`
 	CustomTags  []classifierCustomTagItem `json:"custom_tags"`
 }
 

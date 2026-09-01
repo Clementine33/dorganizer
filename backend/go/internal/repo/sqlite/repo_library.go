@@ -273,11 +273,20 @@ func (r *Repository) UpdateLibraryScanState(id, status, errMsg string, finishedA
 }
 
 // scanLibrary decodes a library row from a row or rows-based scanner.
-func scanLibrary(row interface{ Scan(...interface{}) error }) (*Library, error) {
+func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	var l Library
 	var createdAtStr, updatedAtStr string
 	var lastScanAt sql.NullString
-	if err := row.Scan(&l.ID, &l.Name, &l.RootPath, &createdAtStr, &updatedAtStr, &lastScanAt, &l.LastScanStatus, &l.LastScanError); err != nil {
+	if err := row.Scan(
+		&l.ID,
+		&l.Name,
+		&l.RootPath,
+		&createdAtStr,
+		&updatedAtStr,
+		&lastScanAt,
+		&l.LastScanStatus,
+		&l.LastScanError,
+	); err != nil {
 		return nil, err
 	}
 	l.CreatedAt = parseTimestamp(createdAtStr)
@@ -422,10 +431,19 @@ func (r *Repository) GetLibraryFolder(libraryID, folderID string) (*LibraryFolde
 
 // scanLibraryFolder decodes a library_folders row from a row or rows-based
 // scanner.
-func scanLibraryFolder(row interface{ Scan(...interface{}) error }) (*LibraryFolder, error) {
+func scanLibraryFolder(row interface{ Scan(...any) error }) (*LibraryFolder, error) {
 	var f LibraryFolder
 	var createdAtStr, updatedAtStr string
-	if err := row.Scan(&f.ID, &f.LibraryID, &f.Path, &f.Name, &f.RelativePath, &f.AudioFileCount, &createdAtStr, &updatedAtStr); err != nil {
+	if err := row.Scan(
+		&f.ID,
+		&f.LibraryID,
+		&f.Path,
+		&f.Name,
+		&f.RelativePath,
+		&f.AudioFileCount,
+		&createdAtStr,
+		&updatedAtStr,
+	); err != nil {
 		return nil, err
 	}
 	f.CreatedAt = parseTimestamp(createdAtStr)

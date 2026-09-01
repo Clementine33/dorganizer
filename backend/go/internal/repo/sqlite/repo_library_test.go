@@ -144,7 +144,9 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 
 	// FK cascade should have removed the folder row.
 	var folderCount int
-	if err := repo.DB().QueryRow(`SELECT COUNT(*) FROM library_folders WHERE library_id = ?`, lib1.ID).Scan(&folderCount); err != nil {
+	if err := repo.DB().
+		QueryRow(`SELECT COUNT(*) FROM library_folders WHERE library_id = ?`, lib1.ID).
+		Scan(&folderCount); err != nil {
 		t.Fatalf("failed to count library_folders: %v", err)
 	}
 	if folderCount != 0 {

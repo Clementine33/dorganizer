@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	executeusecase "github.com/onsei/organizer/backend/internal/usecase/execute"
 )
 
 // fakeExecuteService implements executeusecase.Service for adapter tests.
@@ -23,7 +24,11 @@ type fakeExecuteService struct {
 	err    error
 }
 
-func (f *fakeExecuteService) Execute(_ context.Context, req executeusecase.Request, sink executeusecase.EventSink) (executeusecase.Result, error) {
+func (f *fakeExecuteService) Execute(
+	_ context.Context,
+	req executeusecase.Request,
+	sink executeusecase.EventSink,
+) (executeusecase.Result, error) {
 	f.lastReq = req
 	for _, evt := range f.events {
 		if err := sink.Emit(evt); err != nil {

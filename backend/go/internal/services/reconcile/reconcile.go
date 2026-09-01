@@ -143,7 +143,13 @@ type groupPlan struct {
 	encodedTargetPath     string
 }
 
-func reconcileComponent(root string, partition Partition, profile DesiredProfile, comp Component, occupied map[string]struct{}) ComponentOutcome {
+func reconcileComponent(
+	root string,
+	partition Partition,
+	profile DesiredProfile,
+	comp Component,
+	occupied map[string]struct{},
+) ComponentOutcome {
 	out := ComponentOutcome{
 		ComponentID: ComponentID(root, partition, comp),
 		Partition:   partition,
@@ -282,7 +288,12 @@ func reconcileComponent(root string, partition Partition, profile DesiredProfile
 		if !isBlocked() {
 			for _, p := range plans {
 				if p.losslessBlocked != "" {
-					block(p.losslessBlocked, "stem %s cannot satisfy lossless %s target", p.stem, profile.Lossless.Codec)
+					block(
+						p.losslessBlocked,
+						"stem %s cannot satisfy lossless %s target",
+						p.stem,
+						profile.Lossless.Codec,
+					)
 					break
 				}
 			}
@@ -334,13 +345,22 @@ func reconcileComponent(root string, partition Partition, profile DesiredProfile
 					p.encodedTargetPath = sameStemPath(p.source, ExtForCodec(profile.Encoded.Codec))
 					if _, taken := occupied[p.encodedTargetPath]; taken {
 						if owner[p.encodedTargetPath] != p.stem {
-							block(ReasonTargetPathConflict, "stem %s target path %s is occupied by another entry", p.stem, p.encodedTargetPath)
+							block(
+								ReasonTargetPathConflict,
+								"stem %s target path %s is occupied by another entry",
+								p.stem,
+								p.encodedTargetPath,
+							)
 							break
 						}
 					}
 				default:
-					block(ReasonTargetPathAmbiguous, "stem %s has multiple %s variants; cannot choose an encode target", p.stem, profile.Encoded.Codec)
-					break
+					block(
+						ReasonTargetPathAmbiguous,
+						"stem %s has multiple %s variants; cannot choose an encode target",
+						p.stem,
+						profile.Encoded.Codec,
+					)
 				}
 				if isBlocked() {
 					break
@@ -368,7 +388,10 @@ func reconcileComponent(root string, partition Partition, profile DesiredProfile
 		v := VariantDecision{Stem: p.stem}
 
 		for _, f := range p.losslessKeep {
-			v.Decisions = append(v.Decisions, FileDecision{Path: f.PathPosix, Resolution: ResolutionKeep, ReasonCode: ReasonKeepLosslessTarget})
+			v.Decisions = append(
+				v.Decisions,
+				FileDecision{Path: f.PathPosix, Resolution: ResolutionKeep, ReasonCode: ReasonKeepLosslessTarget},
+			)
 		}
 		if p.losslessEncodeSrc != nil {
 			target := sameStemPath(p.losslessEncodeSrc.PathPosix, ExtForCodec(profile.Lossless.Codec))
@@ -394,7 +417,10 @@ func reconcileComponent(root string, partition Partition, profile DesiredProfile
 			}
 		} else {
 			for _, f := range p.encodedKeep {
-				v.Decisions = append(v.Decisions, FileDecision{Path: f.PathPosix, Resolution: ResolutionKeep, ReasonCode: ReasonKeepEncodedSatisfied})
+				v.Decisions = append(
+					v.Decisions,
+					FileDecision{Path: f.PathPosix, Resolution: ResolutionKeep, ReasonCode: ReasonKeepEncodedSatisfied},
+				)
 			}
 		}
 		for _, f := range p.encodedObsolete {
@@ -405,10 +431,16 @@ func reconcileComponent(root string, partition Partition, profile DesiredProfile
 			if f.Lossless {
 				code = ReasonObsoleteLossless
 			}
-			v.Decisions = append(v.Decisions, FileDecision{Path: f.PathPosix, Resolution: ResolutionDelete, ReasonCode: code})
+			v.Decisions = append(
+				v.Decisions,
+				FileDecision{Path: f.PathPosix, Resolution: ResolutionDelete, ReasonCode: code},
+			)
 		}
 		for _, f := range p.losslessObsolete {
-			v.Decisions = append(v.Decisions, FileDecision{Path: f.PathPosix, Resolution: ResolutionDelete, ReasonCode: ReasonObsoleteLossless})
+			v.Decisions = append(
+				v.Decisions,
+				FileDecision{Path: f.PathPosix, Resolution: ResolutionDelete, ReasonCode: ReasonObsoleteLossless},
+			)
 		}
 		v.Decisions = dedupeDecisions(v.Decisions)
 		out.Variants = append(out.Variants, v)

@@ -47,7 +47,15 @@ func buildSingleFileOperations(sourceFiles []string, targetFormat, planType stri
 			opType = analyze.OpTypeConvert
 		}
 
-		ops = append(ops, analyze.Operation{Type: opType, SourcePath: sourcePathPosix, TargetPath: targetPath, Reason: "SINGLE_" + strings.ToUpper(planType)})
+		ops = append(
+			ops,
+			analyze.Operation{
+				Type:       opType,
+				SourcePath: sourcePathPosix,
+				TargetPath: targetPath,
+				Reason:     "SINGLE_" + strings.ToUpper(planType),
+			},
+		)
 	}
 
 	return ops, nil

@@ -6,7 +6,7 @@ import (
 
 // ==================== Execute Session Methods ====================
 
-// CreateExecuteSession creates a new execute session
+// CreateExecuteSession creates a new execute session.
 func (r *Repository) CreateExecuteSession(e *ExecuteSession) error {
 	_, err := r.db.Exec(`
 		INSERT INTO execute_sessions (session_id, plan_id, root_path, status, started_at)
@@ -15,7 +15,7 @@ func (r *Repository) CreateExecuteSession(e *ExecuteSession) error {
 	return err
 }
 
-// GetExecuteSession retrieves an execute session by ID
+// GetExecuteSession retrieves an execute session by ID.
 func (r *Repository) GetExecuteSession(sessionID string) (*ExecuteSession, error) {
 	var e ExecuteSession
 	var startedAtStr string
@@ -36,7 +36,7 @@ func (r *Repository) GetExecuteSession(sessionID string) (*ExecuteSession, error
 	return &e, nil
 }
 
-// UpdateExecuteSessionStatus updates execute session status
+// UpdateExecuteSessionStatus updates execute session status.
 func (r *Repository) UpdateExecuteSessionStatus(sessionID, status, errorCode, errorMessage string) error {
 	_, err := r.db.Exec(`
 		UPDATE execute_sessions SET status = ?, error_code = ?, error_message = ?, finished_at = datetime('now') WHERE session_id = ?
@@ -44,7 +44,7 @@ func (r *Repository) UpdateExecuteSessionStatus(sessionID, status, errorCode, er
 	return err
 }
 
-// ListExecuteSessionsByPlan returns execute sessions for a plan
+// ListExecuteSessionsByPlan returns execute sessions for a plan.
 func (r *Repository) ListExecuteSessionsByPlan(planID string) ([]*ExecuteSession, error) {
 	rows, err := r.db.Query(`
 		SELECT session_id, plan_id, root_path, status, started_at, finished_at
@@ -60,7 +60,14 @@ func (r *Repository) ListExecuteSessionsByPlan(planID string) ([]*ExecuteSession
 		var e ExecuteSession
 		var startedAtStr string
 		var finishedAtStr sql.NullString
-		if err := rows.Scan(&e.SessionID, &e.PlanID, &e.RootPath, &e.Status, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(
+			&e.SessionID,
+			&e.PlanID,
+			&e.RootPath,
+			&e.Status,
+			&startedAtStr,
+			&finishedAtStr,
+		); err != nil {
 			return nil, err
 		}
 		e.StartedAt = parseTimestamp(startedAtStr)
