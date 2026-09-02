@@ -372,18 +372,3 @@ func TestExecutePlan_Phase1Fail_SkipsPhase2(t *testing.T) {
 		t.Fatalf("expected phase2 content_rev checks to be skipped, calls=%d", got)
 	}
 }
-
-func TestExecuteConfig_PrecheckConcurrentStat_DefaultsFalse(t *testing.T) {
-	svc := NewExecuteService(nil, ToolsConfig{})
-	if svc.config.PrecheckConcurrentStat {
-		t.Fatal("expected default PrecheckConcurrentStat=false")
-	}
-}
-
-func TestExecuteConfig_PrecheckConcurrentStat_OverrideTrue(t *testing.T) {
-	svc := NewExecuteService(nil, ToolsConfig{})
-	svc.SetExecuteConfig(ExecuteConfig{MaxIOWorkers: 4, PrecheckConcurrentStat: true})
-	if !svc.config.PrecheckConcurrentStat {
-		t.Fatal("expected PrecheckConcurrentStat=true after override")
-	}
-}

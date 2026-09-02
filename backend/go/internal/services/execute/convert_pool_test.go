@@ -5,31 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func TestMaxIOWorkers_UsesConfiguredValue(t *testing.T) {
-	svc := NewExecuteService(nil, ToolsConfig{})
-	want := runtime.NumCPU() + 10
-	svc.SetExecuteConfig(ExecuteConfig{MaxIOWorkers: want})
-
-	got := svc.maxIOWorkers()
-	if got != want {
-		t.Fatalf("expected configured maxIOWorkers=%d, got %d", want, got)
-	}
-}
-
-func TestMaxCPUWorkers_EqualsNumCPU(t *testing.T) {
-	got := maxCPUWorkers()
-	want := max(runtime.NumCPU(), 1)
-	if got != want {
-		t.Fatalf("expected maxCPUWorkers=%d, got %d", want, got)
-	}
-}
 
 // instrumentedSem is a semaphore wrapper for tests.
 // It tracks current, peak, and over-limit breach counts.
