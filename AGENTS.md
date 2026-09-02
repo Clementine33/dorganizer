@@ -19,7 +19,7 @@
 - No dedicated tests for unexported helpers/fields — cover behavior through the exported API. When an internal seam must be exposed to tests, funnel it through an `export_test.go`; never bulk re-export.
 - Never generate mocks for interfaces defined in this repo; prefer real dependencies or small handwritten fakes.
 - Don't assert call counts or call order unless the count/order is itself the contract (retry cap, idempotency, fail-fast).
-- Use `testing/synctest` for time/concurrency; never `time.Sleep` to synchronize tests.
+- Prefer `testing/synctest` over sleeping when synchronizing in-process concurrency; `time.Sleep` is acceptable when waiting on real OS/process/network events.
 - Coverage is a diagnostic signal, not a KPI. Test deletion and production refactors never land in the same commit.
 
 ## Versions: mise is the single source

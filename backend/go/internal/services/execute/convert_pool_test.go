@@ -5,11 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// TestMaxCPUWorkers_EqualsNumCPU pins the exact concurrency cap: the pool
+// sizing (convert_pool.go, convert_stream.go) consumes this value as input, so
+// an off-by-one cannot be caught by threshold tests alone.
+func TestMaxCPUWorkers_EqualsNumCPU(t *testing.T) {
+	got := maxCPUWorkers()
+	want := max(runtime.NumCPU(), 1)
+	if got != want {
+		t.Fatalf("expected maxCPUWorkers=%d, got %d", want, got)
+	}
+}
 
 // instrumentedSem is a semaphore wrapper for tests.
 // It tracks current, peak, and over-limit breach counts.
