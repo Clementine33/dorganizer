@@ -5,9 +5,16 @@ import type { ApiClientContract, ScanEvent } from '@/lib/api/types'
 
 export type ScanStatus = 'idle' | 'scanning' | 'completed' | 'cancelled' | 'error'
 
+// How the terminal state was reached. `event` means the backend confirmed it
+// over SSE (folders/trees stay valid); `transport` means the stream ended or
+// aborted without proof of what the backend committed (derived caches must be
+// conservatively refreshed by the scan orchestration).
+export type ScanTerminal = 'event' | 'transport'
+
 export const useScanStore = defineStore('scan', {
   state: () => ({
     status: 'idle' as ScanStatus,
+    terminal: null as ScanTerminal | null,
     libraryId: null as string | null,
     filesScanned: 0,
     dirsScanned: 0,
@@ -16,7 +23,10 @@ export const useScanStore = defineStore('scan', {
     message: '',
     errorCode: null as string | null,
     errorMessage: null as string | null,
-    foldersRefreshNeeded: false,
+    // True once any SSE event was applied. A transport terminal without any
+    // event means the scan never started (e.g. the POST was rejected), so
+    // nothing was committed and derived caches must not be refreshed.
+    receivedEvent: false,
     controller: null as AbortController | null,
   }),
   actions: {
@@ -33,7 +43,8 @@ export const useScanStore = defineStore('scan', {
       this.message = ''
       this.errorCode = null
       this.errorMessage = null
-      this.foldersRefreshNeeded = false
+      this.terminal = null
+      this.receivedEvent = false
 
       try {
         for await (const event of client.scanLibrary(libraryId, controller.signal)) {
@@ -45,11 +56,13 @@ export const useScanStore = defineStore('scan', {
         if (this.controller !== controller) return
         if (this.status === 'scanning') {
           this.status = 'error'
+          this.terminal = 'transport'
           this.errorCode = 'STREAM_ENDED'
           this.errorMessage = '扫描连接提前结束，请重试。'
         }
       } catch (error) {
         if (this.controller !== controller) return
+        this.terminal = 'transport'
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
           this.status = 'cancelled'
           this.message = '扫描已取消'
@@ -63,6 +76,7 @@ export const useScanStore = defineStore('scan', {
       }
     },
     applyEvent(event: ScanEvent) {
+      this.receivedEvent = true
       const data = event.data
       if (event.type === 'started') {
         this.status = 'scanning'
@@ -72,24 +86,23 @@ export const useScanStore = defineStore('scan', {
         this.dirsScanned = data.dirs_scanned ?? this.dirsScanned
       } else if (event.type === 'completed') {
         this.status = 'completed'
+        this.terminal = 'event'
         this.filesScanned = data.files_scanned ?? this.filesScanned
         this.scanId = data.scan_id ?? null
         this.rootPath = data.root_path ?? null
-        this.foldersRefreshNeeded = true
       } else if (event.type === 'cancelled') {
         this.status = 'cancelled'
+        this.terminal = 'event'
         this.message = data.message ?? '扫描已取消'
       } else if (event.type === 'error') {
         this.status = 'error'
+        this.terminal = 'event'
         this.errorCode = data.code ?? 'SCAN_ERROR'
         this.errorMessage = data.message ?? '扫描失败，请重试。'
       }
     },
     cancel() {
       this.controller?.abort()
-    },
-    acknowledgeFoldersRefresh() {
-      this.foldersRefreshNeeded = false
     },
     reset() {
       this.controller?.abort()
