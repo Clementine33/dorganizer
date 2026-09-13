@@ -1,10 +1,11 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"
 	"time"
 )
 
+//nolint:gocyclo,funlen // retention scenario with many cases
 func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -36,8 +37,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Message:   "new error",
 		Retryable: false,
 	}
-	if err := repo.CreateErrorEvent(newErr); err != nil {
-		t.Fatalf("create new error event: %v", err)
+	if createErr := repo.CreateErrorEvent(newErr); createErr != nil {
+		t.Fatalf("create new error event: %v", createErr)
 	}
 	_, err = repo.db.Exec("UPDATE error_events SET created_at = ? WHERE id = ?", newTime.Format(timeFormat), newErr.ID)
 	if err != nil {
@@ -52,8 +53,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:    "completed",
 		StartedAt: oldTime,
 	}
-	if err := repo.CreateScanSession(oldScan); err != nil {
-		t.Fatalf("create old scan session: %v", err)
+	if createErr := repo.CreateScanSession(oldScan); createErr != nil {
+		t.Fatalf("create old scan session: %v", createErr)
 	}
 
 	newScan := &ScanSession{
@@ -63,8 +64,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:    "completed",
 		StartedAt: newTime,
 	}
-	if err := repo.CreateScanSession(newScan); err != nil {
-		t.Fatalf("create new scan session: %v", err)
+	if createErr := repo.CreateScanSession(newScan); createErr != nil {
+		t.Fatalf("create new scan session: %v", createErr)
 	}
 
 	// --- Insert old and new plans (with execute_sessions to validate cascade) ---
@@ -77,8 +78,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:        "executed",
 		CreatedAt:     oldTime,
 	}
-	if err := repo.CreatePlan(oldPlan); err != nil {
-		t.Fatalf("create old plan: %v", err)
+	if createErr := repo.CreatePlan(oldPlan); createErr != nil {
+		t.Fatalf("create old plan: %v", createErr)
 	}
 
 	// Plan items on old plan — should cascade-delete with the plan
@@ -93,8 +94,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		PreconditionSize:       1000,
 		PreconditionMtime:      1000000,
 	}
-	if err := repo.CreatePlanItem(oldPlanItem); err != nil {
-		t.Fatalf("create old plan item: %v", err)
+	if createErr := repo.CreatePlanItem(oldPlanItem); createErr != nil {
+		t.Fatalf("create old plan item: %v", createErr)
 	}
 
 	// Execute session on old plan — should cascade-delete with the plan
@@ -105,8 +106,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:    "completed",
 		StartedAt: oldTime,
 	}
-	if err := repo.CreateExecuteSession(oldExec); err != nil {
-		t.Fatalf("create old execute session: %v", err)
+	if createErr := repo.CreateExecuteSession(oldExec); createErr != nil {
+		t.Fatalf("create old execute session: %v", createErr)
 	}
 
 	newPlan := &Plan{
@@ -118,8 +119,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:        "ready",
 		CreatedAt:     newTime,
 	}
-	if err := repo.CreatePlan(newPlan); err != nil {
-		t.Fatalf("create new plan: %v", err)
+	if createErr := repo.CreatePlan(newPlan); createErr != nil {
+		t.Fatalf("create new plan: %v", createErr)
 	}
 
 	// Plan items on new plan — should survive cleanup
@@ -136,8 +137,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		PreconditionSize:       2000,
 		PreconditionMtime:      2000000,
 	}
-	if err := repo.CreatePlanItem(newPlanItem); err != nil {
-		t.Fatalf("create new plan item: %v", err)
+	if createErr := repo.CreatePlanItem(newPlanItem); createErr != nil {
+		t.Fatalf("create new plan item: %v", createErr)
 	}
 
 	// Execute session on new plan — should survive cleanup
@@ -148,8 +149,8 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		Status:    "completed",
 		StartedAt: newTime,
 	}
-	if err := repo.CreateExecuteSession(newExec); err != nil {
-		t.Fatalf("create new execute session: %v", err)
+	if createErr := repo.CreateExecuteSession(newExec); createErr != nil {
+		t.Fatalf("create new execute session: %v", createErr)
 	}
 
 	// --- Run cleanup ---

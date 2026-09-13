@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"path/filepath"
@@ -7,10 +7,11 @@ import (
 	errdomain "github.com/onsei/organizer/backend/internal/errors"
 )
 
-// TestExecuteReturnsToolNotFoundCode tests that convert with missing tool returns TOOL_NOT_FOUND
-func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
-	// Use a non-existent qaac path to trigger TOOL_NOT_FOUND
-	svc := NewService(ToolsConfig{Encoder: "qaac", QAACPath: "/nonexistent/qaac.exe"})
+// TestConvertWithoutToolPath tests that empty tool path returns TOOL_NOT_FOUND.
+// This is the only coverage of the empty-QAACPath guard in convertWithQAAC,
+// distinct from the LookPath-missing branch covered by TestExecuteReturnsToolNotFoundCode.
+func TestConvertWithoutToolPath(t *testing.T) {
+	svc := NewService(ToolsConfig{Encoder: "qaac"})
 	tmp := t.TempDir()
 
 	item := PlanItem{
@@ -30,25 +31,10 @@ func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
 	}
 }
 
-// TestDeleteSoftDelete tests soft delete functionality
-func TestDeleteSoftDelete(t *testing.T) {
-	svc := NewService(ToolsConfig{})
-
-	// Note: This is a basic test that doesn't actually delete files
-	// In a real test, we'd use a temp file
-	item := PlanItem{
-		Type: ItemTypeDelete,
-		Src:  "/tmp/nonexistent-file-for-test",
-	}
-
-	err := svc.ExecuteItem(item, true)
-	// We expect this to fail since file doesn't exist, but it's a valid operation type
-	_ = err
-}
-
-// TestConvertWithoutToolPath tests that empty tool path returns TOOL_NOT_FOUND
-func TestConvertWithoutToolPath(t *testing.T) {
-	svc := NewService(ToolsConfig{Encoder: "qaac"})
+// TestExecuteReturnsToolNotFoundCode tests that convert with missing tool returns TOOL_NOT_FOUND.
+func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
+	// Use a non-existent qaac path to trigger TOOL_NOT_FOUND
+	svc := NewService(ToolsConfig{Encoder: "qaac", QAACPath: "/nonexistent/qaac.exe"})
 	tmp := t.TempDir()
 
 	item := PlanItem{

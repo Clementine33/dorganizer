@@ -1,4 +1,4 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 func newTestRepository(t *testing.T) *Repository {
 	t.Helper()
 
-	tmpFile, err := os.CreateTemp("", "onsei-test-*.db")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "onsei-test-*.db")
 	if err != nil {
 		t.Fatal(err)
 	}

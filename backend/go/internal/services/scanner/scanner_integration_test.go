@@ -1,4 +1,4 @@
-package scanner
+package scanner //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -12,7 +12,32 @@ import (
 	"time"
 )
 
-// MockRepository implements Repository interface for testing
+// mustMkdirAll and mustWriteFile fail the test on filesystem errors. Test
+// fixtures don't inspect these errors, but leaving them unchecked would
+// silently produce empty trees.
+func mustMkdirAll(t *testing.T, path string, mode ...os.FileMode) {
+	t.Helper()
+	m := os.FileMode(0755)
+	if len(mode) > 0 {
+		m = mode[0]
+	}
+	if err := os.MkdirAll(path, m); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string, data []byte, mode ...os.FileMode) {
+	t.Helper()
+	m := os.FileMode(0644)
+	if len(mode) > 0 {
+		m = mode[0]
+	}
+	if err := os.WriteFile(path, data, m); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// MockRepository implements Repository interface for testing.
 type MockRepository struct {
 	Sessions           []ScanSession
 	StagingEntries     []StagingEntry
@@ -56,13 +81,13 @@ func (m *MockRepository) UpdateScanSessionStatus(sessionID, status, errorCode, e
 	return nil
 }
 
-// WriteStagingBatch implements pipelineRepo for batch writes (used by pipeline)
+// WriteStagingBatch implements pipelineRepo for batch writes (used by pipeline).
 func (m *MockRepository) WriteStagingBatch(sessionID string, batch []StagingEntry) error {
 	m.StagingEntries = append(m.StagingEntries, batch...)
 	return nil
 }
 
-// CleanupStagingSession removes staging entries for a session (failure cleanup)
+// CleanupStagingSession removes staging entries for a session (failure cleanup).
 func (m *MockRepository) CleanupStagingSession(sessionID string) error {
 	var filtered []StagingEntry
 	for _, e := range m.StagingEntries {
@@ -78,20 +103,12 @@ func TestScannerService_ScanRoot_CreatesSessionAndMerges(t *testing.T) {
 	// Create temp directory with files
 	tmp := t.TempDir()
 	subDir := filepath.Join(tmp, "album1")
-	if err := os.MkdirAll(subDir, 0755); err != nil {
-		t.Fatalf("failed to create album1 dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(subDir, "song.wav"), []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to write song.wav: %v", err)
-	}
+	mustMkdirAll(t, subDir)
+	mustWriteFile(t, filepath.Join(subDir, "song.wav"), []byte("dummy"))
 
 	// Create second album directory and file
-	if err := os.MkdirAll(filepath.Join(tmp, "album2"), 0755); err != nil {
-		t.Fatalf("failed to create album2 dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "album2", "song.mp3"), []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to write song.mp3: %v", err)
-	}
+	mustMkdirAll(t, filepath.Join(tmp, "album2"))
+	mustWriteFile(t, filepath.Join(tmp, "album2", "song.mp3"), []byte("dummy"))
 
 	mock := &MockRepository{
 		MergeResult: 2,
@@ -146,8 +163,8 @@ func TestScannerService_ScanRoot_CreatesSessionAndMerges(t *testing.T) {
 
 func TestScannerService_ScanRoot_WithoutRepo(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
 
 	svc := NewScannerService(nil)
 
@@ -165,6 +182,7 @@ func TestScannerService_ScanRoot_WithoutRepo(t *testing.T) {
 // after recording the entries, so cleanup has something to remove.
 type failingBatchRepo struct {
 	*MockRepository
+
 	batchErr   error
 	mergeCalls int
 }
@@ -189,15 +207,11 @@ func TestScanRootStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
 	// More than pipelineBatchSize (1000) entries forces at least one mid-pipeline
 	// batch flush, which cancels the derived context; the walker then observes
 	// context.Canceled.
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		album := filepath.Join(tmp, fmt.Sprintf("album-%02d", i))
-		if err := os.MkdirAll(album, 0755); err != nil {
-			t.Fatalf("mkdir %s: %v", album, err)
-		}
-		for j := 0; j < 100; j++ {
-			if err := os.WriteFile(filepath.Join(album, fmt.Sprintf("song-%03d.wav", j)), []byte("dummy"), 0644); err != nil {
-				t.Fatalf("write fixture: %v", err)
-			}
+		mustMkdirAll(t, album)
+		for j := range 100 {
+			mustWriteFile(t, filepath.Join(album, fmt.Sprintf("song-%03d.wav", j)), []byte("dummy"))
 		}
 	}
 
@@ -234,13 +248,9 @@ func TestScanRootStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
 func TestScanFolderStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	if err := os.MkdirAll(album, 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", album, err)
-	}
-	for j := 0; j < 1500; j++ {
-		if err := os.WriteFile(filepath.Join(album, fmt.Sprintf("song-%04d.wav", j)), []byte("dummy"), 0644); err != nil {
-			t.Fatalf("write fixture: %v", err)
-		}
+	mustMkdirAll(t, album)
+	for j := range 1500 {
+		mustWriteFile(t, filepath.Join(album, fmt.Sprintf("song-%04d.wav", j)), []byte("dummy"))
 	}
 
 	injected := errors.New("simulated folder staging write failure")
@@ -257,7 +267,8 @@ func TestScanFolderStagingWriteFailureIsNotReportedAsCancellation(t *testing.T) 
 	if mock.mergeCalls != 0 {
 		t.Errorf("expected merge to be skipped after staging failure, got %d merge calls", mock.mergeCalls)
 	}
-	if len(mock.Sessions) != 1 || mock.Sessions[0].Status != "failed" || mock.Sessions[0].ErrorCode != "STAGING_WRITE_FAILED" {
+	if len(mock.Sessions) != 1 || mock.Sessions[0].Status != "failed" ||
+		mock.Sessions[0].ErrorCode != "STAGING_WRITE_FAILED" {
 		t.Errorf("expected session failed/STAGING_WRITE_FAILED, got %+v", mock.Sessions)
 	}
 }
@@ -280,8 +291,8 @@ func TestScannerService_ScanRoot_UpdatesSessionOnFailure(t *testing.T) {
 func TestScannerService_ScanFolder_ScopedToSingleFolder(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	os.MkdirAll(album, 0755)
-	os.WriteFile(filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, album)
+	mustWriteFile(t, filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
 
 	mock := &MockRepository{
 		MergeResult: 1,
@@ -319,9 +330,9 @@ func TestScannerService_ScanFolder_ScopedToSingleFolder(t *testing.T) {
 func TestScannerService_ScanFolder_DoesNotPassScannedPathsForStaleCleanup(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	os.MkdirAll(album, 0755)
-	os.WriteFile(filepath.Join(album, "song1.wav"), []byte("dummy"), 0644)
-	os.WriteFile(filepath.Join(album, "song2.mp3"), []byte("dummy"), 0644)
+	mustMkdirAll(t, album)
+	mustWriteFile(t, filepath.Join(album, "song1.wav"), []byte("dummy"), 0644)
+	mustWriteFile(t, filepath.Join(album, "song2.mp3"), []byte("dummy"), 0644)
 
 	mock := &MockRepository{
 		MergeResult: 2,
@@ -346,12 +357,12 @@ func TestScannerService_ScanFolder_DoesNotPassScannedPathsForStaleCleanup(t *tes
 
 // ========== Task 1: Path Split Tests ==========
 
-// TestScanRoot_UsesRootPath verifies ScanRoot uses parallel directory descent
+// TestScanRoot_UsesRootPath verifies ScanRoot uses parallel directory descent.
 func TestScanRoot_UsesRootPath(t *testing.T) {
 	tmp := t.TempDir()
 	subDir := filepath.Join(tmp, "album1")
-	os.MkdirAll(subDir, 0755)
-	os.WriteFile(filepath.Join(subDir, "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, subDir)
+	mustWriteFile(t, filepath.Join(subDir, "song.wav"), []byte("dummy"), 0644)
 
 	mock := &MockRepository{MergeResult: 1}
 	svc := NewScannerService(mock)
@@ -379,12 +390,12 @@ func TestScanRoot_UsesRootPath(t *testing.T) {
 	}
 }
 
-// TestScanFolder_UsesFolderPath verifies ScanFolder uses single-enumerator pattern
+// TestScanFolder_UsesFolderPath verifies ScanFolder uses single-enumerator pattern.
 func TestScanFolder_UsesFolderPath(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	os.MkdirAll(album, 0755)
-	os.WriteFile(filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, album)
+	mustWriteFile(t, filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
 
 	mock := &MockRepository{MergeResult: 1}
 	svc := NewScannerService(mock)
@@ -414,11 +425,11 @@ func TestScanFolder_UsesFolderPath(t *testing.T) {
 
 // ========== Task 2: Root Parallel Walk Tests ==========
 
-// TestWalkRootParallel_RootExcluded verifies root itself is not emitted
+// TestWalkRootParallel_RootExcluded verifies root itself is not emitted.
 func TestWalkRootParallel_RootExcluded(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
 
 	ctx := context.Background()
 	var entries []DirEntry
@@ -444,12 +455,12 @@ func TestWalkRootParallel_RootExcluded(t *testing.T) {
 	}
 }
 
-// TestWalkRootParallel_IncludesFilesAndDirs verifies both files and dirs are emitted
+// TestWalkRootParallel_IncludesFilesAndDirs verifies both files and dirs are emitted.
 func TestWalkRootParallel_IncludesFilesAndDirs(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album", "sub"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
-	os.WriteFile(filepath.Join(tmp, "album", "sub", "nested.mp3"), []byte("dummy"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album", "sub"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
+	mustWriteFile(t, filepath.Join(tmp, "album", "sub", "nested.mp3"), []byte("dummy"), 0644)
 
 	ctx := context.Background()
 	var entries []DirEntry
@@ -499,10 +510,10 @@ func TestWalkRootParallel_IncludesFilesAndDirs(t *testing.T) {
 	}
 }
 
-// TestWalkRootParallel_DefaultConcurrency verifies default concurrency of 4
+// TestWalkRootParallel_DefaultConcurrency verifies default concurrency of 4.
 func TestWalkRootParallel_DefaultConcurrency(t *testing.T) {
 	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "file.txt"), []byte("dummy"), 0644)
+	mustWriteFile(t, filepath.Join(tmp, "file.txt"), []byte("dummy"), 0644)
 
 	ctx := context.Background()
 	var count int
@@ -525,11 +536,11 @@ func TestWalkRootParallel_DefaultConcurrency(t *testing.T) {
 	}
 }
 
-// TestWalkRootParallel_EmitErrorCancels verifies emit error cancels walk
+// TestWalkRootParallel_EmitErrorCancels verifies emit error cancels walk.
 func TestWalkRootParallel_EmitErrorCancels(t *testing.T) {
 	tmp := t.TempDir()
-	for i := 0; i < 10; i++ {
-		os.WriteFile(filepath.Join(tmp, fmt.Sprintf("file%d.txt", i)), []byte("dummy"), 0644)
+	for i := range 10 {
+		mustWriteFile(t, filepath.Join(tmp, fmt.Sprintf("file%d.txt", i)), []byte("dummy"), 0644)
 	}
 
 	ctx := context.Background()
@@ -559,9 +570,7 @@ func TestWalkRootParallel_EmitErrorCancels(t *testing.T) {
 // TestWalkRootParallel_ContextCanceledReturnsError verifies cancellation is propagated.
 func TestWalkRootParallel_ContextCanceledReturnsError(t *testing.T) {
 	tmp := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmp, "file.txt"), []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
+	mustWriteFile(t, filepath.Join(tmp, "file.txt"), []byte("dummy"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -579,14 +588,10 @@ func TestWalkRootParallel_ContextCanceledReturnsError(t *testing.T) {
 // when using one worker.
 func TestWalkRootParallel_HighFanoutSingleWorkerCompletes(t *testing.T) {
 	tmp := t.TempDir()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		dir := filepath.Join(tmp, fmt.Sprintf("album-%02d", i))
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			t.Fatalf("failed to create test dir: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "song.wav"), []byte("dummy"), 0644); err != nil {
-			t.Fatalf("failed to create test file: %v", err)
-		}
+		mustMkdirAll(t, dir)
+		mustWriteFile(t, filepath.Join(dir, "song.wav"), []byte("dummy"), 0644)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -606,11 +611,11 @@ func TestWalkRootParallel_HighFanoutSingleWorkerCompletes(t *testing.T) {
 
 // ========== Task 3: Inline Metadata Tests ==========
 
-// TestInlineMetadata_Complete verifies metadata is collected inline
+// TestInlineMetadata_Complete verifies metadata is collected inline.
 func TestInlineMetadata_Complete(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song.wav"), []byte("dummydat"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song.wav"), []byte("dummydat"), 0644)
 
 	ctx := context.Background()
 	var entries []DirEntry
@@ -649,11 +654,11 @@ func TestInlineMetadata_Complete(t *testing.T) {
 	}
 }
 
-// TestInlineMetadata_InfoErrorPropagation verifies Info() error is propagated
+// TestInlineMetadata_InfoErrorPropagation verifies Info() error is propagated.
 func TestInlineMetadata_InfoErrorPropagation(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song.wav"), []byte("dummy"), 0644)
 
 	// Force deterministic Info() failure via seam
 	expectedErr := errors.New("simulated Info() failure")
@@ -676,12 +681,12 @@ func TestInlineMetadata_InfoErrorPropagation(t *testing.T) {
 	}
 }
 
-// TestInlineMetadata_FolderPath verifies inline metadata for Folder path
+// TestInlineMetadata_FolderPath verifies inline metadata for Folder path.
 func TestInlineMetadata_FolderPath(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	os.MkdirAll(album, 0755)
-	os.WriteFile(filepath.Join(album, "song.wav"), []byte("dummydat"), 0644)
+	mustMkdirAll(t, album)
+	mustWriteFile(t, filepath.Join(album, "song.wav"), []byte("dummydat"), 0644)
 
 	ctx := context.Background()
 	var entries []DirEntry
@@ -721,15 +726,9 @@ func TestWalkFolderEntries_RecursesNestedEntries(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
 	sub := filepath.Join(album, "disc1")
-	if err := os.MkdirAll(sub, 0755); err != nil {
-		t.Fatalf("failed to create nested folder: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(album, "root.wav"), []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to write root.wav: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sub, "nested.mp3"), []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to write nested.mp3: %v", err)
-	}
+	mustMkdirAll(t, sub)
+	mustWriteFile(t, filepath.Join(album, "root.wav"), []byte("dummy"))
+	mustWriteFile(t, filepath.Join(sub, "nested.mp3"), []byte("dummy"))
 
 	ctx := context.Background()
 	var entries []DirEntry
@@ -763,12 +762,12 @@ func TestWalkFolderEntries_RecursesNestedEntries(t *testing.T) {
 
 // ========== Task 4: Pipeline Tests ==========
 
-// TestPipeline_WalkAndWriterConcurrent verifies walk and writer run concurrently
+// TestPipeline_WalkAndWriterConcurrent verifies walk and writer run concurrently.
 func TestPipeline_WalkAndWriterConcurrent(t *testing.T) {
 	tmp := t.TempDir()
-	os.MkdirAll(filepath.Join(tmp, "album"), 0755)
-	os.WriteFile(filepath.Join(tmp, "album", "song1.wav"), []byte("dummy1"), 0644)
-	os.WriteFile(filepath.Join(tmp, "album", "song2.wav"), []byte("dummy2"), 0644)
+	mustMkdirAll(t, filepath.Join(tmp, "album"), 0755)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song1.wav"), []byte("dummy1"), 0644)
+	mustWriteFile(t, filepath.Join(tmp, "album", "song2.wav"), []byte("dummy2"), 0644)
 
 	mock := &MockRepository{MergeResult: 2}
 	svc := NewScannerService(mock)
@@ -792,10 +791,10 @@ func TestPipeline_WalkAndWriterConcurrent(t *testing.T) {
 	}
 }
 
-// TestPipeline_FailureNoMerge verifies failure prevents merge
+// TestPipeline_FailureNoMerge verifies failure prevents merge.
 func TestPipeline_FailureNoMerge(t *testing.T) {
 	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "song.mp3"), []byte("dummy"), 0644)
+	mustWriteFile(t, filepath.Join(tmp, "song.mp3"), []byte("dummy"), 0644)
 
 	// Repository that fails staging writes
 	repo := &RepositoryThatFailsStaging{
@@ -828,10 +827,10 @@ func TestPipeline_FailureNoMerge(t *testing.T) {
 	}
 }
 
-// TestPipeline_CleanupOnFailure verifies staging cleanup on failure
+// TestPipeline_CleanupOnFailure verifies staging cleanup on failure.
 func TestPipeline_CleanupOnFailure(t *testing.T) {
 	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "song.mp3"), []byte("dummy"), 0644)
+	mustWriteFile(t, filepath.Join(tmp, "song.mp3"), []byte("dummy"), 0644)
 
 	repo := &RepositoryThatFailsStaging{
 		failStagingError: errors.New("simulated staging failure"),
@@ -849,12 +848,12 @@ func TestPipeline_CleanupOnFailure(t *testing.T) {
 
 // ========== Task 5: Folder Single-Enumerator Tests ==========
 
-// TestScanFolder_SingleEnumerator verifies Folder uses single-enumerator semantics
+// TestScanFolder_SingleEnumerator verifies Folder uses single-enumerator semantics.
 func TestScanFolder_SingleEnumerator(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
-	os.MkdirAll(album, 0755)
-	os.WriteFile(filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
+	mustMkdirAll(t, album)
+	mustWriteFile(t, filepath.Join(album, "song.wav"), []byte("dummy"), 0644)
 
 	mock := &MockRepository{MergeResult: 1}
 	svc := NewScannerService(mock)
@@ -886,14 +885,14 @@ func TestScanFolder_SingleEnumerator(t *testing.T) {
 	}
 }
 
-// TestScanFolder_InlineMetadataAndPipeline verifies Folder uses inline metadata + pipeline
+// TestScanFolder_InlineMetadataAndPipeline verifies Folder uses inline metadata + pipeline.
 func TestScanFolder_InlineMetadataAndPipeline(t *testing.T) {
 	tmp := t.TempDir()
 	album := filepath.Join(tmp, "album")
 	sub := filepath.Join(album, "sub")
-	os.MkdirAll(sub, 0755)
-	os.WriteFile(filepath.Join(album, "song1.wav"), []byte("dummy1"), 0644)
-	os.WriteFile(filepath.Join(album, "song2.wav"), []byte("dummy2"), 0644)
+	mustMkdirAll(t, sub)
+	mustWriteFile(t, filepath.Join(album, "song1.wav"), []byte("dummy1"), 0644)
+	mustWriteFile(t, filepath.Join(album, "song2.wav"), []byte("dummy2"), 0644)
 
 	mock := &MockRepository{MergeResult: 2}
 	svc := NewScannerService(mock)

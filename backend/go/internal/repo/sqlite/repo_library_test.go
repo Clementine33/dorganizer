@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -144,7 +144,9 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 
 	// FK cascade should have removed the folder row.
 	var folderCount int
-	if err := repo.DB().QueryRow(`SELECT COUNT(*) FROM library_folders WHERE library_id = ?`, lib1.ID).Scan(&folderCount); err != nil {
+	if err := repo.DB().
+		QueryRow(`SELECT COUNT(*) FROM library_folders WHERE library_id = ?`, lib1.ID).
+		Scan(&folderCount); err != nil {
 		t.Fatalf("failed to count library_folders: %v", err)
 	}
 	if folderCount != 0 {
@@ -163,14 +165,14 @@ func TestUpdateLibraryRootClearsDerivedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	if _, err := repo.DB().Exec(`
+	if _, seedErr := repo.DB().Exec(`
 		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
 		VALUES ('folder-old', ?, '/music/album', 'album', 'album', 1)
-	`, lib.ID); err != nil {
-		t.Fatalf("seed library folder: %v", err)
+	`, lib.ID); seedErr != nil {
+		t.Fatalf("seed library folder: %v", seedErr)
 	}
-	if err := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); err != nil {
-		t.Fatalf("UpdateLibraryScanState failed: %v", err)
+	if stateErr := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); stateErr != nil {
+		t.Fatalf("UpdateLibraryScanState failed: %v", stateErr)
 	}
 
 	updated, err := repo.UpdateLibrary(lib.ID, "Music", "/new-music")
@@ -393,14 +395,14 @@ func TestUpdateLibraryEquivalentRootKeepsDerivedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	if _, err := repo.DB().Exec(`
+	if _, seedErr := repo.DB().Exec(`
 		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
 		VALUES ('folder-1', ?, '/music/album', 'album', 'album', 1)
-	`, lib.ID); err != nil {
-		t.Fatalf("seed library folder: %v", err)
+	`, lib.ID); seedErr != nil {
+		t.Fatalf("seed library folder: %v", seedErr)
 	}
-	if err := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); err != nil {
-		t.Fatalf("UpdateLibraryScanState failed: %v", err)
+	if stateErr := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); stateErr != nil {
+		t.Fatalf("UpdateLibraryScanState failed: %v", stateErr)
 	}
 
 	// A spelling-only root edit must not invalidate folders or scan state,

@@ -1,15 +1,21 @@
-package grpc
+package grpc //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"testing"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
 
 // assertFieldNumber verifies a field exists with an exact field number in a message descriptor.
 // This ensures protobuf wire-format contract stability.
-func assertFieldNumber(t *testing.T, md protoreflect.MessageDescriptor, fieldName string, expectedNumber protoreflect.FieldNumber) {
+func assertFieldNumber(
+	t *testing.T,
+	md protoreflect.MessageDescriptor,
+	fieldName string,
+	expectedNumber protoreflect.FieldNumber,
+) {
 	t.Helper()
 	fd := md.Fields().ByName(protoreflect.Name(fieldName))
 	if fd == nil {

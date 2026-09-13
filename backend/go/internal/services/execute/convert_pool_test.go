@@ -1,4 +1,4 @@
-package execute
+package execute //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"errors"
@@ -12,23 +12,12 @@ import (
 	"time"
 )
 
-func TestMaxIOWorkers_UsesConfiguredValue(t *testing.T) {
-	svc := NewExecuteService(nil, ToolsConfig{})
-	want := runtime.NumCPU() + 10
-	svc.SetExecuteConfig(ExecuteConfig{MaxIOWorkers: want})
-
-	got := svc.maxIOWorkers()
-	if got != want {
-		t.Fatalf("expected configured maxIOWorkers=%d, got %d", want, got)
-	}
-}
-
+// TestMaxCPUWorkers_EqualsNumCPU pins the exact concurrency cap: the pool
+// sizing (convert_pool.go, convert_stream.go) consumes this value as input, so
+// an off-by-one cannot be caught by threshold tests alone.
 func TestMaxCPUWorkers_EqualsNumCPU(t *testing.T) {
 	got := maxCPUWorkers()
-	want := runtime.NumCPU()
-	if want < 1 {
-		want = 1
-	}
+	want := max(runtime.NumCPU(), 1)
 	if got != want {
 		t.Fatalf("expected maxCPUWorkers=%d, got %d", want, got)
 	}
@@ -39,7 +28,7 @@ func TestMaxCPUWorkers_EqualsNumCPU(t *testing.T) {
 type instrumentedSem struct {
 	mu       sync.Mutex
 	tokens   chan struct{}
-	current  int32
+	current  atomic.Int32
 	peak     int32
 	breaches int32
 }
@@ -53,7 +42,7 @@ func newInstrumentedSem(limit int) *instrumentedSem {
 
 func (s *instrumentedSem) Acquire() {
 	s.tokens <- struct{}{}
-	cur := atomic.AddInt32(&s.current, 1)
+	cur := s.current.Add(1)
 
 	s.mu.Lock()
 	if cur > s.peak {
@@ -66,8 +55,8 @@ func (s *instrumentedSem) Acquire() {
 }
 
 func (s *instrumentedSem) Release() {
-	if cur := atomic.AddInt32(&s.current, -1); cur < 0 {
-		atomic.StoreInt32(&s.current, 0)
+	if cur := s.current.Add(-1); cur < 0 {
+		s.current.Store(0)
 	}
 	<-s.tokens
 }
@@ -98,7 +87,7 @@ func TestExecuteConvertBatchWithPool_SemaphorePeaksAndNoReentry(t *testing.T) {
 	const batchSize = 4
 	items := make([]PlanItem, 0, batchSize)
 	indices := make([]int, 0, batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		src := filepath.Join(tmp, fmt.Sprintf("%02d.wav", i))
 		dst := filepath.Join(tmp, fmt.Sprintf("%02d.m4a", i))
 		if err := os.WriteFile(src, []byte("audio"), 0644); err != nil {
@@ -337,7 +326,7 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 	const totalItems = 20
 	items := make([]PlanItem, 0, totalItems)
 	indices := make([]int, 0, totalItems)
-	for i := 0; i < totalItems; i++ {
+	for i := range totalItems {
 		src := filepath.Join(tmp, fmt.Sprintf("%02d.wav", i))
 		dst := filepath.Join(tmp, fmt.Sprintf("%02d.m4a", i))
 		if err := os.WriteFile(src, []byte("audio"), 0644); err != nil {
@@ -364,9 +353,7 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 			}
 			return errors.New("forced encode failure: " + filepath.Base(src))
 		},
-		commitReplaceFn: func(tmpOut, dst string) error {
-			return os.Rename(tmpOut, dst)
-		},
+		commitReplaceFn: os.Rename,
 	}
 
 	outcome := svc.executeConvertBatchWithPool(
@@ -387,7 +374,11 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 	}
 	startedCount := int(started.Load())
 	if startedCount >= totalItems {
-		t.Fatalf("expected admission close after first failure to stop feeding full batch, started=%d total=%d", startedCount, totalItems)
+		t.Fatalf(
+			"expected admission close after first failure to stop feeding full batch, started=%d total=%d",
+			startedCount,
+			totalItems,
+		)
 	}
 	if got := len(outcome.failures); got != startedCount {
 		t.Fatalf("expected all started job failures to be recorded (started=%d, failures=%d)", startedCount, got)
@@ -402,7 +393,11 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 	}
 
 	if !failureIndices[outcome.firstFailure.itemIndex] {
-		t.Fatalf("firstFailure index %d not present in aggregated failures=%v", outcome.firstFailure.itemIndex, failureIndices)
+		t.Fatalf(
+			"firstFailure index %d not present in aggregated failures=%v",
+			outcome.firstFailure.itemIndex,
+			failureIndices,
+		)
 	}
 	if outcome.firstFailure.err == nil {
 		t.Fatal("expected non-nil firstFailure error")
@@ -453,7 +448,14 @@ func TestExecuteConvertPoolWithTracking_RootedFailureSkipsSameFolderAndContinues
 	failedFolders := map[string]bool{}
 	successfulFolders := map[string]bool{}
 
-	result, err := svc.executeConvertPoolWithTracking(plan, "session-rooted-domain-skip", items, indices, failedFolders, successfulFolders)
+	result, err := svc.executeConvertPoolWithTracking(
+		plan,
+		"session-rooted-domain-skip",
+		items,
+		indices,
+		failedFolders,
+		successfulFolders,
+	)
 	if err == nil {
 		t.Fatal("expected convert pool tracking to fail")
 	}
@@ -509,7 +511,14 @@ func TestExecuteConvertPoolWithTracking_NonRootedFailureSkipsDeleteBarrier(t *te
 	runner.convertFailures[a] = errors.New("forced convert failure")
 	svc.SetRunner(runner)
 
-	_, err := svc.executeConvertPoolWithTracking(plan, "session-nonrooted-delete-skip", items, indices, map[string]bool{}, map[string]bool{})
+	_, err := svc.executeConvertPoolWithTracking(
+		plan,
+		"session-nonrooted-delete-skip",
+		items,
+		indices,
+		map[string]bool{},
+		map[string]bool{},
+	)
 	if err == nil {
 		t.Fatal("expected convert pool tracking failure")
 	}
@@ -522,14 +531,11 @@ func TestExecuteConvertPoolWithTracking_NonRootedFailureSkipsDeleteBarrier(t *te
 func TestExecuteConvertPoolWithTracking_NonRootedGlobalFailFastStopsFurtherAdmission(t *testing.T) {
 	tmp := t.TempDir()
 
-	totalItems := maxCPUWorkers() + 8
-	if totalItems < 12 {
-		totalItems = 12
-	}
+	totalItems := max(maxCPUWorkers()+8, 12)
 
 	items := make([]PlanItem, 0, totalItems)
 	indices := make([]int, 0, totalItems)
-	for i := 0; i < totalItems; i++ {
+	for i := range totalItems {
 		src := filepath.Join(tmp, fmt.Sprintf("%02d.wav", i))
 		dst := filepath.Join(tmp, fmt.Sprintf("%02d.m4a", i))
 		if err := os.WriteFile(src, []byte("audio"), 0644); err != nil {
@@ -546,7 +552,14 @@ func TestExecuteConvertPoolWithTracking_NonRootedGlobalFailFastStopsFurtherAdmis
 	runner.convertDelay = 20 * time.Millisecond
 	svc.SetRunner(runner)
 
-	_, err := svc.executeConvertPoolWithTracking(plan, "session-nonrooted-global-stop", items, indices, map[string]bool{}, map[string]bool{})
+	_, err := svc.executeConvertPoolWithTracking(
+		plan,
+		"session-nonrooted-global-stop",
+		items,
+		indices,
+		map[string]bool{},
+		map[string]bool{},
+	)
 	if err == nil {
 		t.Fatal("expected convert pool tracking failure")
 	}

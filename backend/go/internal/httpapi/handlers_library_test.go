@@ -1,4 +1,4 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"encoding/json"
@@ -9,6 +9,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
+//nolint:gocognit,funlen // CRUD scenario with many branches
 func TestLibrariesCRUD(t *testing.T) {
 	engine := newTestServer(t, nil) // empty token: no auth needed for CRUD flow
 
@@ -139,7 +140,11 @@ func TestPatchLibraryRootInvalidatesDerivedFoldersAndPlanAssociation(t *testing.
 		t.Fatalf("UpdateLibraryScanState failed: %v", err)
 	}
 	if err := repo.CreatePlan(&sqlite.Plan{
-		PlanID: "plan-old-root", RootPath: "/music/album", PlanType: "single_delete", Status: "ready", CreatedAt: time.Now(),
+		PlanID:    "plan-old-root",
+		RootPath:  "/music/album",
+		PlanType:  "single_delete",
+		Status:    "ready",
+		CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("CreatePlan failed: %v", err)
 	}
