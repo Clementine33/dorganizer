@@ -1,4 +1,4 @@
-package e2e
+package e2e //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bufio"
@@ -21,6 +21,8 @@ import (
 // (ONSEI_DATA_DIR=<temp>), parses the ONSEI_BACKEND_READY handshake for both
 // the gRPC and HTTP ports, then drives the HTTP/SSE library workflow end to
 // end: health -> create library -> SSE scan -> list folders -> plan.
+//
+//nolint:funlen // long e2e loop scenario
 func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
 
@@ -63,7 +65,17 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 		ID       string `json:"id"`
 		RootPath string `json:"root_path"`
 	}
-	if code := doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/libraries", token, libReq, &lib); code != http.StatusCreated {
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/libraries",
+		token,
+		libReq,
+		&lib,
+	); code != http.StatusCreated {
 		t.Fatalf("POST /api/v1/libraries: status %d, want 201", code)
 	}
 	if lib.ID == "" {
@@ -122,25 +134,38 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	if albumFolderID == "" {
 		t.Fatalf("folders response missing albumA: %+v", folders.Folders)
 	}
+	// POST /api/v1/plans with the workflow contract: inline literal-tag policy
+	// over the albumA planning root. albumA holds flac+mp3 pairs with unknown
+	// bitrates, so the balanced profile (wav + mp3-320) is actionable (lossless
+	// and encoded lanes rebuild from the observed flac source).
 	planReq := map[string]any{
-		"library_id":    lib.ID,
-		"folder_ids":    []string{albumFolderID},
-		"plan_type":     "slim",
-		"target_format": "slim:mode1",
+		"library_id": lib.ID,
+		"folder_ids": []string{albumFolderID},
+		"workflow": map[string]any{
+			"schema_version": 1,
+			"steps": []any{map[string]any{
+				"step_type": "reconcile_audio_outputs",
+				"policy":    inlineWorkflowPolicy(),
+			}},
+		},
 	}
 	var plan struct {
 		PlanID   string `json:"plan_id"`
-		RootPath string `json:"root_path"`
+		PlanKind string `json:"plan_kind"`
 		Summary  struct {
 			OperationCount  int    `json:"operation_count"`
 			ErrorCount      int    `json:"error_count"`
 			ActionableCount int    `json:"actionable_count"`
 			SummaryReason   string `json:"summary_reason"`
 		} `json:"summary"`
-		Operations []struct {
-			Type       string `json:"type"`
-			SourcePath string `json:"source_path"`
-		} `json:"operations"`
+		Steps []struct {
+			StepType   string `json:"step_type"`
+			Status     string `json:"status"`
+			Components []struct {
+				ComponentID string `json:"component_id"`
+				Status      string `json:"status"`
+			} `json:"components"`
+		} `json:"steps"`
 	}
 	code = doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/plans", token, planReq, &plan)
 	if code != http.StatusOK {
@@ -149,26 +174,38 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 	if plan.PlanID == "" {
 		t.Fatal("POST /api/v1/plans: empty plan_id")
 	}
-	if len(plan.Operations) == 0 {
-		t.Fatalf("POST /api/v1/plans: expected delete operations for mp3+flac stems, got 0 (summary=%+v)", plan.Summary)
+	if plan.PlanKind != "workflow" {
+		t.Fatalf("plan_kind = %q, want workflow", plan.PlanKind)
 	}
-	if plan.Summary.OperationCount != len(plan.Operations) {
-		t.Fatalf("summary.operation_count %d != len(operations) %d", plan.Summary.OperationCount, len(plan.Operations))
+	if len(plan.Steps) != 1 || plan.Steps[0].StepType != "reconcile_audio_outputs" {
+		t.Fatalf("steps = %+v, want one reconcile_audio_outputs step", plan.Steps)
 	}
-	if plan.Summary.ActionableCount != plan.Summary.OperationCount {
-		t.Fatalf("summary.actionable_count %d != operation_count %d", plan.Summary.ActionableCount, plan.Summary.OperationCount)
+	if plan.Summary.OperationCount == 0 {
+		t.Fatalf("expected actionable operations for flac+mp3 pairs under balanced preset (summary=%+v)", plan.Summary)
 	}
-	for _, op := range plan.Operations {
-		if op.Type != "delete" {
-			t.Fatalf("plan operation type %q, want delete", op.Type)
-		}
-		if !strings.HasSuffix(op.SourcePath, ".flac") {
-			t.Fatalf("plan delete source %q, want a .flac lossless copy", op.SourcePath)
-		}
+	if plan.Summary.OperationCount != plan.Summary.ActionableCount {
+		t.Fatalf(
+			"summary.actionable_count %d != operation_count %d",
+			plan.Summary.ActionableCount,
+			plan.Summary.OperationCount,
+		)
+	}
+	if plan.Summary.SummaryReason != "ACTIONABLE" {
+		t.Fatalf("summary_reason = %q, want ACTIONABLE", plan.Summary.SummaryReason)
+	}
+	if len(plan.Steps[0].Components) == 0 {
+		t.Fatal("workflow step has no components")
 	}
 
-	t.Logf("http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d",
-		lib.ID, completed.ScanID, len(folders.Folders), plan.PlanID, len(plan.Operations))
+	t.Logf(
+		"http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d components=%d",
+		lib.ID,
+		completed.ScanID,
+		len(folders.Folders),
+		plan.PlanID,
+		plan.Summary.OperationCount,
+		len(plan.Steps[0].Components),
+	)
 }
 
 // buildBackendBinary compiles the backend into a fresh temp dir and returns
@@ -200,11 +237,35 @@ type backendProc struct {
 	token    string
 }
 
+// inlineWorkflowPolicy is the inline literal-tag policy payload (matched and
+// unmatched both want wav + mp3@320), replacing the removed balanced preset.
+func inlineWorkflowPolicy() map[string]any {
+	profile := map[string]any{
+		"lossless": map[string]any{"codec": "wav"},
+		"encoded":  map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}},
+	}
+	return map[string]any{
+		"kind": "inline",
+		"policy": map[string]any{
+			"schema_version":  1,
+			"classifier_tags": []string{"SEなし"},
+			"matched":         profile,
+			"unmatched":       profile,
+		},
+	}
+}
+
 // startBackendBinary launches the backend with ONSEI_DATA_DIR set and a
 // never-closed stdin pipe (the backend cancels on stdin EOF, so the pipe keeps
 // it alive for the whole test), then parses the ready handshake.
 func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendProc {
 	t.Helper()
+	// Seed the classifier tag config: no compiled-in defaults remain, so a
+	// fresh data dir gets its literal tags from config.json.
+	cfgPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"prune":{"literal_tags":["SEなし"]}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	stdinR, stdinW := io.Pipe()
 	cmd := exec.Command(binPath)
 	cmd.Env = append(os.Environ(),
@@ -240,7 +301,7 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 			n, err := fmt.Sscanf(line, "ONSEI_BACKEND_READY port=%d token=%s version=%s http_port=%d",
 				&port, &tok, &ver, &httpPort)
 			if err != nil || n != 4 {
-				handshake <- handshakeResult{line: line, err: fmt.Errorf("parse handshake fields: n=%d err=%v", n, err)}
+				handshake <- handshakeResult{line: line, err: fmt.Errorf("parse handshake fields: n=%d err=%w", n, err)}
 				return
 			}
 			handshake <- handshakeResult{line: line, grpcPort: port, httpPort: httpPort}
@@ -250,7 +311,7 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 			}
 			return
 		}
-		handshake <- handshakeResult{err: fmt.Errorf("handshake not found before stdout EOF: %v", scanner.Err())}
+		handshake <- handshakeResult{err: fmt.Errorf("handshake not found before stdout EOF: %w", scanner.Err())}
 	}()
 
 	var hs handshakeResult
@@ -315,10 +376,10 @@ func postScanSSE(t *testing.T, client *http.Client, ctx context.Context, base, l
 	}
 
 	events := sseEvents{}
-	for _, block := range strings.Split(string(body), "\n\n") {
+	for block := range strings.SplitSeq(string(body), "\n\n") {
 		var evName string
 		var data json.RawMessage
-		for _, line := range strings.Split(block, "\n") {
+		for line := range strings.SplitSeq(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "event: "):
 				evName = strings.TrimPrefix(line, "event: ")
@@ -335,7 +396,14 @@ func postScanSSE(t *testing.T, client *http.Client, ctx context.Context, base, l
 
 // doJSON performs an authenticated JSON request and decodes the response
 // body into out (when non-nil), returning the HTTP status code.
-func doJSON(t *testing.T, client *http.Client, ctx context.Context, base, method, path, token string, body any, out any) int {
+func doJSON(
+	t *testing.T,
+	client *http.Client,
+	ctx context.Context,
+	base, method, path, token string,
+	body any,
+	out any,
+) int {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {

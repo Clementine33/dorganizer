@@ -9,19 +9,21 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // Dependencies carries the wiring for the HTTP API. ScanService is used by the
-// scan route; PlanService by the plan routes. Both may be nil until wired, and
-// the handlers guard against that.
+// scan route; PlanService by the plan routes; WorksetService by the workset
+// routes. Any may be nil until wired, and the handlers guard against that.
 type Dependencies struct {
-	Repo        *sqlite.Repository
-	ConfigDir   string
-	Token       string
-	CORSOrigins []string
-	Version     string
-	ScanService scanusecase.Service
-	PlanService planusecase.Service
+	Repo           *sqlite.Repository
+	ConfigDir      string
+	Token          string
+	CORSOrigins    []string
+	Version        string
+	ScanService    scanusecase.Service
+	PlanService    planusecase.Service
+	WorksetService worksetusecase.Service
 }
 
 type Server struct{ deps Dependencies }
@@ -42,6 +44,43 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("POST /api/v1/plans", protect(http.HandlerFunc(s.createPlan)))
 	mux.Handle("GET /api/v1/plans", protect(http.HandlerFunc(s.listPlans)))
 	mux.Handle("GET /api/v1/plans/{id}", protect(http.HandlerFunc(s.getPlanDetail)))
+	mux.Handle("GET /api/v1/policy-slots", protect(http.HandlerFunc(s.listPolicySlots)))
+	mux.Handle("PUT /api/v1/policy-slots/{slot}", protect(http.HandlerFunc(s.putPolicySlot)))
+	mux.Handle("GET /api/v1/classifier-tags", protect(http.HandlerFunc(s.listClassifierTags)))
+	mux.Handle("POST /api/v1/classifier-tags", protect(http.HandlerFunc(s.addClassifierTag)))
+	mux.Handle("DELETE /api/v1/classifier-tags/{id}", protect(http.HandlerFunc(s.deleteClassifierTag)))
+	mux.Handle("POST /api/v1/worksets", protect(http.HandlerFunc(s.createWorkset)))
+	mux.Handle("GET /api/v1/worksets", protect(http.HandlerFunc(s.listWorksets)))
+	mux.Handle("GET /api/v1/worksets/{id}", protect(http.HandlerFunc(s.getWorkset)))
+	mux.Handle("PATCH /api/v1/worksets/{id}", protect(http.HandlerFunc(s.patchWorkset)))
+	// Workset operations: every mutable planning resource is addressed through
+	// its (workset, operation type) ownership. There is no workset-level draft,
+	// planning session or revision route.
+	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}", protect(http.HandlerFunc(s.getOperation)))
+	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}/draft", protect(http.HandlerFunc(s.getOperationDraft)))
+	mux.Handle("PUT /api/v1/worksets/{id}/operations/{type}/draft", protect(http.HandlerFunc(s.putOperationDraft)))
+	mux.Handle("POST /api/v1/worksets/{id}/operations/{type}/revisions", protect(http.HandlerFunc(s.startGeneration)))
+	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}/revisions", protect(http.HandlerFunc(s.listRevisions)))
+	mux.Handle(
+		"GET /api/v1/worksets/{id}/operations/{type}/revisions/{planId}",
+		protect(http.HandlerFunc(s.getRevision)),
+	)
+	mux.Handle(
+		"POST /api/v1/worksets/{id}/operations/{type}/revisions/{planId}/confirmation",
+		protect(http.HandlerFunc(s.confirmRevision)),
+	)
+	mux.Handle(
+		"GET /api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}",
+		protect(http.HandlerFunc(s.getGeneration)),
+	)
+	mux.Handle(
+		"GET /api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/events",
+		protect(http.HandlerFunc(s.generationEvents)),
+	)
+	mux.Handle(
+		"POST /api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/cancel",
+		protect(http.HandlerFunc(s.cancelGeneration)),
+	)
 	return recoveryMiddleware(corsMiddleware(deps.CORSOrigins)(routingCompatibilityMiddleware(mux)))
 }
 

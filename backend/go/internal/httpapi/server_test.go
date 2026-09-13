@@ -1,4 +1,4 @@
-package httpapi
+package httpapi //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bytes"
@@ -32,7 +32,7 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 // newHTTPTestRepository opens a repository on a fresh temp DB file.
 func newHTTPTestRepository(t *testing.T) *sqlite.Repository {
 	t.Helper()
-	tmpFile, err := os.CreateTemp("", "onsei-httpapi-*.db")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "onsei-httpapi-*.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,13 @@ func newHTTPTestRepository(t *testing.T) *sqlite.Repository {
 }
 
 // doRequest performs a request against the engine and returns the recorder.
-func doRequest(t *testing.T, engine http.Handler, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+func doRequest(
+	t *testing.T,
+	engine http.Handler,
+	method, path string,
+	body any,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
 	if body != nil {
@@ -181,6 +187,17 @@ func TestCORSPreflightRunsBeforeAuth(t *testing.T) {
 	}
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	// Workset writes carry If-Match / Idempotency-Key; the preflight must
+	// allow them or the browser blocks every mutating request.
+	allowHeaders := w.Header().Get("Access-Control-Allow-Headers")
+	for _, want := range []string{"If-Match", "Idempotency-Key"} {
+		if !strings.Contains(allowHeaders, want) {
+			t.Fatalf("Access-Control-Allow-Headers = %q, missing %q", allowHeaders, want)
+		}
+	}
+	if methods := w.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(methods, "PUT") {
+		t.Fatalf("Access-Control-Allow-Methods = %q, missing PUT", methods)
 	}
 }
 

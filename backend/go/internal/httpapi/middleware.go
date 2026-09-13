@@ -49,8 +49,8 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-Match, Idempotency-Key")
 				w.Header().Set("Access-Control-Max-Age", "86400")
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -62,6 +62,7 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 
 type responseState struct {
 	http.ResponseWriter
+
 	wroteHeader bool
 }
 
@@ -93,7 +94,11 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 			if recovered := recover(); recovered != nil {
 				log.Printf("http panic: %v", recovered)
 				if !state.wroteHeader {
-					writeJSON(state, http.StatusInternalServerError, errorResponse{Code: "INTERNAL", Message: "internal server error"})
+					writeJSON(
+						state,
+						http.StatusInternalServerError,
+						errorResponse{Code: "INTERNAL", Message: "internal server error"},
+					)
 				}
 			}
 		}()

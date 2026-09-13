@@ -1,6 +1,12 @@
 {
   "prune": {
-    "regex_pattern": "(?:[Ss][Ee]|音)(?:[な無]し|[Cc][Uu][Tt])|(?:[Nn][Oo]|无|無)(?:[Ss][Ee]|音效|效果音)|(?:反転)"
+    "literal_tags": [
+      "seなし", "se無し", "secut",
+      "音なし", "音無し", "音cut",
+      "no se", "no音效", "no效果音",
+      "无se", "無se", "无音效", "無音效", "无效果音", "無效果音",
+      "反転"
+    ]
   },
   "tools": {
     "encoder": "lame",

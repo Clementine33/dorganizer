@@ -1,4 +1,4 @@
-package sqlite
+package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"database/sql"
@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // openLegacyLibraryDB builds a database with the pre-key libraries schema and
@@ -32,7 +31,11 @@ func openLegacyLibraryDB(t *testing.T, rows [][2]string) (*Repository, error) {
 		t.Fatalf("create legacy libraries table: %v", err)
 	}
 	for _, r := range rows {
-		if _, err := db.Exec("INSERT INTO libraries (id, name, root_path) VALUES (?, 'Legacy', ?)", r[0], r[1]); err != nil {
+		if _, err := db.Exec(
+			"INSERT INTO libraries (id, name, root_path) VALUES (?, 'Legacy', ?)",
+			r[0],
+			r[1],
+		); err != nil {
 			t.Fatalf("insert legacy library: %v", err)
 		}
 	}
@@ -90,6 +93,7 @@ func TestMigrateLibraryRootPathKeysDetectsCollision(t *testing.T) {
 		t.Errorf("expected collision diagnostic, got: %v", err)
 	}
 }
+
 // openLegacyPlansDB builds a database with the pre-library_id plans schema
 // plus a libraries table, then reopens it through NewRepository.
 func openLegacyPlansDB(t *testing.T) (*Repository, error) {
@@ -123,13 +127,19 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	)`); err != nil {
 		t.Fatalf("create legacy plans table: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO libraries (id, name, root_path) VALUES ('lib-1', 'Music', '/music')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO libraries (id, name, root_path) VALUES ('lib-1', 'Music', '/music')",
+	); err != nil {
 		t.Fatalf("insert legacy library: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-1', '/music/Album', '/music', 'slim', 'snap-1', 'ready')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-1', '/music/Album', '/music', 'slim', 'snap-1', 'ready')",
+	); err != nil {
 		t.Fatalf("insert plan-1: %v", err)
 	}
-	if _, err := db.Exec("INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-2', '/other', '/other', 'slim', 'snap-2', 'ready')"); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO plans (plan_id, root_path, scan_root_path, plan_type, snapshot_token, status) VALUES ('plan-2', '/other', '/other', 'slim', 'snap-2', 'ready')",
+	); err != nil {
 		t.Fatalf("insert plan-2: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -138,54 +148,81 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	return NewRepository(dbPath)
 }
 
-func TestMigratePlansLibrarySchemaBackfillsAndSetsNull(t *testing.T) {
+// TestWorkflowMigrationPurgesLegacyPlans is the breaking migration contract:
+// opening a pre-workflow database purges every legacy plan row and the
+// per-plan/execute intermediate state, while the workflow schema is created and
+// new workflow plans round-trip. Libraries, entries and scans survive (covered
+// implicitly by NewRepository succeeding and a new workflow plan listing).
+func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	repo, err := openLegacyPlansDB(t)
 	if err != nil {
 		t.Fatalf("NewRepository on legacy plans schema failed: %v", err)
 	}
 	defer repo.Close()
 
-	p1, err := repo.GetPlan("plan-1")
+	// Legacy plans are intermediate-state only: all purged.
+	plans, err := repo.ListPlans(nil, 100)
 	if err != nil {
-		t.Fatalf("GetPlan(plan-1) failed: %v", err)
+		t.Fatalf("ListPlans failed: %v", err)
 	}
-	if p1.LibraryID != "lib-1" {
-		t.Errorf("expected plan-1 backfilled to lib-1, got %q", p1.LibraryID)
+	if len(plans) != 0 {
+		t.Fatalf("expected 0 legacy plans after migration, got %d", len(plans))
 	}
-	p2, err := repo.GetPlan("plan-2")
-	if err != nil {
-		t.Fatalf("GetPlan(plan-2) failed: %v", err)
+	if _, planErr := repo.GetPlan("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+		t.Fatalf("GetPlan(plan-1) = %v, want ErrPlanNotFound", planErr)
 	}
-	if p2.LibraryID != "" {
-		t.Errorf("expected unmatched plan-2 to stay unattributed, got %q", p2.LibraryID)
+	if _, detailErr := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(detailErr, ErrPlanNotFound) {
+		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", detailErr)
 	}
 
-	// FK ON DELETE SET NULL: deleting the library keeps the plan but drops the
-	// ownership.
-	if err := repo.DeleteLibrary("lib-1"); err != nil {
-		t.Fatalf("DeleteLibrary failed: %v", err)
-	}
-	p1b, err := repo.GetPlan("plan-1")
-	if err != nil {
-		t.Fatalf("GetPlan(plan-1) after library delete failed: %v", err)
-	}
-	if p1b.LibraryID != "" {
-		t.Errorf("expected plan-1 library_id set NULL after library delete, got %q", p1b.LibraryID)
-	}
-
-	// New plans written after migration carry ownership.
+	// A new workflow plan round-trips after migration.
 	lib, err := repo.CreateLibrary("New", "/new")
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	if err := repo.CreatePlan(&Plan{PlanID: "plan-3", RootPath: "/new", ScanRootPath: "/new", LibraryID: lib.ID, PlanType: "slim", SnapshotToken: "s", Status: "ready", CreatedAt: time.Now()}); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
-	}
-	p3, err := repo.GetPlan("plan-3")
+	err = CreateWorkflowPlanTx(
+		repo.DB(),
+		"wf-1",
+		"workflow",
+		"/new",
+		"snap-wf",
+		lib.ID,
+		[]WorkflowStepRecord{{
+			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
+			PolicySchemaVersion: 1, PolicyJSON: `{"schema_version":1}`, PolicyHash: "h",
+			ClassifierTags: "se\xe3\x81\xaa\xe3\x81\x97", ClassifierHash: "ch",
+			StepSummaryJSON: `{"summary_reason":"NO_MATCH"}`,
+		}},
+		[]WorkflowRootRecord{
+			{RootIndex: 0, RootPath: "/new", RootIdentity: "/new", InventoryFingerprint: "fp", EntryCount: 0},
+		},
+		[]WorkflowComponentRecord{{
+			ComponentIndex: 0, ComponentID: "cid", RootIndex: 0, Partition: "unmatched",
+			Status: "ok", OutcomeJSON: `{}`,
+		}},
+	)
 	if err != nil {
-		t.Fatalf("GetPlan(plan-3) failed: %v", err)
+		t.Fatalf("CreateWorkflowPlanTx failed: %v", err)
 	}
-	if p3.LibraryID != lib.ID {
-		t.Errorf("expected plan-3 library_id %q, got %q", lib.ID, p3.LibraryID)
+	detail, err := repo.GetWorkflowPlanDetail("wf-1")
+	if err != nil {
+		t.Fatalf("GetWorkflowPlanDetail(wf-1) failed: %v", err)
+	}
+	if len(detail.Steps) != 1 || len(detail.Components) != 1 || len(detail.Roots) != 1 {
+		t.Fatalf(
+			"workflow detail steps=%d roots=%d components=%d",
+			len(detail.Steps),
+			len(detail.Roots),
+			len(detail.Components),
+		)
+	}
+	if detail.Plan.PlanKind != "workflow" || detail.Plan.WorkflowSchemaVersion != 1 {
+		t.Fatalf("plan kind=%q schema=%d", detail.Plan.PlanKind, detail.Plan.WorkflowSchemaVersion)
+	}
+
+	// Execute boundary guard sees the workflow plan.
+	kind, schema, err := repo.GetPlanWorkflowSchema("wf-1")
+	if err != nil || kind != "workflow" || schema != 1 {
+		t.Fatalf("GetPlanWorkflowSchema = %q/%d/%v", kind, schema, err)
 	}
 }

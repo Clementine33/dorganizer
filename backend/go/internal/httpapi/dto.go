@@ -7,10 +7,11 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// errorResponse is the standard API error envelope: {"code":"...","message":"..."}
+// errorResponse is the standard API error envelope: {"code":"...","message":"..."}.
 type errorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Details []string `json:"details,omitempty"`
 }
 
 // writeError aborts the request with the given status and envelope.

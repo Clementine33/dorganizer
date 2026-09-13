@@ -1,21 +1,28 @@
 package sqlite
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/pathnorm"
 	_ "modernc.org/sqlite"
+
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
-// timeFormat is the format used for storing timestamps in SQLite
+// timeFormat is the format used for storing timestamps in SQLite.
 const timeFormat = time.RFC3339Nano
 
-// parseTimestamp parses a timestamp string with fallback to SQLite's default format
+// parseTimestamp parses a timestamp string with fallback to SQLite's default format.
 func parseTimestamp(s string) time.Time {
 	if s == "" {
 		return time.Time{}
@@ -35,17 +42,19 @@ func parseTimestamp(s string) time.Time {
 	return time.Time{}
 }
 
-// Plan represents a persisted Slim/Prune plan
+// Plan represents a persisted plan.
 type Plan struct {
-	PlanID        string
-	RootPath      string
-	ScanRootPath  string
-	LibraryID     string  // nullable: owning library when known (web-created plans)
-	PlanType      string  // slim, prune, single_delete, single_convert
-	SlimMode      *string // nullable: 1, 2, or nil
-	SnapshotToken string
-	Status        string // ready, executed, stale, canceled
-	CreatedAt     time.Time
+	PlanID                string
+	RootPath              string
+	ScanRootPath          string
+	LibraryID             string  // nullable: owning library when known (web-created plans)
+	PlanType              string  // display label: workflow, single_delete, single_convert
+	SlimMode              *string // nullable legacy column; unused for workflow plans
+	SnapshotToken         string
+	Status                string // ready, executed, stale, canceled, failed
+	PlanKind              string // single_action, workflow
+	WorkflowSchemaVersion int    // >0 for workflow plans, 0 for single actions
+	CreatedAt             time.Time
 }
 
 // PlanFolderError is a folder-scoped error persisted with a plan so the plan
@@ -67,7 +76,7 @@ type PlanSuccessfulFolder struct {
 	FolderPath  string
 }
 
-// PlanItem represents a single operation in a plan
+// PlanItem represents a single operation in a plan.
 type PlanItem struct {
 	PlanID                 string
 	ItemIndex              int
@@ -81,7 +90,7 @@ type PlanItem struct {
 	PreconditionMtime      int64
 }
 
-// ScanSession represents a scan operation
+// ScanSession represents a scan operation.
 type ScanSession struct {
 	SessionID    string
 	RootPath     string
@@ -94,7 +103,7 @@ type ScanSession struct {
 	FinishedAt   time.Time
 }
 
-// ExecuteSession represents an execute operation
+// ExecuteSession represents an execute operation.
 type ExecuteSession struct {
 	SessionID    string
 	PlanID       string
@@ -106,7 +115,7 @@ type ExecuteSession struct {
 	ErrorMessage string
 }
 
-// ErrorEvent represents an error during operations
+// ErrorEvent represents an error during operations.
 type ErrorEvent struct {
 	ID        int64
 	Scope     string // scan, slim, prune, execute
@@ -118,10 +127,11 @@ type ErrorEvent struct {
 	CreatedAt time.Time
 }
 
-// CleanupStats holds counts of rows deleted by each cleanup operation
+// CleanupStats holds counts of rows deleted by each cleanup operation.
 type CleanupStats struct {
 	DeletedErrorEvents  int64
 	DeletedScanSessions int64
+	DeletedGenerations  int64
 	DeletedPlans        int64
 }
 
@@ -177,6 +187,16 @@ func NewRepository(dbPath string) (*Repository, error) {
 	}
 
 	if err := migratePlansLibrarySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := migratePlansWorkflowSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := migrateWorksetSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -241,7 +261,14 @@ func migrateLibraryRootPathKeys(db *sql.DB) error {
 	for _, l := range libs {
 		key := pathnorm.RootPathKey(l.root)
 		if first, ok := seen[key]; ok {
-			return fmt.Errorf("library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database", first, l.root, l.id, l.root, key)
+			return fmt.Errorf(
+				"library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database",
+				first,
+				l.root,
+				l.id,
+				l.root,
+				key,
+			)
 		}
 		seen[key] = l.id
 		if _, err := db.Exec("UPDATE libraries SET root_path_key = ? WHERE id = ?", key, l.id); err != nil {
@@ -249,7 +276,9 @@ func migrateLibraryRootPathKeys(db *sql.DB) error {
 		}
 	}
 
-	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)"); err != nil {
+	if _, err := db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)",
+	); err != nil {
 		return err
 	}
 	return nil
@@ -266,15 +295,15 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 		return err
 	}
 	if !hasCol {
-		if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
-			return err
+		if _, fkErr := db.Exec("PRAGMA foreign_keys=OFF"); fkErr != nil {
+			return fkErr
 		}
 		defer func() {
 			_, _ = db.Exec("PRAGMA foreign_keys=ON")
 		}()
 
-		if _, err := db.Exec("BEGIN"); err != nil {
-			return err
+		if _, beginErr := db.Exec("BEGIN"); beginErr != nil {
+			return beginErr
 		}
 		committed := false
 		defer func() {
@@ -304,12 +333,12 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 			`CREATE INDEX idx_plans_library_created ON plans(library_id, created_at)`,
 		}
 		for _, s := range steps {
-			if _, err := db.Exec(s); err != nil {
-				return fmt.Errorf("plans schema migration: %w", err)
+			if _, stepErr := db.Exec(s); stepErr != nil {
+				return fmt.Errorf("plans schema migration: %w", stepErr)
 			}
 		}
-		if _, err := db.Exec("COMMIT"); err != nil {
-			return err
+		if _, commitErr := db.Exec("COMMIT"); commitErr != nil {
+			return commitErr
 		}
 		committed = true
 	}
@@ -324,17 +353,23 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 	}
 	for libs.Next() {
 		var id, key string
-		if err := libs.Scan(&id, &key); err != nil {
+		if scanErr := libs.Scan(&id, &key); scanErr != nil {
 			libs.Close()
-			return err
+			return scanErr
 		}
 		libKeys[key] = id
 	}
 	libs.Close()
-	if err := libs.Err(); err != nil {
-		return err
+	if rowsErr := libs.Err(); rowsErr != nil {
+		return rowsErr
 	}
 
+	return backfillPlansLibraryOwnership(db, libKeys)
+}
+
+// backfillPlansLibraryOwnership attributes legacy nullable-library plans to the
+// library whose canonical root key matches the plan's scan_root_path.
+func backfillPlansLibraryOwnership(db *sql.DB, libKeys map[string]string) error {
 	plans, err := db.Query("SELECT plan_id, scan_root_path FROM plans WHERE library_id IS NULL")
 	if err != nil {
 		return err
@@ -342,9 +377,9 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 	var toUpdate []struct{ id, libraryID string }
 	for plans.Next() {
 		var planID, scanRoot string
-		if err := plans.Scan(&planID, &scanRoot); err != nil {
+		if scanErr := plans.Scan(&planID, &scanRoot); scanErr != nil {
 			plans.Close()
-			return err
+			return scanErr
 		}
 		if scanRoot == "" {
 			continue
@@ -354,24 +389,368 @@ func migratePlansLibrarySchema(db *sql.DB) error {
 		}
 	}
 	plans.Close()
-	if err := plans.Err(); err != nil {
-		return err
+	if rowsErr := plans.Err(); rowsErr != nil {
+		return rowsErr
 	}
 
 	for _, u := range toUpdate {
-		if _, err := db.Exec("UPDATE plans SET library_id = ? WHERE plan_id = ?", u.libraryID, u.id); err != nil {
+		if _, updateErr := db.Exec(
+			"UPDATE plans SET library_id = ? WHERE plan_id = ?",
+			u.libraryID,
+			u.id,
+		); updateErr != nil {
+			return updateErr
+		}
+	}
+	return createPlansLibraryIndex(db)
+}
+
+func createPlansLibraryIndex(db *sql.DB) error {
+	_, err := db.Exec(
+		"CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)",
+	)
+	return err
+}
+
+// migratePlansWorkflowSchema is the breaking migration for the workflow plan
+// refactor. Plan rows and their per-plan/execute intermediate state are
+// intermediate-state only: every legacy plan and execute session is purged in
+// one transaction, and the plans table is rebuilt with the new plan_kind /
+// workflow_schema_version columns. Libraries, entries and error_events are
+// preserved.
+func migratePlansWorkflowSchema(db *sql.DB) error {
+	hasWorkflow, err := tableHasColumn(db, "plans", "workflow_schema_version")
+	if err != nil {
+		return err
+	}
+	if !hasWorkflow {
+		if err := migrateWorkflowSchemaInner(db); err != nil {
 			return err
 		}
 	}
+	return migratePolicySlotsSchema(db)
+}
 
-	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)"); err != nil {
+// migratePolicySlotsSchema converges every schema onto the fixed-three
+// policy_slots table and the trimmed plan_workflow_steps columns. The old
+// named/versioned classifier registry has no successor: legacy databases are
+// rebuilt per the no-compatibility agreement (fresh dev data was accepted).
+func migratePolicySlotsSchema(db *sql.DB) error {
+	// Fresh databases already have the new plan_workflow_steps (no
+	// policy_source_kind column) from initSchema.
+	hasSourceKind, err := tableHasColumn(db, "plan_workflow_steps", "policy_source_kind")
+	if err != nil {
 		return err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS policy_slots (
+		slot_index INTEGER PRIMARY KEY CHECK (slot_index BETWEEN 1 AND 3),
+		name TEXT NOT NULL DEFAULT '',
+		policy_json TEXT,
+		updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("policy slots migration: %w", err)
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`); err != nil {
+		return fmt.Errorf("policy slots seed: %w", err)
+	}
+	if !hasSourceKind {
+		return nil
+	}
+	// Legacy workflow schema: plan snapshots carry classifier name/version and
+	// preset-source metadata. Compat was declined; drop and rebuild the table
+	// (snapshots are intermediate state, same rationale as the plans purge).
+	if _, err := db.Exec(`DROP TABLE plan_workflow_steps`); err != nil {
+		return fmt.Errorf("policy slots migration drop: %w", err)
+	}
+	steps := []string{
+		`CREATE TABLE plan_workflow_steps (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			step_type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ok',
+			policy_schema_version INTEGER NOT NULL DEFAULT 0,
+			policy_json TEXT NOT NULL DEFAULT '',
+			policy_hash TEXT NOT NULL DEFAULT '',
+			classifier_pattern TEXT NOT NULL DEFAULT '',
+			classifier_hash TEXT NOT NULL DEFAULT '',
+			step_summary_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, step_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
+		`DROP TABLE IF EXISTS classifiers`,
+		`DROP INDEX IF EXISTS idx_classifiers_version`,
+	}
+	for _, stmt := range steps {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("policy slots migration rebuild: %w", err)
+		}
 	}
 	return nil
 }
 
-func initSchema(db *sql.DB) error {
-	schemaTables := `
+func migrateWorkflowSchemaInner(db *sql.DB) error {
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("BEGIN"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = db.Exec("ROLLBACK")
+		}
+	}()
+
+	purge := []string{
+		"DELETE FROM execute_sessions",
+		"DELETE FROM plan_errors",
+		"DELETE FROM plan_successful_folders",
+		"DELETE FROM plan_items",
+		"DELETE FROM plans",
+	}
+	for _, stmt := range purge {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("workflow migration purge: %w", err)
+		}
+	}
+
+	// Rebuild plans via create + drop + rename (the same pattern the library
+	// migration uses) so the retained child tables (plan_items, execute_sessions)
+	// re-resolve their FK REFERENCES plans to the new table by name. A plain
+	// RENAME TO <legacy> would retarget those FKs at the legacy name and leave
+	// them dangling after the drop.
+	steps := []string{
+		`CREATE TABLE plans_new (
+			plan_id TEXT PRIMARY KEY,
+			root_path TEXT NOT NULL,
+			scan_root_path TEXT NOT NULL DEFAULT '',
+			library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+			plan_type TEXT NOT NULL,
+			slim_mode TEXT,
+			snapshot_token TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ready',
+			plan_kind TEXT NOT NULL DEFAULT 'single_action',
+			workflow_schema_version INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`DROP TABLE plans`,
+		`ALTER TABLE plans_new RENAME TO plans`,
+		`CREATE TABLE IF NOT EXISTS plan_workflow_steps (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			step_type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'ok',
+			policy_schema_version INTEGER NOT NULL DEFAULT 0,
+			policy_json TEXT NOT NULL DEFAULT '',
+			policy_hash TEXT NOT NULL DEFAULT '',
+			classifier_pattern TEXT NOT NULL DEFAULT '',
+			classifier_hash TEXT NOT NULL DEFAULT '',
+			step_summary_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, step_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_roots (
+			plan_id TEXT NOT NULL,
+			root_index INTEGER NOT NULL,
+			root_path TEXT NOT NULL,
+			root_identity TEXT NOT NULL DEFAULT '',
+			inventory_fingerprint TEXT NOT NULL DEFAULT '',
+			entry_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (plan_id, root_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_components (
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			component_index INTEGER NOT NULL,
+			component_id TEXT NOT NULL,
+			root_index INTEGER NOT NULL DEFAULT 0,
+			partition TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			reason_code TEXT NOT NULL DEFAULT '',
+			outcome_json TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (plan_id, component_index),
+			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id)`,
+	}
+	for _, stmt := range steps {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("workflow migration rebuild: %w", err)
+		}
+	}
+
+	if _, err := db.Exec("COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// migrateWorksetSchema converges databases created before the operation model
+// onto the columns the current code reads. Tables themselves come from
+// initSchema's CREATE IF NOT EXISTS; this only adds columns that a legacy
+// database cannot have. Retired pre-operation workset tables (workset_drafts,
+// workset_revisions, workset_confirmations) are left untouched and unread:
+// ADR 0004 requires no legacy-data migration and forbids deleting user data.
+func migrateWorksetSchema(db *sql.DB) error {
+	if _, err := db.Exec("ALTER TABLE plans ADD COLUMN workset_id TEXT NOT NULL DEFAULT ''"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	if err := migrateWorksetMemberIDs(db); err != nil {
+		return err
+	}
+	if err := addColumn(db, "plan_generations", "operation_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	for _, decl := range []string{
+		"root_status TEXT NOT NULL DEFAULT 'ok'",
+		"root_error_code TEXT NOT NULL DEFAULT ''",
+		"root_error_message TEXT NOT NULL DEFAULT ''",
+	} {
+		if _, err := db.Exec("ALTER TABLE plan_roots ADD COLUMN " + decl); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// migrateWorksetMemberIDs adds workset_members.member_id and backfills it
+// once for pre-identity rows in member_index order. The backfill is
+// idempotent: rows that already carry a member_id are never regenerated, so
+// repeated opens, restarts, and member reorders keep identities stable. The
+// unique index is created only after the backfill so legacy duplicate-free
+// rows pass.
+func migrateWorksetMemberIDs(db *sql.DB) error {
+	if err := addColumn(db, "workset_members", "member_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	rows, err := db.Query(`
+		SELECT workset_id, member_index FROM workset_members
+		WHERE member_id = '' ORDER BY workset_id, member_index
+	`)
+	if err != nil {
+		return fmt.Errorf("scan members without member_id: %w", err)
+	}
+	type key struct {
+		worksetID string
+		index     int
+	}
+	var pending []key
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.worksetID, &k.index); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, k)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	if len(pending) > 0 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, k := range pending {
+			if _, err := tx.Exec(
+				"UPDATE workset_members SET member_id = ? WHERE workset_id = ? AND member_index = ?",
+				"m-"+newMigrationToken(), k.worksetID, k.index,
+			); err != nil {
+				return fmt.Errorf("backfill member_id: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit member_id backfill: %w", err)
+		}
+	}
+	const memberIDIndex = `CREATE UNIQUE INDEX IF NOT EXISTS idx_workset_members_id ON workset_members(workset_id, member_id)`
+	if _, err := db.Exec(memberIDIndex); err != nil {
+		return fmt.Errorf("create member_id unique index: %w", err)
+	}
+	return nil
+}
+
+// addColumn adds a column when absent, tolerating the duplicate-column error
+// on already-migrated databases.
+func addColumn(db *sql.DB, table, column, decl string) error {
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return err
+		}
+	}
+	return nil
+}
+
+// newMigrationToken mints one opaque identity token for a backfilled row.
+func newMigrationToken() string {
+	var rnd [4]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
+}
+
+// CanonicalJSONHash hashes JSON canonically: objects are recursively
+// key-sorted, so key order and whitespace never change the hash; array order
+// is preserved because step/member order is semantic. Unparseable input
+// falls back to a raw-byte hash. Draft hashing and the draft-hash migration
+// must use this same function so backfilled and freshly saved hashes agree.
+func CanonicalJSONHash(b []byte) string {
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:])
+	}
+	canonical, err := json.Marshal(canonicalizeValue(v))
+	if err != nil {
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:])
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
+}
+
+// canonicalizeValue recursively normalizes for canonical hashing. Map
+// iteration + encoding/json map marshaling yields sorted keys.
+func canonicalizeValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			t[k] = canonicalizeValue(val)
+		}
+		return t
+	case []any:
+		for i := range t {
+			t[i] = canonicalizeValue(t[i])
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// schemaTablesDDL is the full CREATE-TABLE schema (V1+). Kept out of
+// initSchema so the function stays a thin executor.
+const schemaTablesDDL = `
 -- P0 Schema V1: Main entries table with content revision tracking
 CREATE TABLE IF NOT EXISTS entries (
     path TEXT PRIMARY KEY,
@@ -431,6 +810,10 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 
 -- Persisted plans. Legacy schemas without library_id are upgraded by
 -- migratePlansLibrarySchema (the FK cannot be added via ALTER TABLE).
+-- plan_kind discriminates workflow plans (declare outputs) from the retained
+-- independent single-action path; workflow_schema_version is 0 for
+-- single-action rows. workset_id is NULL for standalone plans and set for
+-- workset-owned revision plans (FK semantics are managed in app logic).
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
@@ -440,6 +823,9 @@ CREATE TABLE IF NOT EXISTS plans (
     slim_mode TEXT,
     snapshot_token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ready',
+    plan_kind TEXT NOT NULL DEFAULT 'single_action',
+    workflow_schema_version INTEGER NOT NULL DEFAULT 0,
+    workset_id TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -504,6 +890,69 @@ CREATE TABLE IF NOT EXISTS execute_sessions (
     FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
+-- Three fixed global policy slots. The count is an invariant of the storage
+-- itself: rows 1..3 exist from initialization, and there is no insert/delete
+-- API. name is the editable display name; policy_json is NULL while the slot
+-- is unconfigured.
+CREATE TABLE IF NOT EXISTS policy_slots (
+    slot_index INTEGER PRIMARY KEY CHECK (slot_index BETWEEN 1 AND 3),
+    name TEXT NOT NULL DEFAULT '',
+    policy_json TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Workflow plan steps: resolved policy/classifier snapshots plus the step
+-- summary. Policy snapshots are immutable per plan. classifier_pattern stores
+-- the canonical normalized tag snapshot (newline-joined) and classifier_hash
+-- the tag-set hash.
+CREATE TABLE IF NOT EXISTS plan_workflow_steps (
+    plan_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    step_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',
+    policy_schema_version INTEGER NOT NULL DEFAULT 0,
+    policy_json TEXT NOT NULL DEFAULT '',
+    policy_hash TEXT NOT NULL DEFAULT '',
+    classifier_pattern TEXT NOT NULL DEFAULT '',
+    classifier_hash TEXT NOT NULL DEFAULT '',
+    step_summary_json TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_id, step_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
+-- Planning roots with their metadata inventory fingerprints. root_status is
+-- 'ok' for planned roots and 'missing' for members whose subtree no longer
+-- exists at planning time; error_code/message carry the stable root outcome.
+CREATE TABLE IF NOT EXISTS plan_roots (
+    plan_id TEXT NOT NULL,
+    root_index INTEGER NOT NULL,
+    root_path TEXT NOT NULL,
+    root_identity TEXT NOT NULL DEFAULT '',
+    inventory_fingerprint TEXT NOT NULL DEFAULT '',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    root_status TEXT NOT NULL DEFAULT 'ok',
+    root_error_code TEXT NOT NULL DEFAULT '',
+    root_error_message TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_id, root_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
+-- Component outcomes (lanes, decisions, operations, projected inventory)
+-- persisted as deterministic JSON snapshots.
+CREATE TABLE IF NOT EXISTS plan_components (
+    plan_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    component_index INTEGER NOT NULL,
+    component_id TEXT NOT NULL,
+    root_index INTEGER NOT NULL DEFAULT 0,
+    partition TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    reason_code TEXT NOT NULL DEFAULT '',
+    outcome_json TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_id, component_index),
+    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
+);
+
 -- Libraries (web library views)
 CREATE TABLE IF NOT EXISTS libraries (
     id TEXT PRIMARY KEY,
@@ -535,13 +984,155 @@ CREATE TABLE IF NOT EXISTS library_folders (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_lib_path ON library_folders(library_id, path);
-`
-	if _, err := db.Exec(schemaTables); err != nil {
-		return err
-	}
 
-	// Create indexes
-	schemaIndexes := `
+-- Worksets: long-lived aggregates owned by a library (nullable once the
+-- library is deleted). title duplicates are allowed. version is the metadata
+-- concurrency counter (rename only); drafts, generations and confirmations
+-- advance their operation's own version (workset_operations.version).
+-- creation_idem_key enables replay of workset creation for up to 30 days
+-- (expired keys are cleared, never the row).
+CREATE TABLE IF NOT EXISTS worksets (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+    root_path TEXT NOT NULL DEFAULT '',
+    root_path_key TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
+    creation_idem_key TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worksets_idem ON worksets(creation_idem_key) WHERE creation_idem_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_worksets_library_updated ON worksets(library_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_worksets_updated ON worksets(updated_at);
+
+-- Ordered album-folder membership. rel_path (normalized library-relative
+-- path) is the durable member identity; folder_id/path/name are display
+-- snapshots that may churn across rescans.
+CREATE TABLE IF NOT EXISTS workset_members (
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    member_index INTEGER NOT NULL,
+    rel_path TEXT NOT NULL,
+    folder_id TEXT NOT NULL DEFAULT '',
+    folder_path TEXT NOT NULL DEFAULT '',
+    folder_name TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (workset_id, member_index),
+    UNIQUE (workset_id, rel_path)
+);
+
+-- Independent Workset Operations (ADR 0004 §2), keyed by (workset, type).
+-- version is the operation concurrency counter: draft saves and revision
+-- publication advance it, and If-Match on draft/generation/confirmation
+-- writes is bound to it. current_revision_id is never mutated by a failed,
+-- canceled or interrupted generation.
+CREATE TABLE IF NOT EXISTS workset_operations (
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    operation_type TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    current_revision_id TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (workset_id, operation_type)
+);
+
+-- One sparse operation draft per operation. draft_json holds the four common
+-- setting groups plus sparse member overrides; an unoverridden unit is absent
+-- rather than materialized from the common value. draft_hash is the canonical
+-- content hash used for needs_planning derivation and generation dedup.
+CREATE TABLE IF NOT EXISTS workset_operation_drafts (
+    workset_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    draft_json TEXT NOT NULL DEFAULT '{}',
+    draft_hash TEXT NOT NULL DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (workset_id, operation_type),
+    FOREIGN KEY (workset_id, operation_type)
+        REFERENCES workset_operations(workset_id, operation_type) ON DELETE CASCADE
+);
+
+-- Immutable operation revisions. revision_index is monotonic within the
+-- operation; draft_hash, excluded_scope and draft_snapshot are frozen at
+-- generation time (audit + replay + frozen review). operation_version is
+-- frozen for audit only (the version is never used as a mutation lock).
+CREATE TABLE IF NOT EXISTS workset_operation_revisions (
+    plan_id TEXT PRIMARY KEY REFERENCES plans(plan_id) ON DELETE CASCADE,
+    workset_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    revision_index INTEGER NOT NULL,
+    draft_hash TEXT NOT NULL DEFAULT '',
+    member_hash TEXT NOT NULL DEFAULT '',
+    operation_version INTEGER NOT NULL DEFAULT 0,
+    excluded_scope TEXT NOT NULL DEFAULT '',
+    draft_snapshot TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (workset_id, operation_type, revision_index)
+);
+
+-- One confirmation per operation revision, bound to plan_id: a new revision
+-- never inherits the previous confirmation.
+CREATE TABLE IF NOT EXISTS workset_operation_confirmations (
+    plan_id TEXT PRIMARY KEY REFERENCES plans(plan_id) ON DELETE CASCADE,
+    workset_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    confirmed_version INTEGER NOT NULL DEFAULT 0,
+    confirmed_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Async planning session. status: queued|running|completed|failed|canceled|
+-- interrupted. idempotency_key is guaranteed for 30 days for completed rows;
+-- failed/canceled/interrupted release the key immediately. cancel_requested is
+-- observed by the worker at cooperative checkpoints. operation_type scopes the
+-- session to one operation: idempotency, the single-active-session rule and
+-- SSE/detail addressing all resolve within (workset_id, operation_type).
+CREATE TABLE IF NOT EXISTS plan_generations (
+    generation_id TEXT PRIMARY KEY,
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    operation_type TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    idempotency_key TEXT NOT NULL DEFAULT '',
+    request_hash TEXT NOT NULL DEFAULT '',
+    expected_draft_version INTEGER NOT NULL DEFAULT 0,
+    request_json TEXT NOT NULL DEFAULT '',
+    total_roots INTEGER NOT NULL DEFAULT 0,
+    completed_roots INTEGER NOT NULL DEFAULT 0,
+    current_root TEXT NOT NULL DEFAULT '',
+    error_count INTEGER NOT NULL DEFAULT 0,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    revision_id TEXT REFERENCES plans(plan_id) ON DELETE SET NULL,
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- The pre-operation index constrained idempotency keys per workset; drop it so
+-- the operation-scoped index below is the only authority.
+DROP INDEX IF EXISTS idx_plan_generations_idem;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_generations_op_idem
+    ON plan_generations(workset_id, operation_type, idempotency_key)
+    WHERE idempotency_key <> '' AND status IN ('queued','running','completed');
+CREATE INDEX IF NOT EXISTS idx_plan_generations_op_status
+    ON plan_generations(workset_id, operation_type, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
+    ON plan_generations(status, created_at, generation_id);
+
+-- Global custom classifier tag library. Holds user-entered literal tags for
+-- cross-workset reuse. Case-insensitively unique normalized_tag prevents duplicates.
+CREATE TABLE IF NOT EXISTS classifier_tag_library (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag TEXT NOT NULL,
+    normalized_tag TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_classifier_tag_norm ON classifier_tag_library(normalized_tag);
+`
+
+// schemaIndexesDDL is the CREATE-INDEX DDL applied after the tables exist.
+const schemaIndexesDDL = `
 -- Entry indexes
 CREATE INDEX IF NOT EXISTS idx_entries_root_path ON entries(root_path);
 CREATE INDEX IF NOT EXISTS idx_entries_parent_path ON entries(parent_path);
@@ -563,6 +1154,9 @@ CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 -- idx_plans_library_created is created by migratePlansLibrarySchema after the
 -- library_id column exists on both new and legacy schemas.
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id);
 
 -- Error event indexes
 CREATE INDEX IF NOT EXISTS idx_errors_root ON error_events(root_path);
@@ -572,7 +1166,18 @@ CREATE INDEX IF NOT EXISTS idx_errors_scope ON error_events(scope);
 CREATE INDEX IF NOT EXISTS idx_exec_plan ON execute_sessions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_exec_status ON execute_sessions(status);
 `
-	_, err := db.Exec(schemaIndexes)
+
+// initSchema creates the full schema (tables, indexes, seed rows).
+func initSchema(db *sql.DB) error {
+	if _, err := db.Exec(schemaTablesDDL); err != nil {
+		return err
+	}
+	if _, err := db.Exec(schemaIndexesDDL); err != nil {
+		return err
+	}
+	// Fixed three policy slots exist from initialization (storage-level
+	// cardinality invariant; there is no insert/delete API).
+	_, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`)
 	return err
 }
 
@@ -580,12 +1185,12 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
-// DB returns the underlying database connection
+// DB returns the underlying database connection.
 func (r *Repository) DB() *sql.DB {
 	return r.db
 }
 
-// EnsureDBPath creates the database file at given path
+// EnsureDBPath creates the database file at given path.
 func EnsureDBPath(path string) error {
 	dir := path
 	for len(dir) > 0 && dir[len(dir)-1] != '/' && dir[len(dir)-1] != '\\' {

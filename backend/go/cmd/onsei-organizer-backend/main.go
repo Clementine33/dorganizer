@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -16,14 +18,17 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/onsei/organizer/backend/internal/bootstrap"
+	appconfig "github.com/onsei/organizer/backend/internal/config"
 	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
-	"google.golang.org/grpc"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 var version = "dev"
@@ -50,22 +55,29 @@ func parseCORSOrigins(raw string) []string {
 
 // retentionCleaner abstracts the repo for startup cleanup so main_test.go can stub it.
 type retentionCleaner interface {
-	RunRetentionCleanup(cutoff time.Time) (sqlite.CleanupStats, error)
+	RunRetentionCleanupWithCutoffs(cutoff, generationCutoff time.Time) (sqlite.CleanupStats, error)
 }
 
 // runStartupRetentionCleanup performs a one-time retention cleanup at startup.
 // It is non-fatal: the returned error is logged but does not stop the process.
 func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
 	cutoff := now.UTC().Add(-7 * 24 * time.Hour)
+	generationCutoff := now.UTC().Add(-30 * 24 * time.Hour)
 	start := time.Now()
-	stats, err := repo.RunRetentionCleanup(cutoff)
+	stats, err := repo.RunRetentionCleanupWithCutoffs(cutoff, generationCutoff)
 	if err != nil {
 		return err
 	}
 	elapsed := time.Since(start)
-	log.Printf("startup retention cleanup: deleted error_events=%d scan_sessions=%d plans=%d cutoff=%s elapsed_ms=%d",
-		stats.DeletedErrorEvents, stats.DeletedScanSessions, stats.DeletedPlans,
-		cutoff.Format(time.RFC3339), elapsed.Milliseconds())
+	log.Printf(
+		"startup retention cleanup: deleted error_events=%d scan_sessions=%d generations=%d plans=%d cutoff=%s elapsed_ms=%d",
+		stats.DeletedErrorEvents,
+		stats.DeletedScanSessions,
+		stats.DeletedGenerations,
+		stats.DeletedPlans,
+		cutoff.Format(time.RFC3339),
+		elapsed.Milliseconds(),
+	)
 	return nil
 }
 
@@ -112,8 +124,8 @@ func main() {
 	}
 
 	// Ensure DB directory exists
-	if err := sqlite.EnsureDBPath(dbPath); err != nil {
-		log.Fatalf("ensure db path: %v", err)
+	if ensureErr := sqlite.EnsureDBPath(dbPath); ensureErr != nil {
+		log.Fatalf("ensure db path: %v", ensureErr)
 	}
 
 	// Open repository
@@ -127,19 +139,29 @@ func main() {
 	log.SetOutput(os.Stdout)
 
 	// One-time startup retention cleanup (non-fatal)
-	if err := runStartupRetentionCleanup(repo, time.Now()); err != nil {
-		log.Printf("retention cleanup failed: %v", err)
+	if cleanupErr := runStartupRetentionCleanup(repo, time.Now()); cleanupErr != nil {
+		log.Printf("retention cleanup failed: %v", cleanupErr)
 	}
 
+	// Build token (use env if provided, else empty)
+	token := os.Getenv("ONSEI_TOKEN")
+
+	runServer(ctx, repo, dataDir, configDir, ffmpegPath, token, version)
+}
+
+// runServer starts the gRPC + HTTP listeners and blocks until the process is
+// killed. Startup failures are fatal (log.Fatalf) so CI/dev surfaces them.
+func runServer(
+	ctx context.Context,
+	repo *sqlite.Repository,
+	dataDir, configDir, ffmpegPath, token, version string,
+) {
 	// Start TCP listener on a random available port
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 	port := lis.Addr().(*net.TCPAddr).Port
-
-	// Build token (use env if provided, else empty)
-	token := os.Getenv("ONSEI_TOKEN")
 
 	// Register gRPC server
 	grpcServer := grpc.NewServer()
@@ -155,19 +177,38 @@ func main() {
 	}
 	httpPort := httpListener.Addr().(*net.TCPAddr).Port
 
-	// Shared scan/plan usecases power both the gRPC server and the HTTP API.
+	// Shared scan/plan/workset usecases power both the gRPC server and the
+	// HTTP API. The workset service owns the async planning dispatcher.
 	scanSvc := scanusecase.NewService(repo)
 	planSvc := planusecase.NewService(repo, configDir)
+	generationConcurrency := appconfig.DefaultAppConfig().Workset.GenerationConcurrency
+	if cfg, err := os.ReadFile(filepath.Join(configDir, "config.json")); err == nil {
+		var appCfg appconfig.AppConfig
+		if json.Unmarshal(cfg, &appCfg) == nil && appCfg.Workset.GenerationConcurrency > 0 {
+			generationConcurrency = appCfg.Workset.GenerationConcurrency
+		}
+	}
+	worksetSvc := worksetusecase.NewService(repo, configDir, generationConcurrency)
+
+	// Startup recovery: any session left queued/running by a previous process
+	// is marked interrupted (releasing its idempotency key) before the
+	// dispatcher starts from an empty queue.
+	if err := repo.InterruptStaleGenerations(); err != nil {
+		log.Printf("interrupt stale generations failed: %v", err)
+	}
+	worksetSvc.DispatcherHandle().Start()
+	defer worksetSvc.DispatcherHandle().Stop()
 
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
-			Repo:        repo,
-			ConfigDir:   configDir,
-			Token:       token,
-			CORSOrigins: parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
-			Version:     version,
-			ScanService: scanSvc,
-			PlanService: planSvc,
+			Repo:           repo,
+			ConfigDir:      configDir,
+			Token:          token,
+			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
+			Version:        version,
+			ScanService:    scanSvc,
+			PlanService:    planSvc,
+			WorksetService: worksetSvc,
 		}),
 	}
 	go func() {
@@ -203,6 +244,7 @@ func main() {
 	}()
 
 	// Print ready handshake BEFORE blocking — Flutter reads this line
+	//nolint:forbidigo // stdout handshake is a wire protocol for the host
 	fmt.Println(bootstrap.BuildHandshakeLine(port, token, version, httpPort))
 
 	// Block until killed
@@ -210,9 +252,12 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		if runtime.GOOS == "windows" {
 			const wsacancelled = 10004
-			if opErr, ok := err.(*net.OpError); ok {
-				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
-					if errno, ok := sysErr.Err.(syscall.Errno); ok && int(errno) == wsacancelled {
+			opErr := &net.OpError{}
+			if errors.As(err, &opErr) {
+				sysErr := &os.SyscallError{}
+				if errors.As(opErr.Err, &sysErr) {
+					var errno syscall.Errno
+					if errors.As(sysErr.Err, &errno) {
 						return
 					}
 				}
@@ -228,7 +273,13 @@ func main() {
 // drainServers shuts down both servers concurrently so neither consumes the
 // other's graceful window. httpShutdown runs with ctx; at the deadline (ctx
 // done) httpClose and grpcStop force-stop each server so the drain returns.
-func drainServers(ctx context.Context, httpShutdown func(context.Context) error, httpClose func() error, grpcGraceful func(), grpcStop func()) {
+func drainServers(
+	ctx context.Context,
+	httpShutdown func(context.Context) error,
+	httpClose func() error,
+	grpcGraceful func(),
+	grpcStop func(),
+) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
