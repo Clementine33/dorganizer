@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
 
 // ListPlans returns plans for a given root_path, ordered by created_at DESC.

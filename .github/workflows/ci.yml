@@ -19,6 +19,8 @@ jobs:
           cache_key_prefix: mise-go
       - name: Run Go tests
         run: task test:go
+      - name: Run Go linter
+        run: task lint:go
 
   web-quality:
     runs-on: ubuntu-latest

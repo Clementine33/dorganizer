@@ -67,6 +67,8 @@ func (s *ExecuteService) SetEventHandler(h EventHandler) {
 // When a delete is encountered, the current batch of converts is processed first.
 // If converts fail, the delete is NOT executed (preserving order semantics).
 // Task 4: Implements per-folder fail-fast and structured error events.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // precheck + order-sensitive batch execution carry many cooperating branches
 func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 	precheckItemsCount := 0
 	if plan != nil {
@@ -82,7 +84,12 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 	}
 	defer func() {
-		log.Printf("execute.precheck_items_count=%d execute.precheck_stat_ms=%d sqlite.busy_locked_count=%d", precheckItemsCount, precheckStatMs, sqliteBusyLockedCount)
+		log.Printf(
+			"execute.precheck_items_count=%d execute.precheck_stat_ms=%d sqlite.busy_locked_count=%d",
+			precheckItemsCount,
+			precheckStatMs,
+			sqliteBusyLockedCount,
+		)
 	}()
 
 	// Update runner with rootPath for soft delete support
@@ -160,31 +167,10 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		if plan.RootPath != "" {
 			folderFailures := s.precheckPlanByFolderConcurrent(plan)
 			precheckStatMs = time.Since(precheckStart).Milliseconds()
-			for _, ff := range folderFailures {
-				recordSQLiteBusyLocked(ff.err)
-				if ff.index >= 0 && ff.index < len(plan.Items) && s.eventHandler != nil {
-					s.eventHandler.OnPreconditionFailed(ff.index, plan.Items[ff.index], ff.err)
-				}
-				if ff.folderPath != "" {
-					failedFolders[ff.folderPath] = true
-					preconditionFailed = true
-					continue
-				}
-
-				if s.repo != nil {
-					_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", ff.err.Error())
-				}
-				errMsg := ff.err.Error()
-				if ff.index >= 0 {
-					errMsg = fmt.Sprintf("item %d: %v", ff.index, ff.err)
-				}
-				return &ExecuteResult{
-					SessionID: sessionID,
-					PlanID:    plan.PlanID,
-					Status:    "precondition_failed",
-					ErrorCode: "EXEC_PRECONDITION_FAILED",
-					ErrorMsg:  errMsg,
-				}, ff.err
+			if failed, result, err := s.applyFolderPrecheckFailures(
+				sessionID, plan, folderFailures, failedFolders,
+			); failed {
+				return result, err
 			}
 		} else {
 			precheckErr := s.precheckPlan(plan)
@@ -192,10 +178,19 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 			if precheckErr != nil {
 				recordSQLiteBusyLocked(precheckErr.err)
 				if precheckErr.index >= 0 && precheckErr.index < len(plan.Items) && s.eventHandler != nil {
-					s.eventHandler.OnPreconditionFailed(precheckErr.index, plan.Items[precheckErr.index], precheckErr.err)
+					s.eventHandler.OnPreconditionFailed(
+						precheckErr.index,
+						plan.Items[precheckErr.index],
+						precheckErr.err,
+					)
 				}
 				if s.repo != nil {
-					_ = s.repo.UpdateExecuteSessionStatus(sessionID, "failed", "EXEC_PRECONDITION_FAILED", precheckErr.err.Error())
+					_ = s.repo.UpdateExecuteSessionStatus(
+						sessionID,
+						"failed",
+						"EXEC_PRECONDITION_FAILED",
+						precheckErr.err.Error(),
+					)
 				}
 				errMsg := precheckErr.err.Error()
 				if precheckErr.index >= 0 {
@@ -224,7 +219,14 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 		}
 		batchItems := currentBatch
 		batchIndices := currentBatchIndices
-		result, err := s.executeConvertPoolWithTracking(plan, sessionID, currentBatch, currentBatchIndices, failedFolders, make(map[string]bool))
+		result, err := s.executeConvertPoolWithTracking(
+			plan,
+			sessionID,
+			currentBatch,
+			currentBatchIndices,
+			failedFolders,
+			make(map[string]bool),
+		)
 		if plan.RootPath != "" {
 			for i, batchItem := range batchItems {
 				notifyItemCompleted(batchIndices[i], batchItem)
@@ -334,7 +336,7 @@ func (s *ExecuteService) ExecutePlan(plan *Plan) (*ExecuteResult, error) {
 					notifyItemCompleted(i, item)
 				}
 				if firstExecutionErr == nil {
-					firstExecutionErr = fmt.Errorf("delete item failed: %v", delErr)
+					firstExecutionErr = fmt.Errorf("delete item failed: %w", delErr)
 				}
 				if plan.RootPath == "" || folderPath == "" {
 					if s.repo != nil {
@@ -451,5 +453,6 @@ func isSQLiteBusyLockedError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "sqlite_locked")
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "sqlite_locked")
 }

@@ -56,6 +56,16 @@ tasks:
     cmds:
       - '{{.GO}} vet ./...'
 
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  lint:fix:
+    desc: Auto-fix mechanical golangci-lint issues
+    cmds:
+      - golangci-lint run --fix ./...
+
   check:tools:
     desc: Check protoc and Go plugins are available
     cmds:

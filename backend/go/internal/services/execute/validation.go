@@ -61,13 +61,13 @@ func (s *ExecuteService) validateToolsConfig() error {
 	// If paths are provided, verify the tools exist
 	if encoder == "qaac" && s.toolsConfig.QAACPath != "" {
 		if _, err := exec.LookPath(s.toolsConfig.QAACPath); err != nil {
-			return fmt.Errorf("qaac selected but qaac_path is invalid: %v", err)
+			return fmt.Errorf("qaac selected but qaac_path is invalid: %w", err)
 		}
 	}
 
 	if encoder == "lame" && s.toolsConfig.LAMEPath != "" {
 		if _, err := exec.LookPath(s.toolsConfig.LAMEPath); err != nil {
-			return fmt.Errorf("lame selected but lame_path is invalid: %v", err)
+			return fmt.Errorf("lame selected but lame_path is invalid: %w", err)
 		}
 	}
 
@@ -97,7 +97,14 @@ func (s *ExecuteService) validateConvertTargetExtensions(plan *Plan) error {
 			continue
 		}
 		if !strings.EqualFold(filepath.Ext(target), expectedExt) {
-			return fmt.Errorf("convert item %d target extension mismatch: expected %s for encoder %q, got %s (%s)", i, expectedExt, s.toolsConfig.Encoder, filepath.Ext(target), target)
+			return fmt.Errorf(
+				"convert item %d target extension mismatch: expected %s for encoder %q, got %s (%s)",
+				i,
+				expectedExt,
+				s.toolsConfig.Encoder,
+				filepath.Ext(target),
+				target,
+			)
 		}
 	}
 
@@ -141,7 +148,11 @@ func (s *ExecuteService) validatePreconditionPhase1(item PlanItem) (string, erro
 			delta = -delta
 		}
 		if delta > time.Second {
-			return path, fmt.Errorf("mtime mismatch: expected %d, got %d", item.PreconditionMtime, info.ModTime().Unix())
+			return path, fmt.Errorf(
+				"mtime mismatch: expected %d, got %d",
+				item.PreconditionMtime,
+				info.ModTime().Unix(),
+			)
 		}
 	}
 
@@ -168,6 +179,46 @@ func (s *ExecuteService) validatePreconditionPhase2(path string, item PlanItem) 
 	return nil
 }
 
+// applyFolderPrecheckFailures records per-folder fail-fast flags and returns
+// the terminal ExecuteResult for any hard (non-folder-scoped) precondition
+// failure. The caller returns immediately when failed is true.
+func (s *ExecuteService) applyFolderPrecheckFailures(
+	sessionID string,
+	plan *Plan,
+	folderFailures []precheckFolderFailure,
+	failedFolders map[string]bool,
+) (failed bool, result *ExecuteResult, err error) {
+	for _, ff := range folderFailures {
+		if ff.folderPath != "" {
+			failedFolders[ff.folderPath] = true
+			continue
+		}
+		if ff.index >= 0 && ff.index < len(plan.Items) && s.eventHandler != nil {
+			s.eventHandler.OnPreconditionFailed(ff.index, plan.Items[ff.index], ff.err)
+		}
+		if s.repo != nil {
+			_ = s.repo.UpdateExecuteSessionStatus(
+				sessionID,
+				"failed",
+				"EXEC_PRECONDITION_FAILED",
+				ff.err.Error(),
+			)
+		}
+		errMsg := ff.err.Error()
+		if ff.index >= 0 {
+			errMsg = fmt.Sprintf("item %d: %v", ff.index, ff.err)
+		}
+		return true, &ExecuteResult{
+			SessionID: sessionID,
+			PlanID:    plan.PlanID,
+			Status:    "precondition_failed",
+			ErrorCode: "EXEC_PRECONDITION_FAILED",
+			ErrorMsg:  errMsg,
+		}, ff.err
+	}
+	return false, nil, nil
+}
+
 func (s *ExecuteService) precheckPlan(plan *Plan) *precheckFailure {
 	if plan == nil || len(plan.Items) == 0 {
 		return nil
@@ -183,10 +234,7 @@ func (s *ExecuteService) precheckPlan(plan *Plan) *precheckFailure {
 	}
 
 	paths := make([]string, len(plan.Items))
-	maxWorkers := s.maxIOWorkers()
-	if maxWorkers < 1 {
-		maxWorkers = 1
-	}
+	maxWorkers := max(s.maxIOWorkers(), 1)
 
 	g, ctx := errgroup.WithContext(context.Background())
 	sem := semaphore.NewWeighted(int64(maxWorkers))
@@ -203,7 +251,13 @@ func (s *ExecuteService) precheckPlan(plan *Plan) *precheckFailure {
 			first = &precheckFailure{index: index, err: err}
 			return err
 		}
-		log.Printf("execute precheck phase1 additional error ignored: item=%d err=%v (first item=%d err=%v)", index, err, first.index, first.err)
+		log.Printf(
+			"execute precheck phase1 additional error ignored: item=%d err=%v (first item=%d err=%v)",
+			index,
+			err,
+			first.index,
+			first.err,
+		)
 		return nil
 	}
 
@@ -212,7 +266,6 @@ func (s *ExecuteService) precheckPlan(plan *Plan) *precheckFailure {
 			break
 		}
 
-		i, item := i, item
 		g.Go(func() error {
 			defer sem.Release(1)
 
@@ -259,10 +312,7 @@ func (s *ExecuteService) precheckPlanByFolderConcurrent(plan *Plan) []precheckFo
 		byFolder[folder] = append(byFolder[folder], i)
 	}
 
-	maxWorkers := s.maxIOWorkers()
-	if maxWorkers < 1 {
-		maxWorkers = 1
-	}
+	maxWorkers := max(s.maxIOWorkers(), 1)
 
 	sem := semaphore.NewWeighted(int64(maxWorkers))
 	ctx := context.Background()
@@ -277,11 +327,9 @@ func (s *ExecuteService) precheckPlanByFolderConcurrent(plan *Plan) []precheckFo
 		if err := sem.Acquire(ctx, 1); err != nil {
 			break
 		}
-		folder := folder
+
 		indices := append([]int(nil), byFolder[folder]...)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer sem.Release(1)
 
 			for _, idx := range indices {
@@ -292,7 +340,7 @@ func (s *ExecuteService) precheckPlanByFolderConcurrent(plan *Plan) []precheckFo
 					return // folder-level fail-fast
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

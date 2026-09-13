@@ -6,9 +6,9 @@ import (
 
 // ==================== Scan Session Methods ====================
 
-// CreateScanSession creates a new scan session
+// CreateScanSession creates a new scan session.
 func (r *Repository) CreateScanSession(s *ScanSession) error {
-	var scopePath interface{}
+	var scopePath any
 	if s.ScopePath != nil {
 		scopePath = *s.ScopePath
 	}
@@ -19,7 +19,7 @@ func (r *Repository) CreateScanSession(s *ScanSession) error {
 	return err
 }
 
-// GetScanSession retrieves a scan session by ID
+// GetScanSession retrieves a scan session by ID.
 func (r *Repository) GetScanSession(sessionID string) (*ScanSession, error) {
 	var s ScanSession
 	var startedAtStr string
@@ -43,7 +43,7 @@ func (r *Repository) GetScanSession(sessionID string) (*ScanSession, error) {
 	return &s, nil
 }
 
-// UpdateScanSessionStatus updates scan session status
+// UpdateScanSessionStatus updates scan session status.
 func (r *Repository) UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage string) error {
 	finishedAt := "NULL"
 	if status == "completed" || status == "failed" || status == "canceled" {
@@ -61,7 +61,7 @@ func (r *Repository) UpdateScanSessionStatus(sessionID, status, errorCode, error
 	return err
 }
 
-// ListScanSessionsByRoot returns scan sessions for a root
+// ListScanSessionsByRoot returns scan sessions for a root.
 func (r *Repository) ListScanSessionsByRoot(rootPath string) ([]*ScanSession, error) {
 	rows, err := r.db.Query(`
 		SELECT session_id, root_path, scope_path, kind, status, started_at, finished_at
@@ -77,7 +77,15 @@ func (r *Repository) ListScanSessionsByRoot(rootPath string) ([]*ScanSession, er
 		var s ScanSession
 		var startedAtStr string
 		var finishedAtStr, scopePath sql.NullString
-		if err := rows.Scan(&s.SessionID, &s.RootPath, &scopePath, &s.Kind, &s.Status, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(
+			&s.SessionID,
+			&s.RootPath,
+			&scopePath,
+			&s.Kind,
+			&s.Status,
+			&startedAtStr,
+			&finishedAtStr,
+		); err != nil {
 			return nil, err
 		}
 		if scopePath.Valid {

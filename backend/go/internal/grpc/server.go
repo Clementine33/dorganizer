@@ -35,7 +35,13 @@ func NewOnseiServer(repo *sqlite.Repository, configDir string, ffmpegPath string
 
 // NewOnseiServerWithServices creates a new OnseiServer with injected services.
 // This enables clean dependency injection for testing and future wiring.
-func NewOnseiServerWithServices(planService planusecase.Service, executeService executeusecase.Service, repo *sqlite.Repository, configDir string, ffmpegPath string) *OnseiServer {
+func NewOnseiServerWithServices(
+	planService planusecase.Service,
+	executeService executeusecase.Service,
+	repo *sqlite.Repository,
+	configDir string,
+	ffmpegPath string,
+) *OnseiServer {
 	return &OnseiServer{
 		repo:           repo,
 		configDir:      configDir,

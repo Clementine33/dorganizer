@@ -39,11 +39,26 @@ func (s *serviceImpl) Scan(ctx context.Context, req Request, emit func(Event)) (
 	var validationErr *Error
 	switch {
 	case statErr != nil && os.IsNotExist(statErr):
-		validationErr = NewError(ErrKindInvalidArgument, "ROOT_PATH_NOT_FOUND", fmt.Sprintf("root_path not found: %s", req.RootPath), statErr)
+		validationErr = NewError(
+			ErrKindInvalidArgument,
+			"ROOT_PATH_NOT_FOUND",
+			fmt.Sprintf("root_path not found: %s", req.RootPath),
+			statErr,
+		)
 	case statErr != nil:
-		validationErr = NewError(ErrKindInternal, "ROOT_PATH_STAT_FAILED", fmt.Sprintf("failed to access root_path: %s", req.RootPath), statErr)
+		validationErr = NewError(
+			ErrKindInternal,
+			"ROOT_PATH_STAT_FAILED",
+			fmt.Sprintf("failed to access root_path: %s", req.RootPath),
+			statErr,
+		)
 	case !fi.IsDir():
-		validationErr = NewError(ErrKindInvalidArgument, "ROOT_PATH_NOT_DIRECTORY", fmt.Sprintf("root_path is not a directory: %s", req.RootPath), nil)
+		validationErr = NewError(
+			ErrKindInvalidArgument,
+			"ROOT_PATH_NOT_DIRECTORY",
+			fmt.Sprintf("root_path is not a directory: %s", req.RootPath),
+			nil,
+		)
 	}
 	if validationErr != nil {
 		emit(Event{Type: "error", Stage: "scan", Message: validationErr.Message})

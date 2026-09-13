@@ -1,0 +1,183 @@
+# Based on https://github.com/maratori/golangci-lint-config
+# (golden config for golangci-lint v2, MIT, adapted to this repo)
+version: "2"
+
+issues:
+  max-same-issues: 50
+
+formatters:
+  enable:
+    - goimports
+    - golines
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/onsei/organizer/backend
+    golines:
+      max-len: 120
+
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - copyloopvar
+    - cyclop
+    - depguard
+    - dupl
+    - durationcheck
+    - embeddedstructfieldcheck
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - fatcontext
+    - forbidigo
+    - funcorder
+    - funlen
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    - gocritic
+    - gocyclo
+    - godot
+    - gomoddirectives
+    - goprintffuncname
+    - gosec
+    - govet
+    - iface
+    - ineffassign
+    - intrange
+    - iotamixing
+    - makezero
+    - mirror
+    - modernize
+    - nakedret
+    - nilnesserr
+    - nolintlint
+    - nosprintfhostport
+    - paralleltest
+    - perfsprint
+    - predeclared
+    - protogetter
+    - reassign
+    - recvcheck
+    - staticcheck
+    - testableexamples
+    - tparallel
+    - unconvert
+    - testpackage
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+
+  settings:
+    cyclop:
+      max-complexity: 35
+      package-average: 25.0
+
+    depguard:
+      rules:
+        "deprecated":
+          files: [ "$all" ]
+          deny:
+            - pkg: github.com/golang/protobuf
+              desc: Use google.golang.org/protobuf instead
+
+    embeddedstructfieldcheck:
+      forbid-mutex: true
+
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (*database/sql.Tx).Rollback
+        - (*github.com/onsei/organizer/backend/internal/repo/sqlite.Repository).UpdateScanSessionStatus
+
+    exhaustive:
+      check: [ switch, map ]
+
+    funcorder:
+      struct-method: false
+
+    funlen:
+      lines: 100
+      statements: 60
+
+    gocognit:
+      min-complexity: 40
+
+    gocyclo:
+      min-complexity: 30
+
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+      settings:
+        shadow:
+          strict: false
+
+    gosec:
+      excludes:
+        - G104
+        - G301
+        - G306
+        - G404
+        - G202
+        - G108 # pprof intentionally exposed on dev entry
+        - G703 # path traversal in desktop local tool
+        - G706 # log taint
+
+    nakedret:
+      max-func-lines: 0
+
+    nolintlint:
+      allow-no-explanation: [ funlen, gocognit, golines ]
+      require-explanation: true
+      require-specific: true
+
+    perfsprint:
+      strconcat: false
+      error-format: false
+
+    reassign:
+      patterns: [ ".*" ]
+
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1022
+        - -QF1008
+
+  exclusions:
+    warn-unused: true
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - source: 'TODO'
+        linters: [ godot ]
+      # cmd/ keeps a few point exclusions: G112 (slowloris) is acceptable on a
+      # loopback-only dev server; exitAfterDefer is intentional (process exit);
+      # errcheck/unused cover the Windows-conditional wsacancelled const.
+      - path: 'cmd/onsei-organizer-backend/.*'
+        linters: [ gosec, gocritic, errcheck, unused ]
+      # Tests share SQLite databases, temp filesystems and in-process HTTP
+      # servers; parallelizing them would produce intermittent failures.
+      # Individual tests opt out via //nolint:paralleltest when they are safe.
+      - path: '_test\.go'
+        linters: [ paralleltest ]
+      

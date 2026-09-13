@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
 )
 
 // GetConfig returns the current configuration as JSON.
@@ -26,7 +27,7 @@ func (s *OnseiServer) GetConfig(_ context.Context, _ *pb.GetConfigRequest) (*pb.
 // UpdateConfig writes configuration JSON to disk.
 func (s *OnseiServer) UpdateConfig(_ context.Context, req *pb.UpdateConfigRequest) (*pb.UpdateConfigResponse, error) {
 	cfgPath := filepath.Join(s.configDir, "config.json")
-	if err := os.WriteFile(cfgPath, []byte(req.ConfigJson), 0644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(req.GetConfigJson()), 0644); err != nil {
 		return nil, status.Errorf(codes.Internal, "write config: %v", err)
 	}
 	return &pb.UpdateConfigResponse{}, nil

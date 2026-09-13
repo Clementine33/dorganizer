@@ -8,9 +8,9 @@ import (
 
 // Prototype pipeline parameters (fixed for minimal implementation).
 const (
-	// Stage1Workers = 1 (copy to scratch)
+	// Stage1Workers = 1 (copy to scratch).
 	Stage1Workers = 1
-	// Stage3Workers = 1 (commit from scratch to final destination)
+	// Stage3Workers = 1 (commit from scratch to final destination).
 	Stage3Workers = 1
 )
 

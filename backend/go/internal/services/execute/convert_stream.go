@@ -12,7 +12,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func (s *ExecuteService) processConvertJob(plan *Plan, sessionID string, item PlanItem, itemIndex int, runtime poolRuntime) error {
+func (s *ExecuteService) processConvertJob(
+	plan *Plan,
+	sessionID string,
+	item PlanItem,
+	itemIndex int,
+	runtime poolRuntime,
+) error {
 	src := item.SourcePath
 	if src == "" {
 		src = item.Src
@@ -24,7 +30,11 @@ func (s *ExecuteService) processConvertJob(plan *Plan, sessionID string, item Pl
 
 	tmpOut := filepath.Join(s.scratchRoot, "out", sessionID, filepath.Base(dst)+".pool."+uuid.NewString()[:8])
 	if err := os.MkdirAll(filepath.Dir(tmpOut), 0755); err != nil {
-		return &stageFailureError{stage: "stage3", itemIndex: itemIndex, err: fmt.Errorf("failed to create tmp directory: %w", err)}
+		return &stageFailureError{
+			stage:     "stage3",
+			itemIndex: itemIndex,
+			err:       fmt.Errorf("failed to create tmp directory: %w", err),
+		}
 	}
 	defer func() {
 		_ = os.Remove(tmpOut)
@@ -54,7 +64,11 @@ func (s *ExecuteService) processConvertJob(plan *Plan, sessionID string, item Pl
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return &stageFailureError{stage: "stage3", itemIndex: itemIndex, err: fmt.Errorf("failed to create dst directory: %w", err)}
+		return &stageFailureError{
+			stage:     "stage3",
+			itemIndex: itemIndex,
+			err:       fmt.Errorf("failed to create dst directory: %w", err),
+		}
 	}
 
 	runtime.ioSem.Acquire()
@@ -127,7 +141,16 @@ func (s *ExecuteService) encoderCommandArgs(src, tmpOut string) (string, []strin
 		if s.toolsConfig.QAACPath == "" {
 			return "", nil, fmt.Errorf("qaac selected but qaac_path is not configured")
 		}
-		return s.toolsConfig.QAACPath, []string{"--ignorelength", "--no-optimize", "-s", "-v", "256", "-o", tmpOut, src}, nil
+		return s.toolsConfig.QAACPath, []string{
+			"--ignorelength",
+			"--no-optimize",
+			"-s",
+			"-v",
+			"256",
+			"-o",
+			tmpOut,
+			src,
+		}, nil
 	case "lame":
 		if s.toolsConfig.LAMEPath == "" {
 			return "", nil, fmt.Errorf("lame selected but lame_path is not configured")

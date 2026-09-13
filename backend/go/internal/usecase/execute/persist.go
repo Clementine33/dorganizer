@@ -4,30 +4,10 @@ import (
 	"database/sql"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
-
-// persistExecuteError persists an execute error event into the error_events table.
-func (s *serviceImpl) persistExecuteError(code, message, folderPath, rootPath string) {
-	if s.repo == nil {
-		return
-	}
-	var pathPtr *string
-	if folderPath != "" {
-		pathPtr = &folderPath
-	}
-	if err := s.repo.CreateErrorEvent(&sqlite.ErrorEvent{
-		Scope:     "execute",
-		RootPath:  rootPath,
-		Path:      pathPtr,
-		Code:      code,
-		Message:   message,
-		Retryable: false,
-	}); err != nil {
-		log.Printf("warning: failed to persist execute error event: %v", err)
-	}
-}
 
 // persistExecuteErrorGlobal persists an execute-level error with no folder attribution.
 func (s *serviceImpl) persistExecuteErrorGlobal(code, message string) {
@@ -71,7 +51,9 @@ func (a *executeRepoAdapter) UpdateExecuteSessionStatus(sessionID, status, error
 // Returns 0 if the entry is not found.
 func (a *executeRepoAdapter) GetEntryContentRev(path string) (int, error) {
 	var contentRev int
-	err := a.repo.DB().QueryRow("SELECT COALESCE(content_rev, 0) FROM entries WHERE path = ?", filepath.ToSlash(path)).Scan(&contentRev)
+	err := a.repo.DB().
+		QueryRow("SELECT COALESCE(content_rev, 0) FROM entries WHERE path = ?", filepath.ToSlash(path)).
+		Scan(&contentRev)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -87,12 +69,14 @@ func toSlash(p string) string {
 		p = p[:len(p)-1]
 	}
 	s := ""
+	var sSb90 strings.Builder
 	for _, r := range p {
 		if r == '\\' {
-			s += "/"
+			sSb90.WriteRune('/')
 		} else {
-			s += string(r)
+			sSb90.WriteRune(r)
 		}
 	}
+	s += sSb90.String()
 	return s
 }

@@ -12,26 +12,26 @@ import (
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
-// renameFunc is a package-level variable for os.Rename to enable testing of retry logic
+// renameFunc is a package-level variable for os.Rename to enable testing of retry logic.
 var renameFunc = os.Rename
 
-// ToolRunner runs external tools like qaac, lame
+// ToolRunner runs external tools like qaac, lame.
 type ToolRunner struct {
 	toolsConfig ToolsConfig
 	rootPath    string
 }
 
-// NewToolRunner creates a new tool runner
+// NewToolRunner creates a new tool runner.
 func NewToolRunner(toolsConfig ToolsConfig) *ToolRunner {
 	return &ToolRunner{toolsConfig: toolsConfig}
 }
 
-// NewToolRunnerWithRoot creates a new tool runner with root path for soft delete
+// NewToolRunnerWithRoot creates a new tool runner with root path for soft delete.
 func NewToolRunnerWithRoot(toolsConfig ToolsConfig, rootPath string) *ToolRunner {
 	return &ToolRunner{toolsConfig: toolsConfig, rootPath: rootPath}
 }
 
-// ToolError represents a tool execution error
+// ToolError represents a tool execution error.
 type ToolError struct {
 	Code    errdomain.DomainErrorCode
 	Message string
@@ -42,12 +42,12 @@ func (e *ToolError) Error() string {
 	return e.Message
 }
 
-// Unwrap returns the underlying error
+// Unwrap returns the underlying error.
 func (e *ToolError) Unwrap() error {
 	return e.Err
 }
 
-// Convert converts a file using qaac or lame
+// Convert converts a file using qaac or lame.
 func (r *ToolRunner) Convert(src, dst string) error {
 	absSrc, err := validateAbsolutePath(src)
 	if err != nil {
@@ -83,7 +83,7 @@ func (r *ToolRunner) Convert(src, dst string) error {
 	}
 }
 
-// convertWithQAAC runs qaac to convert a file
+// convertWithQAAC runs qaac to convert a file.
 func (r *ToolRunner) convertWithQAAC(src, dst string) error {
 	qaacPath := r.toolsConfig.QAACPath
 	if qaacPath == "" {
@@ -138,7 +138,7 @@ func (r *ToolRunner) convertWithQAAC(src, dst string) error {
 	return nil
 }
 
-// convertWithLAME runs lame to convert a file
+// convertWithLAME runs lame to convert a file.
 func (r *ToolRunner) convertWithLAME(src, dst string) error {
 	lamePath := r.toolsConfig.LAMEPath
 	if lamePath == "" {
@@ -192,7 +192,7 @@ func (r *ToolRunner) convertWithLAME(src, dst string) error {
 
 // Delete removes a file (with optional soft delete)
 // soft=true: move to Delete/<relative_path> relative to rootPath
-// soft=false: hard delete
+// soft=false: hard delete.
 func (r *ToolRunner) Delete(path string, soft bool) error {
 	absPath, err := validateAbsolutePath(path)
 	if err != nil {
@@ -287,7 +287,7 @@ func (r *ToolRunner) softDelete(path string) error {
 	}
 }
 
-// isPermissionDenied checks if the error is a permission denied error
+// isPermissionDenied checks if the error is a permission denied error.
 func isPermissionDenied(err error) bool {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
@@ -296,7 +296,7 @@ func isPermissionDenied(err error) bool {
 	return false
 }
 
-// isLockedOrBusy checks if the error indicates a locked or busy file
+// isLockedOrBusy checks if the error indicates a locked or busy file.
 func isLockedOrBusy(err error) bool {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {

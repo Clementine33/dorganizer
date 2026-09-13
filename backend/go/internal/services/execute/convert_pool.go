@@ -35,11 +35,6 @@ type poolRuntime struct {
 	commitReplaceFn   func(tmpOut, dst string) error
 }
 
-type noopSem struct{}
-
-func (noopSem) Acquire() {}
-func (noopSem) Release() {}
-
 type boundedSem struct {
 	tokens chan struct{}
 }
@@ -88,7 +83,14 @@ func defaultPoolRuntime(s *ExecuteService) poolRuntime {
 	}
 }
 
-func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID string, convertItems []PlanItem, convertItemIndices []int, failedFolders, successfulFolders map[string]bool) (*ExecuteResult, error) {
+//nolint:gocognit,gocyclo,cyclop,funlen // pool lifecycle state machine (worker/batch/retry/commit); extracted lanes would obscure the state
+func (s *ExecuteService) executeConvertPoolWithTracking(
+	plan *Plan,
+	sessionID string,
+	convertItems []PlanItem,
+	convertItemIndices []int,
+	failedFolders, successfulFolders map[string]bool,
+) (*ExecuteResult, error) {
 	itemFolders := make([]string, len(convertItems))
 	for i, item := range convertItems {
 		itemFolders[i] = getFolderForItem(plan.RootPath, item)
@@ -118,7 +120,15 @@ func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID st
 	}()
 	runtime := defaultPoolRuntime(s)
 	globalFailFast := plan.RootPath == ""
-	outcome := s.executeConvertBatchWithPool(plan, batchSessionID, filteredItems, filteredIndices, filteredFolders, globalFailFast, runtime)
+	outcome := s.executeConvertBatchWithPool(
+		plan,
+		batchSessionID,
+		filteredItems,
+		filteredIndices,
+		filteredFolders,
+		globalFailFast,
+		runtime,
+	)
 
 	indexToPos := make(map[int]int, len(filteredIndices))
 	for pos, idx := range filteredIndices {
@@ -173,7 +183,12 @@ func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID st
 	var firstDeleteErr error
 	if plan.RootPath == "" {
 		if firstConvertErr != nil {
-			return s.makeFailedResult(sessionID, plan.PlanID, "EXECUTION_FAILED", firstConvertErr.Error()), firstConvertErr
+			return s.makeFailedResult(
+				sessionID,
+				plan.PlanID,
+				"EXECUTION_FAILED",
+				firstConvertErr.Error(),
+			), firstConvertErr
 		}
 		if len(successItems) > 0 {
 			deleteOutcome := s.runBatchDeletes(plan, successItems, successIndices)
@@ -181,10 +196,19 @@ func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID st
 				firstDeleteErr = deleteOutcome.firstFailure.err
 				if pos, ok := indexToPos[deleteOutcome.firstFailure.itemIndex]; ok {
 					if s.eventHandler != nil {
-						s.eventHandler.OnDeleteFailed(deleteOutcome.firstFailure.itemIndex, filteredItems[pos], deleteOutcome.firstFailure.err)
+						s.eventHandler.OnDeleteFailed(
+							deleteOutcome.firstFailure.itemIndex,
+							filteredItems[pos],
+							deleteOutcome.firstFailure.err,
+						)
 					}
 				}
-				return s.makeFailedResult(sessionID, plan.PlanID, "EXEC_DELETE_FAILED", firstDeleteErr.Error()), firstDeleteErr
+				return s.makeFailedResult(
+					sessionID,
+					plan.PlanID,
+					"EXEC_DELETE_FAILED",
+					firstDeleteErr.Error(),
+				), firstDeleteErr
 			}
 		}
 	} else {
@@ -215,7 +239,11 @@ func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID st
 				}
 				if pos, ok := indexToPos[deleteOutcome.firstFailure.itemIndex]; ok {
 					if s.eventHandler != nil {
-						s.eventHandler.OnDeleteFailed(deleteOutcome.firstFailure.itemIndex, filteredItems[pos], deleteOutcome.firstFailure.err)
+						s.eventHandler.OnDeleteFailed(
+							deleteOutcome.firstFailure.itemIndex,
+							filteredItems[pos],
+							deleteOutcome.firstFailure.err,
+						)
 					}
 				}
 				continue
@@ -242,19 +270,22 @@ func (s *ExecuteService) executeConvertPoolWithTracking(plan *Plan, sessionID st
 	return nil, nil
 }
 
-func (s *ExecuteService) executeConvertBatchWithPool(plan *Plan, batchSessionID string, items []PlanItem, itemIndices []int, failureDomains []string, globalFailFast bool, runtime poolRuntime) *batchOutcome {
+//nolint:gocognit // batch scheduling + retry/commit bookkeeping is intrinsically branched
+func (s *ExecuteService) executeConvertBatchWithPool(
+	plan *Plan,
+	batchSessionID string,
+	items []PlanItem,
+	itemIndices []int,
+	failureDomains []string,
+	globalFailFast bool,
+	runtime poolRuntime,
+) *batchOutcome {
 	outcome := &batchOutcome{}
 	if len(items) == 0 {
 		return outcome
 	}
 
-	workerCount := maxCPUWorkers()
-	if workerCount > len(items) {
-		workerCount = len(items)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
+	workerCount := max(1, min(maxCPUWorkers(), len(items)))
 
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -281,7 +312,7 @@ func (s *ExecuteService) executeConvertBatchWithPool(plan *Plan, batchSessionID 
 		outcome.failures = append(outcome.failures, failure)
 	}
 
-	for w := 0; w < workerCount; w++ {
+	for range workerCount {
 		g.Go(func() error {
 			for {
 				// Atomically claim next index; if stopped, no new claims allowed

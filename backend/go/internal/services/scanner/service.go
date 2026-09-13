@@ -47,14 +47,14 @@ func WithProgress(cb func(Progress)) ScanOption {
 //     primary and reported as SCAN_WALK_FAILED, even if staging also failed;
 //   - otherwise a staging-write failure beats the walker's context.Canceled,
 //     which is the symptom of the consumer cancelling the walk, not a cause.
-func resolvePipelineError(producerErr, consumerErr error) (primary error, code string) {
+func resolvePipelineError(producerErr, consumerErr error) (code string, primary error) {
 	if producerErr != nil && !errors.Is(producerErr, context.Canceled) {
-		return producerErr, "SCAN_WALK_FAILED"
+		return "SCAN_WALK_FAILED", producerErr
 	}
 	if consumerErr != nil {
-		return consumerErr, "STAGING_WRITE_FAILED"
+		return "STAGING_WRITE_FAILED", consumerErr
 	}
-	return producerErr, "SCAN_WALK_FAILED"
+	return "SCAN_WALK_FAILED", producerErr
 }
 
 // progressTracker counts scanned entries and emits throttled progress.
@@ -102,7 +102,7 @@ func (t *progressTracker) emit() {
 	t.cb(t.last)
 }
 
-// Repository interface for scanner
+// Repository interface for scanner.
 type Repository interface {
 	WriteStagingEntries(sessionID string, entries []StagingEntry) error
 	MergeStaging(sessionID, rootPath string, stalePaths []string) (int, error)
@@ -110,7 +110,7 @@ type Repository interface {
 	UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage string) error
 }
 
-// ScanSession represents a scan session
+// ScanSession represents a scan session.
 type ScanSession struct {
 	SessionID    string
 	RootPath     string
@@ -123,7 +123,7 @@ type ScanSession struct {
 	FinishedAt   time.Time
 }
 
-// StagingEntry represents an entry to be written to staging
+// StagingEntry represents an entry to be written to staging.
 type StagingEntry struct {
 	SessionID  string
 	Path       string
@@ -145,8 +145,8 @@ func detectFormatFromPath(path string, isDir bool) string {
 		return ""
 	}
 	if mt := mime.TypeByExtension(ext); mt != "" {
-		if i := strings.IndexByte(mt, ';'); i >= 0 {
-			return strings.TrimSpace(mt[:i])
+		if before, _, ok := strings.Cut(mt, ";"); ok {
+			return strings.TrimSpace(before)
 		}
 		return mt
 	}
@@ -169,13 +169,13 @@ func detectFormatFromPath(path string, isDir bool) string {
 	}
 }
 
-// ScannerService handles filesystem scanning
+// ScannerService handles filesystem scanning.
 type ScannerService struct {
 	repo            Repository
 	rootConcurrency int
 }
 
-// NewScannerService creates a new scanner service
+// NewScannerService creates a new scanner service.
 func NewScannerService(repo Repository) *ScannerService {
 	return &ScannerService{
 		repo:            repo,
@@ -186,7 +186,7 @@ func NewScannerService(repo Repository) *ScannerService {
 // ScanRoot performs a full scan of the given root path using
 // parallel directory descent + inline metadata + staging pipeline.
 //
-// Invariant: Root = parallel directory descent + inline metadata + pipeline
+// Invariant: Root = parallel directory descent + inline metadata + pipeline.
 func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 	return s.ScanRootCtx(context.Background(), rootPath)
 }
@@ -197,7 +197,9 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 // session is marked canceled (error_code SCAN_CANCELLED), and staging rows
 // are cleaned up best-effort.
 //
-// Invariant: Root = parallel directory descent + inline metadata + pipeline
+// Invariant: Root = parallel directory descent + inline metadata + pipeline.
+//
+//nolint:gocognit,funlen // producer/consumer pipeline with cancellation has many coordinated branches
 func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts ...ScanOption) (string, error) {
 	var o scanOptions
 	for _, opt := range opts {
@@ -243,9 +245,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 	var wg sync.WaitGroup
 
 	// Producer: walk and emit to channel
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer close(entryCh) // Only close when producer exits
 
 		emitFn := func(entry DirEntry) error {
@@ -261,7 +261,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 			producerErr = err
 			cancel()
 		}
-	}()
+	})
 
 	// Consumer: batch writes from channel
 	var cleanupFn func(string) error
@@ -269,10 +269,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		cleanupFn = pipeline.CleanupStagingSession
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		batch := make([]StagingEntry, 0, pipelineBatchSize)
 		progress := newProgressTracker(o.progress)
 
@@ -311,7 +308,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 
 		// Final progress report with complete counts
 		progress.finish()
-	}()
+	})
 
 	// Wait for both producer and consumer to finish
 	wg.Wait()
@@ -319,7 +316,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
 	if err := baseCtx.Err(); err != nil {
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
 		}
 		if cleanupFn != nil {
 			_ = cleanupFn(sessionID) // Best-effort cleanup
@@ -337,9 +334,9 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		}
 
 		// Update session status to failed
-		primaryErr, code := resolvePipelineError(producerErr, consumerErr)
+		code, primaryErr := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		// Return primary error (not cleanup failure). A staging-write failure
@@ -349,7 +346,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		// An independent walk error (not caused by our cancellation) stays
 		// primary even when staging also failed.
 		_ = cleanupFailure // We could log this, but primary error is what's expected
-		if primaryErr == consumerErr {
+		if errors.Is(primaryErr, consumerErr) {
 			return "", fmt.Errorf("write staging: %w", consumerErr)
 		}
 		return "", fmt.Errorf("walk directory: %w", producerErr)
@@ -365,7 +362,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 		// Merge into main catalog
 		_, err := s.repo.MergeStaging(sessionID, normalizedRootPath, nil)
 		if err != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
 			return "", fmt.Errorf("merge staging: %w", err)
 		}
 
@@ -380,7 +377,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 // ScanFolder performs a scoped scan of a single folder using
 // single-enumerator directory discovery + inline metadata + staging pipeline.
 //
-// Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline
+// Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline.
 func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error) {
 	return s.ScanFolderCtx(context.Background(), folderPath, rootPath)
 }
@@ -391,8 +388,14 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 // session is marked canceled (error_code SCAN_CANCELLED), and staging rows
 // are cleaned up best-effort.
 //
-// Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline
-func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath string, opts ...ScanOption) (string, error) {
+// Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline.
+//
+//nolint:gocognit,funlen // mirrors the root-scan pipeline branches (folder-scoped)
+func (s *ScannerService) ScanFolderCtx(
+	ctx context.Context,
+	folderPath, rootPath string,
+	opts ...ScanOption,
+) (string, error) {
 	var o scanOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -436,9 +439,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 	var wg sync.WaitGroup
 
 	// Producer: walk and emit to channel (STREAMING, NO PRE-AGGREGATION)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer close(entryCh) // Producer owns close
 
 		emitFn := func(entry DirEntry) error {
@@ -454,7 +455,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 			producerErr = err
 			cancel()
 		}
-	}()
+	})
 
 	// Consumer: batch writes from channel
 	var cleanupFn func(string) error
@@ -462,10 +463,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 		cleanupFn = pipeline.CleanupStagingSession
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		batch := make([]StagingEntry, 0, pipelineBatchSize)
 		progress := newProgressTracker(o.progress)
 
@@ -503,7 +501,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 
 		// Final progress report with complete counts
 		progress.finish()
-	}()
+	})
 
 	// Wait for both producer and consumer
 	wg.Wait()
@@ -511,7 +509,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 	// Cancellation (caller context): skip merge, mark canceled, cleanup staging.
 	if err := baseCtx.Err(); err != nil {
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "canceled", "SCAN_CANCELLED", err.Error())
 		}
 		if cleanupFn != nil {
 			_ = cleanupFn(sessionID) // Best-effort cleanup
@@ -528,13 +526,13 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 		}
 
 		// Update session status
-		primaryErr, code := resolvePipelineError(producerErr, consumerErr)
+		code, primaryErr := resolvePipelineError(producerErr, consumerErr)
 		if s.repo != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", code, primaryErr.Error())
 		}
 
 		_ = cleanupFailure // Best effort cleanup
-		if primaryErr == consumerErr {
+		if errors.Is(primaryErr, consumerErr) {
 			return "", consumerErr
 		}
 		return "", producerErr
@@ -548,7 +546,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 
 		_, err := s.repo.MergeStaging(sessionID, normalizedRootPath, nil)
 		if err != nil {
-			s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
+			_ = s.repo.UpdateScanSessionStatus(sessionID, "failed", "MERGE_FAILED", err.Error())
 			return "", err
 		}
 
@@ -560,7 +558,7 @@ func (s *ScannerService) ScanFolderCtx(ctx context.Context, folderPath, rootPath
 	return sessionID, nil
 }
 
-// DirEntryToStagingEntry converts a DirEntry to StagingEntry with format detection
+// DirEntryToStagingEntry converts a DirEntry to StagingEntry with format detection.
 func DirEntryToStagingEntry(entry DirEntry, sessionID, rootPath string) StagingEntry {
 	return StagingEntry{
 		SessionID:  sessionID,
