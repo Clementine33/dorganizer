@@ -2,9 +2,9 @@ package execute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -20,6 +20,8 @@ type serviceImpl struct {
 // Execute orchestrates the full execution of a persisted plan, streaming events
 // through the provided EventSink. It owns plan loading, config interpretation,
 // tool execution, folder failure/completion semantics, and error-event persistence.
+//
+//nolint:funlen // flat linear orchestration; splitting would add indirection without reducing state
 func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (Result, error) {
 	// 1. Validate PlanID
 	if req.PlanID == "" {
@@ -28,7 +30,32 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 		return Result{}, NewError(ErrKindInvalidArgument, "INVALID_PLAN_ID", "plan_id is required", nil)
 	}
 
-	// 2. Load persisted plan
+	// 2. Defensive isolation: workflow plans must never be consumed by the
+	// legacy item loader (whose op_type mapping would mis-execute new plan
+	// shapes). This is not the new Execute engine — it is the boundary guard.
+	planKind, schemaVersion, kindErr := s.repo.GetPlanWorkflowSchema(req.PlanID)
+	if kindErr != nil && !errors.Is(kindErr, sqlite.ErrPlanNotFound) {
+		useCaseErr := s.mapLoadError(req.PlanID, kindErr, sink)
+		return Result{}, useCaseErr
+	}
+	if planKind == "workflow" || schemaVersion > 0 {
+		_ = sink.Emit(newEvent("error", "execute", "EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID)))
+		s.persistExecuteErrorGlobal(
+			"EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan execution is not implemented: %s", req.PlanID),
+		)
+		return Result{}, NewError(ErrKindFailedPrecondition, "EXECUTE_NOT_SUPPORTED",
+			fmt.Sprintf("workflow plan %s execution is not implemented", req.PlanID), nil)
+	}
+
+	// 3. Load persisted plan. A missing plan (ErrPlanNotFound from the guard)
+	// falls through to loadPlan so the existing PLAN_NOT_FOUND mapping stays
+	// the single source of truth; other guard errors were already returned.
+	if kindErr != nil {
+		useCaseErr := s.mapLoadError(req.PlanID, kindErr, sink)
+		return Result{}, useCaseErr
+	}
 	execPlan, rootPath, err := loadPlan(s.repo, req.PlanID, req.SoftDelete)
 	if err != nil {
 		useCaseErr := s.mapLoadError(req.PlanID, err, sink)
@@ -38,19 +65,19 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 	planID := req.PlanID
 	slashRootPath := filepath.ToSlash(rootPath)
 
-	// 3. Emit started event
-	if err := sink.Emit(Event{
+	// 4. Emit started event
+	if emitErr := sink.Emit(Event{
 		Type:      "started",
 		Message:   fmt.Sprintf("Executing plan %s", planID),
 		PlanID:    planID,
 		RootPath:  slashRootPath,
 		EventID:   generateEventID(),
 		Timestamp: time.Now(),
-	}); err != nil {
-		return Result{}, err
+	}); emitErr != nil {
+		return Result{}, emitErr
 	}
 
-	// 4. Load config
+	// 5. Load config
 	hasConvertOp := hasConvertOp(execPlan)
 	var toolsConfig exesvc.ToolsConfig
 	if hasConvertOp {
@@ -72,29 +99,32 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			fmt.Sprintf("Execute config parse error (using defaults): %v", cfgErr)))
 	}
 
-	// 5. Create internal event handler wrapper
+	// 6. Create internal event handler wrapper
 	handler := newExecuteEventHandler(sink, s.repo, slashRootPath, planID)
 
 	// Pre-compute folder membership so the handler can determine folder lifecycle boundaries.
 	// The lower-level service reports only item-level facts; the usecase owns folder outcome.
 	if execPlan.RootPath != "" {
 		for i, item := range execPlan.Items {
-			folder := attributeFolderPath(slashRootPath, firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath))
+			folder := attributeFolderPath(
+				slashRootPath,
+				firstNonEmpty(item.SourcePath, item.PreconditionPath, item.TargetPath),
+			)
 			if folder != "" {
 				handler.lastItemIndexByFolder[folder] = i
 			}
 		}
 	}
 
-	// 6. Create and configure lower-level execute service
+	// 7. Create and configure lower-level execute service
 	svc := exesvc.NewExecuteService(newExecuteRepoAdapter(s.repo), toolsConfig)
 	svc.SetExecuteConfig(execCfg)
 	svc.SetEventHandler(handler)
 
-	// 7. Execute the plan
+	// 8. Execute the plan
 	result, execErr := svc.ExecutePlan(execPlan)
 
-	// 8. Handle execution errors from lower-level service
+	// 9. Handle execution errors from lower-level service
 	if execErr != nil {
 		if result != nil && result.ErrorCode == "CONFIG_INVALID" {
 			msg := firstNonEmpty(result.ErrorMsg, execErr.Error())
@@ -102,14 +132,14 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			s.persistExecuteErrorGlobal("CONFIG_INVALID", msg)
 		}
 		return Result{
-				PlanID:       planID,
-				RootPath:     slashRootPath,
-				Status:       "failed",
-				ErrorCode:    firstNonEmpty(getExecResultErrorCode(result), "EXECUTION_FAILED"),
-				ErrorMessage: firstNonEmpty(getExecResultErrorMsg(result), execErr.Error()),
-			}, NewError(ErrKindFailedPrecondition,
-				firstNonEmpty(getExecResultErrorCode(result), "EXECUTE_FAILED"),
-				fmt.Sprintf("execute plan failed: %v", execErr), execErr)
+			PlanID:       planID,
+			RootPath:     slashRootPath,
+			Status:       "failed",
+			ErrorCode:    firstNonEmpty(getExecResultErrorCode(result), "EXECUTION_FAILED"),
+			ErrorMessage: firstNonEmpty(getExecResultErrorMsg(result), execErr.Error()),
+		}, NewError(ErrKindFailedPrecondition,
+			firstNonEmpty(getExecResultErrorCode(result), "EXECUTE_FAILED"),
+			fmt.Sprintf("execute plan failed: %v", execErr), execErr)
 	}
 
 	// 9. Usecase-owned outcome decision: if all folders failed, treat as overall failure.
@@ -122,13 +152,13 @@ func (s *serviceImpl) Execute(_ context.Context, req Request, sink EventSink) (R
 			_ = sink.Emit(newEvent("error", "execute", "EXECUTION_FAILED",
 				"all folders failed"))
 			return Result{
-					PlanID:       planID,
-					RootPath:     slashRootPath,
-					Status:       "failed",
-					ErrorCode:    "EXECUTION_FAILED",
-					ErrorMessage: "all folders failed",
-				}, NewError(ErrKindFailedPrecondition, "EXECUTION_FAILED",
-					"all folders failed", nil)
+				PlanID:       planID,
+				RootPath:     slashRootPath,
+				Status:       "failed",
+				ErrorCode:    "EXECUTION_FAILED",
+				ErrorMessage: "all folders failed",
+			}, NewError(ErrKindFailedPrecondition, "EXECUTION_FAILED",
+				"all folders failed", nil)
 		}
 	}
 
@@ -174,11 +204,6 @@ func hasConvertOp(plan *exesvc.Plan) bool {
 		}
 	}
 	return false
-}
-
-// Helper to check if a db item op_type is a convert operation.
-func isConvertOpType(opType string) bool {
-	return strings.EqualFold(opType, "convert_and_delete")
 }
 
 // planFolders extracts distinct folder paths from the plan items using attributeFolderPath.

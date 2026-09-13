@@ -3,9 +3,114 @@ package plan
 import (
 	"context"
 	"errors"
+
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
-// Operation describes a single planned operation.
+// Request is the input to the Plan operation. Exactly one branch must be set:
+// Workflow (declarative reconcile_audio_outputs) or SingleAction (explicit
+// delete/convert of selected source files).
+type Request struct {
+	// LibraryID is the owning library for web-created plans; gRPC/internal
+	// callers may leave it empty, in which case the plan stays unattributed.
+	LibraryID string
+	// PlanningRoots are the resolved folder paths (workflow branch): each is
+	// an independent planning root. HTTP resolves folder IDs to paths.
+	PlanningRoots []string
+	Workflow      *Workflow
+	SingleAction  *SingleAction
+}
+
+// Workflow is a versioned linear workflow of steps. SchemaVersion 1 is the
+// legacy steps-only draft; schema 2 adds member_settings (ADR 0003 batch
+// draft). Only workset drafts use schema 2.
+type Workflow struct {
+	SchemaVersion  int             `json:"schema_version"`
+	Steps          []WorkflowStep  `json:"steps"`
+	MemberSettings []MemberSetting `json:"member_settings,omitempty"`
+}
+
+// WorkflowStep is one linear workflow step. StepID is the stable identity of
+// the step instance within a draft (workset drafts only; never derived from
+// step_type or order). Empty for standalone /plans workflow requests.
+type WorkflowStep struct {
+	StepID   string       `json:"step_id,omitempty"`
+	StepType string       `json:"step_type"`
+	Policy   PolicySource `json:"policy"`
+}
+
+// MemberSetting is one member's batch-draft record: exclusion flag plus
+// full-replacement per-step config overrides. Members without a record
+// participate and inherit every step default.
+type MemberSetting struct {
+	MemberID      string         `json:"member_id"`
+	Excluded      bool           `json:"excluded"`
+	StepOverrides []StepOverride `json:"step_overrides,omitempty"`
+}
+
+// StepOverride fully replaces one step's default config for one member.
+// Config uses the same shape as the step's inline policy (reconcile.Policy).
+type StepOverride struct {
+	StepID string           `json:"step_id"`
+	Config reconcile.Policy `json:"config"`
+}
+
+// PolicySource is the workflow step's policy payload. Only the inline form is
+// valid: policies are complete snapshots, never references to global state.
+type PolicySource struct {
+	Kind         string            `json:"kind"` // "inline"
+	InlinePolicy *reconcile.Policy `json:"policy,omitempty"`
+}
+
+// WorkflowSchemaVersionV2 is the extended batch-draft schema (ADR 0003): the
+// steps above plus member_settings with exclusions and per-step overrides.
+const WorkflowSchemaVersionV2 = 2
+
+// SingleAction is the retained explicit single-file path (independent from
+// reconcile_audio_outputs, which manages whole components).
+type SingleAction struct {
+	Action       string // "delete" | "convert"
+	SourceFiles  []string
+	TargetFormat string // required for convert (e.g. ".mp3")
+}
+
+// Summary summarizes the plan result, owned by the usecase layer.
+type Summary struct {
+	OperationCount  int
+	ErrorCount      int
+	TotalCount      int
+	ActionableCount int
+	SummaryReason   string
+}
+
+// StepResponse is the reviewable outcome of one workflow step, reconstructed
+// from persisted snapshots (never from live preset/classifier state).
+type StepResponse struct {
+	StepType   string
+	StepIndex  int
+	Status     string // ok | partially_blocked | blocked
+	Policy     reconcile.Policy
+	PolicyHash string
+	Classifier reconcile.Classifier
+	Components []reconcile.ComponentOutcome
+	Summary    reconcile.StepSummary
+}
+
+// Response is the output from the Plan operation.
+type Response struct {
+	PlanID        string
+	SnapshotToken string
+	RootPath      string
+	Summary       Summary
+	Steps         []StepResponse
+	// Single-action branch payloads.
+	Operations        []Operation
+	Errors            []FolderError
+	SuccessfulFolders []string
+	PlanKind          string // "workflow" | "single_action"
+}
+
+// Operation describes a single planned operation (single-action branch).
 type Operation struct {
 	Type                   string
 	SourcePath             string
@@ -25,46 +130,12 @@ type FolderError struct {
 	Retryable  bool
 }
 
-// Summary summarizes the plan result, owned by the usecase layer.
-// The gRPC adapter maps these fields directly into the protobuf response.
-type Summary struct {
-	OperationCount  int
-	ErrorCount      int
-	TotalCount      int
-	ActionableCount int
-	SummaryReason   string
-}
-
 // Error represents a plan-level error.
 type Error struct {
 	Kind    string
 	Code    string
 	Message string
 	Cause   error
-}
-
-// Request is the input to the Plan operation.
-type Request struct {
-	PlanType             string
-	TargetFormat         string
-	SourceFiles          []string
-	FolderPath           string
-	FolderPaths          []string
-	PruneMatchedExcluded bool
-	// LibraryID is the owning library for web-created plans; gRPC/internal
-	// callers may leave it empty, in which case the plan stays unattributed.
-	LibraryID string
-}
-
-// Response is the output from the Plan operation.
-type Response struct {
-	PlanID            string
-	SnapshotToken     string
-	Operations        []Operation
-	Errors            []FolderError
-	SuccessfulFolders []string
-	RootPath          string
-	Summary           Summary
 }
 
 // Service defines the plan usecase contract.

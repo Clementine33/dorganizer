@@ -1,8 +1,8 @@
-package e2e
+package e2e //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -11,20 +11,20 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	grpcserver "github.com/onsei/organizer/backend/internal/grpc"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/analyze"
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/scanner"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+
+	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
+	grpcserver "github.com/onsei/organizer/backend/internal/grpc"
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/execute"
+	"github.com/onsei/organizer/backend/internal/services/scanner"
 )
 
-// TestE2EGrpcHarnessBoot verifies gRPC harness can initiate real streaming calls
+// TestE2EGrpcHarnessBoot verifies gRPC harness can initiate real streaming calls.
 func TestE2EGrpcHarnessBoot(t *testing.T) {
 	client, _, rootDir, cleanup := newE2EGrpcClient(t)
 	defer cleanup()
@@ -43,7 +43,7 @@ func TestE2EGrpcHarnessBoot(t *testing.T) {
 	}
 }
 
-// newE2EGrpcClient creates an in-memory gRPC client connected to a bufconn server
+// newE2EGrpcClient creates an in-memory gRPC client connected to a bufconn server.
 func newE2EGrpcClient(t *testing.T) (pb.OnseiServiceClient, *sqlite.Repository, string, func()) {
 	t.Helper()
 
@@ -62,10 +62,8 @@ func newE2EGrpcClient(t *testing.T) (pb.OnseiServiceClient, *sqlite.Repository, 
 	pb.RegisterOnseiServiceServer(gsrv, grpcserver.NewOnseiServer(repo, tmpDir, "ffmpeg"))
 	go func() { _ = gsrv.Serve(lis) }()
 
-	ctx := context.Background()
-	conn, err := grpc.DialContext(
-		ctx,
-		"bufnet",
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
@@ -82,12 +80,12 @@ func newE2EGrpcClient(t *testing.T) (pb.OnseiServiceClient, *sqlite.Repository, 
 	return pb.NewOnseiServiceClient(conn), repo, tmpDir, cleanup
 }
 
-// collectScanEvents collects all events from a scan stream until EOF or error
+// collectScanEvents collects all events from a scan stream until EOF or error.
 func collectScanEvents(stream pb.OnseiService_ScanClient) ([]*pb.JobEvent, error) {
 	var events []*pb.JobEvent
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return events, nil
 		}
 		if err != nil {
@@ -97,12 +95,12 @@ func collectScanEvents(stream pb.OnseiService_ScanClient) ([]*pb.JobEvent, error
 	}
 }
 
-// collectExecuteEvents collects all events from an execute stream until EOF or error
+// collectExecuteEvents collects all events from an execute stream until EOF or error.
 func collectExecuteEvents(stream pb.OnseiService_ExecutePlanClient) ([]*pb.JobEvent, error) {
 	var events []*pb.JobEvent
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return events, nil
 		}
 		if err != nil {
@@ -142,12 +140,58 @@ func (a *e2eExecuteRepoAdapter) GetEntryContentRev(path string) (int, error) {
 	return contentRev, nil
 }
 
-// TestScanPlanExecuteLoop tests the full scan->plan->execute workflow using gRPC
-// This e2e test validates:
-// - Stream event terminal states reach completion or failure
-// - No UI freeze assumptions via smoke flow test
-// - Invariants from design doc are maintained
-// - Full gRPC chain: Scan -> CreatePlan -> ExecutePlan
+// createDeletePlanForFiles persists a single_action delete plan for the given
+// source paths with precondition snapshots. The execute engine consumes
+// plan_items, so this exercises the identical load->precheck->delete pipeline
+// the legacy gRPC PlanOperations used to feed, without the removed gRPC plan
+// surface.
+func createDeletePlanForFiles(t *testing.T, repo *sqlite.Repository, planID, rootDir string, files []string) {
+	t.Helper()
+	tx, err := repo.DB().Begin()
+	if err != nil {
+		t.Fatalf("begin delete plan tx: %v", err)
+	}
+	defer tx.Rollback()
+
+	if _, insertErr := tx.Exec(`
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, plan_type, slim_mode, snapshot_token, status, plan_kind, workflow_schema_version, created_at)
+		VALUES (?, ?, ?, NULL, 'single_delete', NULL, ?, 'ready', 'single_action', 0, ?)
+	`, planID, filepath.ToSlash(rootDir), filepath.ToSlash(rootDir), "snap-"+planID, time.Now().Format(time.RFC3339Nano)); insertErr != nil {
+		t.Fatalf("insert plan: %v", insertErr)
+	}
+
+	posix := make([]string, 0, len(files))
+	for _, f := range files {
+		posix = append(posix, filepath.ToSlash(f))
+	}
+	preconds, err := sqlite.LoadEntryPreconditionsBatchTx(tx, posix)
+	if err != nil {
+		t.Fatalf("load preconditions: %v", err)
+	}
+	items := make([]sqlite.PlanItem, 0, len(posix))
+	for i, p := range posix {
+		pre := preconds[p]
+		items = append(items, sqlite.PlanItem{
+			PlanID: planID, ItemIndex: i, OpType: "delete",
+			SourcePath: p, ReasonCode: "E2E_DELETE",
+			PreconditionPath: p, PreconditionContentRev: pre.ContentRev,
+			PreconditionSize: pre.Size, PreconditionMtime: pre.Mtime,
+		})
+	}
+	if err := sqlite.CreatePlanItemsBatchTx(tx, planID, items); err != nil {
+		t.Fatalf("insert plan items: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit delete plan: %v", err)
+	}
+}
+
+// TestScanPlanExecuteLoop tests the full scan->plan->execute workflow.
+// The execute engine (precondition load, folder precheck, delete, session
+// persistence) is fed by a persisted single_action delete plan; the gRPC
+// ExecutePlan entry is unchanged.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // e2e scan/plan/execute loop
 func TestScanPlanExecuteLoop(t *testing.T) {
 	// Create gRPC client with embedded server and temp directory
 	client, repo, rootDir, cleanup := newE2EGrpcClient(t)
@@ -160,7 +204,7 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 		"test1.flac", // Same basename as test1.mp3 - should trigger delete plan
 		"test2.mp3",
 		"test2.flac", // Same basename as test2.mp3 - mode1 deletes lossless, keeps lossy
-		"test3.mp3", // No matching pair - will be kept
+		"test3.mp3",  // No matching pair - will be kept
 	}
 	t.Logf("rootDir: %s", rootDir)
 	for _, f := range testFiles {
@@ -185,14 +229,14 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 	// Validate scan stream includes started and completed, no error
 	var scanStarted, scanCompleted bool
 	for _, ev := range scanEvents {
-		if ev.EventType == "started" {
+		if ev.GetEventType() == "started" {
 			scanStarted = true
 		}
-		if ev.EventType == "completed" {
+		if ev.GetEventType() == "completed" {
 			scanCompleted = true
 		}
-		if ev.EventType == "error" || ev.Code != "" {
-			t.Fatalf("scan returned error event: %s - %s", ev.Code, ev.Message)
+		if ev.GetEventType() == "error" || ev.GetCode() != "" {
+			t.Fatalf("scan returned error event: %s - %s", ev.GetCode(), ev.GetMessage())
 		}
 	}
 	if !scanStarted {
@@ -225,120 +269,52 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 		for rows.Next() {
 			var path, rootPath string
 			var isDir int
-			if err := rows.Scan(&path, &rootPath, &isDir); err == nil {
+			if scanErr := rows.Scan(&path, &rootPath, &isDir); scanErr == nil {
 				t.Logf("  - path=%s root_path=%s is_dir=%d", path, rootPath, isDir)
 			}
 		}
 	}
 
-	// Step 2: Create a plan via gRPC (plan type "slim" triggers folder-based slim analysis)
-	planResp, err := client.PlanOperations(ctx, &pb.PlanOperationsRequest{
-		PlanType:     "slim",
-		TargetFormat: "slim:mode1",
-		FolderPath:   rootDir,
-	})
-	if err != nil {
-		t.Fatalf("create plan rpc failed: %v", err)
-	}
-
-	planID := planResp.PlanId
-	if planID == "" {
-		t.Fatal("plan_id should not be empty")
-	}
-
-	// Use len(Operations) as actionable count
-	actionableCount := len(planResp.Operations)
-	if actionableCount == 0 {
-		// Fail with diagnostics when no actionable items
-		var diagnostics strings.Builder
-		diagnostics.WriteString("actionable_count is 0 - diagnostics:\n")
-		diagnostics.WriteString(fmt.Sprintf("  total scanned entries: %d\n", totalCount))
-		diagnostics.WriteString(fmt.Sprintf("  plan_id: %s\n", planResp.PlanId))
-		diagnostics.WriteString(fmt.Sprintf("  plan operations count: %d\n", len(planResp.Operations)))
-		diagnostics.WriteString(fmt.Sprintf("  plan total_count: %d\n", planResp.TotalCount))
-		diagnostics.WriteString(fmt.Sprintf("  plan plan_errors count: %d\n", len(planResp.PlanErrors)))
-		if len(planResp.PlanErrors) > 0 {
-			diagnostics.WriteString("  plan_errors details:\n")
-			for i, pe := range planResp.PlanErrors {
-				diagnostics.WriteString(fmt.Sprintf("    [%d] Code=%s Message=%s\n", i, pe.Code, pe.Message))
-			}
-		}
-		if len(planResp.Operations) > 0 {
-			diagnostics.WriteString("  operations payload details:\n")
-			for i, op := range planResp.Operations {
-				diagnostics.WriteString(fmt.Sprintf("    [%d] SourcePath=%s OperationType=%s\n", i, op.SourcePath, op.OperationType))
-			}
-		}
-		diagnostics.WriteString("  test files created:\n")
+	// Step 2: Create a single_delete plan for the lossless copies directly via
+	// the repository. The gRPC PlanOperations surface was removed with the
+	// slim/prune migration; ExecutePlan consumes the same persisted plan_items.
+	planID := "plan-e2e-delete"
+	var actionableCount int
+	{
+		var deletePaths []string
 		for _, f := range testFiles {
-			diagnostics.WriteString(fmt.Sprintf("    - %s\n", f))
+			if strings.HasSuffix(f, ".flac") {
+				deletePaths = append(deletePaths, filepath.Join(rootDir, f))
+			}
 		}
-		t.Fatal(diagnostics.String())
+		if len(deletePaths) == 0 {
+			t.Fatal("no lossless files to target")
+		}
+		createDeletePlanForFiles(t, repo, planID, rootDir, deletePaths)
+		actionableCount = len(deletePaths)
 	}
 
-	// Step 3: Verify no GLOBAL_NO_SCOPE error by checking PlanErrors entries
-	hasGlobalNoScope := false
-	for _, pe := range planResp.PlanErrors {
-		if pe.Code == "GLOBAL_NO_SCOPE" {
-			hasGlobalNoScope = true
-			break
-		}
-	}
-	if hasGlobalNoScope {
-		t.Fatal("plan has GLOBAL_NO_SCOPE error - no valid folder path for plan")
-	}
-
-	// Step 4: DB assertions - verify plan persisted and plan_items count equals TotalCount
+	// Step 3: DB assertions - plan persisted and plan_items count matches.
 	var planCount int
-	err = repo.DB().QueryRow(
+	if countErr := repo.DB().QueryRow(
 		"SELECT COUNT(*) FROM plans WHERE plan_id = ?",
 		planID,
-	).Scan(&planCount)
-	if err != nil {
-		t.Fatalf("failed to count plans: %v", err)
+	).Scan(&planCount); countErr != nil {
+		t.Fatalf("failed to count plans: %v", countErr)
 	}
 	if planCount != 1 {
 		t.Errorf("expected exactly 1 plan in DB, got %d", planCount)
 	}
 
 	var planItemCount int
-	err = repo.DB().QueryRow(
+	if itemCountErr := repo.DB().QueryRow(
 		"SELECT COUNT(*) FROM plan_items WHERE plan_id = ?",
 		planID,
-	).Scan(&planItemCount)
-	if err != nil {
-		t.Fatalf("failed to count plan items: %v", err)
+	).Scan(&planItemCount); itemCountErr != nil {
+		t.Fatalf("failed to count plan items: %v", itemCountErr)
 	}
-	// Assert plan_items count equals planResp.TotalCount
-	expectedItemCount := int(planResp.TotalCount)
-	if planItemCount != expectedItemCount {
-		t.Errorf("plan_items count mismatch: expected %d (from TotalCount), got %d", expectedItemCount, planItemCount)
-	}
-
-	// Debug: Print all plan items
-	itemRows, err := repo.DB().Query("SELECT source_path, op_type FROM plan_items WHERE plan_id = ?", planID)
-	if err != nil {
-		t.Logf("Failed to query plan items: %v", err)
-	} else {
-		defer itemRows.Close()
-		t.Log("Plan items in database:")
-		for itemRows.Next() {
-			var path, opType string
-			if err := itemRows.Scan(&path, &opType); err == nil {
-				t.Logf("  - %s (%s)", path, opType)
-			}
-		}
-	}
-
-	// Validate actionable entries: source_path non-empty and op type in delete|convert_and_delete
-	for _, op := range planResp.Operations {
-		if op.SourcePath == "" {
-			t.Errorf("plan operation has empty source_path")
-		}
-		opType := strings.ToLower(op.OperationType)
-		if opType != "delete" && opType != "convert_and_delete" {
-			t.Errorf("unexpected operation_type: %s (expected delete or convert_and_delete)", op.OperationType)
-		}
+	if planItemCount != actionableCount {
+		t.Errorf("plan_items count mismatch: expected %d, got %d", actionableCount, planItemCount)
 	}
 
 	// Step 5: Execute plan via gRPC
@@ -355,14 +331,14 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 	// Step 6: Validate execute stream includes started and completed, no error
 	var execStarted, execCompleted bool
 	for _, ev := range execEvents {
-		if ev.EventType == "started" {
+		if ev.GetEventType() == "started" {
 			execStarted = true
 		}
-		if ev.EventType == "completed" {
+		if ev.GetEventType() == "completed" {
 			execCompleted = true
 		}
-		if ev.EventType == "error" || ev.Code != "" {
-			t.Fatalf("execute returned error event: %s - %s", ev.Code, ev.Message)
+		if ev.GetEventType() == "error" || ev.GetCode() != "" {
+			t.Fatalf("execute returned error event: %s - %s", ev.GetCode(), ev.GetMessage())
 		}
 	}
 	if !execStarted {
@@ -407,68 +383,8 @@ func TestScanPlanExecuteLoop(t *testing.T) {
 }
 
 // TestScanPlanExecuteWithPrune tests prune workflow
-func TestScanPlanExecuteWithPrune(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "e2e-prune-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	// Create test files matching prune pattern
-	testFiles := []string{
-		"test.mp3",
-		"backup.mp3",
-		"old.mp3",
-	}
-	for _, f := range testFiles {
-		filePath := filepath.Join(tmpDir, f)
-		if err := os.WriteFile(filePath, []byte("dummy"), 0644); err != nil {
-			t.Fatalf("failed to create test file: %v", err)
-		}
-	}
-
-	// Setup repo and scan
-	if err := sqlite.EnsureDBPath(dbPath); err != nil {
-		t.Fatalf("failed to ensure db path: %v", err)
-	}
-
-	repo, err := sqlite.NewRepository(dbPath)
-	if err != nil {
-		t.Fatalf("failed to create repository: %v", err)
-	}
-	defer repo.Close()
-
-	svcScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
-	_, err = svcScanner.ScanRoot(tmpDir)
-	if err != nil {
-		t.Fatalf("scan failed: %v", err)
-	}
-
-	// Generate prune plan for files matching "old"
-	svcPlan := analyze.NewAnalyzer(repo)
-	plan, err := svcPlan.AnalyzePrune("old", analyze.PruneTargetBoth)
-	if err != nil {
-		t.Fatalf("prune plan failed: %v", err)
-	}
-
-	// Verify prune plan includes the matching file
-	foundPruneOp := false
-	for _, op := range plan.Operations {
-		if op.Type == analyze.OpTypeDelete && op.SourcePath != "" {
-			foundPruneOp = true
-		}
-	}
-
-	if !foundPruneOp {
-		t.Log("no prune operations generated (may be expected if pattern doesn't match)")
-	}
-
-	t.Logf("prune workflow complete: plan ID=%s, ops=%d", plan.PlanID, len(plan.Operations))
-}
-
-// TestExecuteTerminalStates tests that execute service handles terminal states correctly
+// TestExecuteTerminalStates tests that execute service handles terminal states correctly.
 func TestExecuteTerminalStates(t *testing.T) {
 	svc := execute.NewService(execute.ToolsConfig{})
 
@@ -516,6 +432,8 @@ func TestExecuteTerminalStates(t *testing.T) {
 }
 
 // TestPersistedPlanStaleAfterFileDelete tests scan->persist-plan->execute stale rejection.
+//
+//nolint:funlen // long e2e stale-detection scenario
 func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "e2e-persisted-stale-*")
 	if err != nil {
@@ -524,8 +442,8 @@ func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	if err := sqlite.EnsureDBPath(dbPath); err != nil {
-		t.Fatalf("failed to ensure db path: %v", err)
+	if ensureErr := sqlite.EnsureDBPath(dbPath); ensureErr != nil {
+		t.Fatalf("failed to ensure db path: %v", ensureErr)
 	}
 	repo, err := sqlite.NewRepository(dbPath)
 	if err != nil {
@@ -535,13 +453,13 @@ func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 
 	// Scan fixture file so preconditions come from persisted entries.
 	testFile := filepath.Join(tmpDir, "stale.mp3")
-	if err := os.WriteFile(testFile, []byte("dummy audio"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+	if writeErr := os.WriteFile(testFile, []byte("dummy audio"), 0644); writeErr != nil {
+		t.Fatalf("failed to create test file: %v", writeErr)
 	}
 
 	svcScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
-	if _, err := svcScanner.ScanRoot(tmpDir); err != nil {
-		t.Fatalf("scan failed: %v", err)
+	if _, scanErr := svcScanner.ScanRoot(tmpDir); scanErr != nil {
+		t.Fatalf("scan failed: %v", scanErr)
 	}
 
 	// Load persisted preconditions.
@@ -557,18 +475,18 @@ func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 	}
 
 	planID := "plan-e2e-stale-delete-001"
-	if err := repo.CreatePlan(&sqlite.Plan{
+	if createErr := repo.CreatePlan(&sqlite.Plan{ //nolint:gosec // test plan identifier, not a credential
 		PlanID:        planID,
 		RootPath:      filepath.ToSlash(tmpDir),
 		PlanType:      "single_delete",
 		SnapshotToken: "snapshot-e2e-stale",
 		Status:        "ready",
 		CreatedAt:     time.Now(),
-	}); err != nil {
-		t.Fatalf("failed to persist plan: %v", err)
+	}); createErr != nil {
+		t.Fatalf("failed to persist plan: %v", createErr)
 	}
 
-	if err := repo.CreatePlanItem(&sqlite.PlanItem{
+	if createErr := repo.CreatePlanItem(&sqlite.PlanItem{
 		PlanID:                 planID,
 		ItemIndex:              0,
 		OpType:                 "delete",
@@ -578,13 +496,13 @@ func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 		PreconditionContentRev: contentRev,
 		PreconditionSize:       size,
 		PreconditionMtime:      mtime,
-	}); err != nil {
-		t.Fatalf("failed to persist plan item: %v", err)
+	}); createErr != nil {
+		t.Fatalf("failed to persist plan item: %v", createErr)
 	}
 
 	// Filesystem changes after planning should make plan stale.
-	if err := os.Remove(testFile); err != nil {
-		t.Fatalf("failed to delete source file: %v", err)
+	if removeErr := os.Remove(testFile); removeErr != nil {
+		t.Fatalf("failed to delete source file: %v", removeErr)
 	}
 
 	execSvc := execute.NewExecuteService(&e2eExecuteRepoAdapter{repo: repo}, execute.ToolsConfig{})
@@ -637,6 +555,8 @@ func TestPersistedPlanStaleAfterFileDelete(t *testing.T) {
 }
 
 // TestPersistedPlanStaleAfterMtimeDrift tests scan->persist-plan->execute stale rejection on mtime drift.
+//
+//nolint:funlen // long e2e stale-detection scenario
 func TestPersistedPlanStaleAfterMtimeDrift(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "e2e-persisted-stale-mtime-*")
 	if err != nil {
@@ -645,8 +565,8 @@ func TestPersistedPlanStaleAfterMtimeDrift(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	if err := sqlite.EnsureDBPath(dbPath); err != nil {
-		t.Fatalf("failed to ensure db path: %v", err)
+	if ensureErr := sqlite.EnsureDBPath(dbPath); ensureErr != nil {
+		t.Fatalf("failed to ensure db path: %v", ensureErr)
 	}
 	repo, err := sqlite.NewRepository(dbPath)
 	if err != nil {
@@ -655,13 +575,13 @@ func TestPersistedPlanStaleAfterMtimeDrift(t *testing.T) {
 	defer repo.Close()
 
 	testFile := filepath.Join(tmpDir, "stale-mtime.mp3")
-	if err := os.WriteFile(testFile, []byte("dummy audio"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+	if writeErr := os.WriteFile(testFile, []byte("dummy audio"), 0644); writeErr != nil {
+		t.Fatalf("failed to create test file: %v", writeErr)
 	}
 
 	svcScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
-	if _, err := svcScanner.ScanRoot(tmpDir); err != nil {
-		t.Fatalf("scan failed: %v", err)
+	if _, scanErr := svcScanner.ScanRoot(tmpDir); scanErr != nil {
+		t.Fatalf("scan failed: %v", scanErr)
 	}
 
 	var size int64
@@ -676,18 +596,18 @@ func TestPersistedPlanStaleAfterMtimeDrift(t *testing.T) {
 	}
 
 	planID := "plan-e2e-stale-mtime-001"
-	if err := repo.CreatePlan(&sqlite.Plan{
+	if createErr := repo.CreatePlan(&sqlite.Plan{ //nolint:gosec // test plan identifier, not a credential
 		PlanID:        planID,
 		RootPath:      filepath.ToSlash(tmpDir),
 		PlanType:      "single_delete",
 		SnapshotToken: "snapshot-e2e-stale-mtime",
 		Status:        "ready",
 		CreatedAt:     time.Now(),
-	}); err != nil {
-		t.Fatalf("failed to persist plan: %v", err)
+	}); createErr != nil {
+		t.Fatalf("failed to persist plan: %v", createErr)
 	}
 
-	if err := repo.CreatePlanItem(&sqlite.PlanItem{
+	if createErr := repo.CreatePlanItem(&sqlite.PlanItem{
 		PlanID:                 planID,
 		ItemIndex:              0,
 		OpType:                 "delete",
@@ -697,14 +617,14 @@ func TestPersistedPlanStaleAfterMtimeDrift(t *testing.T) {
 		PreconditionContentRev: contentRev,
 		PreconditionSize:       size,
 		PreconditionMtime:      mtime,
-	}); err != nil {
-		t.Fatalf("failed to persist plan item: %v", err)
+	}); createErr != nil {
+		t.Fatalf("failed to persist plan item: %v", createErr)
 	}
 
 	// Drift filesystem mtime by >1s after planning to trigger stale precondition.
 	newMtime := time.Unix(mtime, 0).Add(5 * time.Second)
-	if err := os.Chtimes(testFile, newMtime, newMtime); err != nil {
-		t.Fatalf("failed to update mtime: %v", err)
+	if chtimesErr := os.Chtimes(testFile, newMtime, newMtime); chtimesErr != nil {
+		t.Fatalf("failed to update mtime: %v", chtimesErr)
 	}
 
 	execSvc := execute.NewExecuteService(&e2eExecuteRepoAdapter{repo: repo}, execute.ToolsConfig{})
@@ -785,40 +705,20 @@ func TestExecutePlanGrpc_StalePrecondition(t *testing.T) {
 		t.Fatal("expected scan events")
 	}
 
-	// Step 2: Create a plan via gRPC (plan type "slim" triggers folder-based slim analysis)
-	planResp, err := client.PlanOperations(ctx, &pb.PlanOperationsRequest{
-		PlanType:     "slim",
-		TargetFormat: "slim:mode1",
-		FolderPath:   rootDir,
-	})
-	if err != nil {
-		t.Fatalf("create plan rpc failed: %v", err)
-	}
-
-	planID := planResp.PlanId
-	if planID == "" {
-		t.Fatal("plan_id should not be empty")
-	}
-
-	// Verify plan has operations
-	if len(planResp.Operations) == 0 {
-		t.Fatal("expected plan operations, got none")
-	}
-
-	// Get the source path of the first operation to know which file to delete
-	firstOpSourcePath := planResp.Operations[0].SourcePath
-	if firstOpSourcePath == "" {
-		t.Fatal("first operation has empty source_path")
-	}
+	// Step 2: Create a single_delete plan for the lossless copy directly via
+	// the repository (the gRPC PlanOperations surface was removed with the
+	// slim/prune migration; ExecutePlan consumes the same persisted items).
+	planID := "plan-e2e-stale"
+	fileToDelete := filepath.Join(rootDir, "stale1.flac")
+	createDeletePlanForFiles(t, repo, planID, rootDir, []string{fileToDelete})
 
 	// Step 3: Mutate filesystem - delete the source file targeted by the plan to stale it
 	// The source path from the plan is already an absolute path
-	fileToDelete := firstOpSourcePath
-	if _, err := os.Stat(fileToDelete); err != nil {
-		t.Fatalf("source file does not exist before deletion: %v", err)
+	if _, statErr := os.Stat(fileToDelete); statErr != nil {
+		t.Fatalf("source file does not exist before deletion: %v", statErr)
 	}
-	if err := os.Remove(fileToDelete); err != nil {
-		t.Fatalf("failed to delete source file to stale plan: %v", err)
+	if removeErr := os.Remove(fileToDelete); removeErr != nil {
+		t.Fatalf("failed to delete source file to stale plan: %v", removeErr)
 	}
 
 	// Step 4: Execute plan via gRPC - should fail with precondition error
@@ -832,13 +732,16 @@ func TestExecutePlanGrpc_StalePrecondition(t *testing.T) {
 	// Step 5: Assert stream contains error event with event_type="error" and code="EXEC_PRECONDITION_FAILED"
 	var foundErrorEvent bool
 	for _, ev := range execEvents {
-		if ev.EventType == "error" && ev.Code == "EXEC_PRECONDITION_FAILED" {
+		if ev.GetEventType() == "error" && ev.GetCode() == "EXEC_PRECONDITION_FAILED" {
 			foundErrorEvent = true
 			break
 		}
 	}
 	if !foundErrorEvent {
-		t.Errorf("expected stream to contain error event with type='error' and code='EXEC_PRECONDITION_FAILED', got events: %v", execEvents)
+		t.Errorf(
+			"expected stream to contain error event with type='error' and code='EXEC_PRECONDITION_FAILED', got events: %v",
+			execEvents,
+		)
 	}
 
 	// Step 6: Assert terminal error status code is codes.FailedPrecondition
@@ -877,5 +780,10 @@ func TestExecutePlanGrpc_StalePrecondition(t *testing.T) {
 		t.Errorf("expected error_code 'EXEC_PRECONDITION_FAILED', got '%s'", session.ErrorCode)
 	}
 
-	t.Logf("gRPC stale precondition test complete: plan_id=%s, events=%d, terminal_error=%v", planID, len(execEvents), execErr)
+	t.Logf(
+		"gRPC stale precondition test complete: plan_id=%s, events=%d, terminal_error=%v",
+		planID,
+		len(execEvents),
+		execErr,
+	)
 }
