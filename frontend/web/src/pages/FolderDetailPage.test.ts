@@ -3,7 +3,9 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
-import type { ApiClientContract, Library, PlanResponse, TreeNode } from '@/lib/api/types'
+import { apiStub as sharedApiStub } from '@/test/api-stub'
+import type { ApiClientContract, Library, TreeNode } from '@/lib/api/types'
+import { installTestQueryPlugin } from '@/test/query-client'
 import FolderDetailPage from './FolderDetailPage.vue'
 
 const library: Library = {
@@ -52,38 +54,12 @@ const treeRoot: TreeNode = {
   ],
 }
 
-const plan: PlanResponse = {
-  plan_id: 'plan-1',
-  snapshot_token: 'snap-1',
-  root_path: 'D:\\Music',
-  summary: {
-    operation_count: 1,
-    error_count: 0,
-    total_count: 1,
-    actionable_count: 1,
-    summary_reason: 'ACTIONABLE',
-  },
-  operations: [],
-  errors: [],
-  successful_folders: ['D:\\Music\\Blue Train'],
-}
-
 function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract {
-  return {
-    getHealth: vi.fn(),
+  return sharedApiStub({
     listLibraries: vi.fn().mockResolvedValue([library]),
-    getLibrary: vi.fn(),
-    createLibrary: vi.fn(),
-    updateLibrary: vi.fn(),
-    deleteLibrary: vi.fn(),
-    scanLibrary: vi.fn(),
-    listFolders: vi.fn(),
     getFolderTree: vi.fn().mockResolvedValue(treeRoot),
-    getPlan: vi.fn(),
-    createPlan: vi.fn().mockResolvedValue(plan),
-    listPlans: vi.fn(),
     ...overrides,
-  }
+  })
 }
 
 async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper; router: Router }> {
@@ -95,14 +71,13 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
         path: '/libraries/:libraryId/folders/:folderId',
         component: FolderDetailPage,
       },
-      { path: '/plans/:id', component: { template: '<div>plan</div>' } },
     ],
   })
   await router.push('/libraries/lib-a/folders/folder-a')
   await router.isReady()
   const wrapper = mount(FolderDetailPage, {
     global: {
-      plugins: [createPinia(), router],
+      plugins: [createPinia(), router, installTestQueryPlugin()],
       provide: { [apiClientKey as symbol]: api },
     },
   })
@@ -117,7 +92,7 @@ describe('FolderDetailPage', () => {
     const api = apiStub()
     const { wrapper } = await mountPage(api)
 
-    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a')
+    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a', expect.any(AbortSignal))
     expect(wrapper.findAll('[data-testid="folder-tree-card"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('Lossless archive')
     expect(wrapper.text()).toContain('Blue Train')
@@ -167,53 +142,27 @@ describe('FolderDetailPage', () => {
     expect(wrapper.text()).toContain('还没有音频文件')
   })
 
-  it('feeds selected files to POST /plans and navigates to review', async () => {
-    const api = apiStub()
-    const { wrapper, router } = await mountPage(api)
+  it('updates the selected-file summary as files and directories are selected', async () => {
+    const { wrapper } = await mountPage(apiStub())
 
-    const generate = wrapper.get('[data-testid="generate-plan"]')
-    expect(generate.attributes('disabled')).toBeDefined()
-    expect(generate.text()).toContain('对所选文件生成计划')
+    expect(wrapper.text()).toContain('在树中选择文件或文件夹')
 
     await wrapper.get('[data-testid="file-checkbox-2"]').setValue(true)
-    expect(generate.attributes('disabled')).toBeUndefined()
-
-    await generate.trigger('click')
-    await flushPromises()
-
-    expect(api.createPlan).toHaveBeenCalledWith({
-      library_id: 'lib-a',
-      source_files: ['D:\\Music\\Blue Train\\01 - Blue Train.flac'],
-    })
-    expect(router.currentRoute.value.fullPath).toBe('/plans/plan-1')
-  })
-
-  it('selecting a directory selects all of its descendant files for the plan scope', async () => {
-    const api = apiStub()
-    const { wrapper, router } = await mountPage(api)
+    expect(wrapper.text()).toContain('1 个文件已选择')
 
     await wrapper.get('[data-testid="dir-checkbox-1"]').setValue(true)
-    await wrapper.get('[data-testid="generate-plan"]').trigger('click')
-    await flushPromises()
-
-    expect(api.createPlan).toHaveBeenCalledWith({
-      library_id: 'lib-a',
-      source_files: ['D:\\Music\\Blue Train\\Bonus\\bonus track.flac'],
-    })
-    expect(router.currentRoute.value.fullPath).toBe('/plans/plan-1')
+    expect(wrapper.text()).toContain('2 个文件已选择')
   })
 
-  it('echoes a plan creation failure with the envelope code', async () => {
-    const failure = new ApiError(400, 'SCOPE_REQUIRED', 'folder_ids or source_files is required')
-    const api = apiStub({ createPlan: vi.fn().mockRejectedValue(failure) })
+  it('loads the tree even when the library list fails (direct-link fallback)', async () => {
+    const api = apiStub({
+      listLibraries: vi.fn().mockRejectedValue(new ApiError(500, 'INTERNAL', 'failed to list libraries')),
+    })
     const { wrapper } = await mountPage(api)
 
-    await wrapper.get('[data-testid="file-checkbox-2"]').setValue(true)
-    await wrapper.get('[data-testid="generate-plan"]').trigger('click')
-    await flushPromises()
-
-    const banner = wrapper.get('[data-testid="tree-error"]')
-    expect(banner.text()).toContain('SCOPE_REQUIRED')
-    expect(banner.text()).toContain('folder_ids or source_files is required')
+    expect(api.getFolderTree).toHaveBeenCalledWith('lib-a', 'folder-a', expect.any(AbortSignal))
+    expect(wrapper.find('[data-testid="folder-tree-card"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('01 - Blue Train.flac')
   })
+
 })

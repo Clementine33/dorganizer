@@ -1,108 +1,90 @@
 <script setup lang="ts">
-import { AudioLines, LibraryBig, ListMusic, Monitor, Moon, Sun } from '@lucide/vue'
-import { useRouter } from 'vue-router'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { useTheme, type Theme } from '@/composables/use-theme'
-import { useLibrariesStore } from '@/stores/libraries'
+import { AudioLines } from '@lucide/vue'
+import { computed } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
+import HeaderMenu from '@/components/layout/HeaderMenu.vue'
+import { GLOBAL_NAV, globalNavOwner, type GlobalNavId } from '@/components/layout/global-nav'
+import { useLibraryList } from '@/queries/libraries'
 
-const router = useRouter()
-const libraries = useLibrariesStore()
-const { theme } = useTheme()
-const options: { value: Theme; label: string; icon: typeof Sun }[] = [
-  { value: 'light', label: '浅色', icon: Sun },
-  { value: 'dark', label: '深色', icon: Moon },
-  { value: 'system', label: '跟随系统', icon: Monitor },
-]
+/**
+ * The application shell owns the whole application height and the global
+ * navigation space (N02, N08, N09): a 64px icon rail above 640px application
+ * width, a two-entry bottom bar at or below it, and pages use the rest. The
+ * switch is pure CSS (the `rail` variant in style.css); no page re-measures the
+ * window and the bottom bar is a grid row, not an overlay that pages would have
+ * to pad for.
+ */
+const route = useRoute()
+// Ownership comes from the router's own route name (N21), so a workbench
+// child route still lights up 工作集 without a second active-id state.
+const current = computed(() => globalNavOwner(route.name))
 
-function openLibrary(id: string) {
-  libraries.setActiveLibrary(id)
-  void router.push('/libraries')
+// The shell is mounted for the whole application lifetime, so it stays the
+// long-lived observer of the library list: pages share the same cache entry
+// and a scan's terminal refresh always has a live observer, whichever module
+// is on screen (N34). The list itself renders in LibrariesPage, not here
+// (N03, L01).
+useLibraryList()
+
+function isCurrent(id: GlobalNavId): boolean {
+  return current.value === id
 }
 </script>
 
 <template>
-  <div class="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-    <header class="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
-      <AudioLines class="size-4 text-[var(--ring)]" />
-      <span class="font-heading text-sm font-semibold tracking-tight">Onsei Organizer</span>
-      <span class="hidden text-[11px] text-muted-foreground sm:inline">library workbench</span>
-      <div class="ml-auto">
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <Button variant="ghost" size="icon" aria-label="切换主题">
-              <Sun class="hidden size-4 dark:block" />
-              <Moon class="size-4 dark:hidden" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem v-for="option in options" :key="option.value" @select="theme = option.value">
-              <component :is="option.icon" class="size-4" />
-              {{ option.label }}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+  <div
+    class="rail:grid-cols-[64px_minmax(0,1fr)] rail:grid-rows-[minmax(0,1fr)] grid h-dvh grid-cols-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-background text-foreground"
+  >
+    <!-- Desktop rail: brand on top, the shared definition in the middle, the
+         theme entry at the bottom (N13, N20). -->
+    <aside
+      class="rail:flex hidden min-h-0 flex-col border-r border-sidebar-border bg-sidebar"
+      data-testid="global-rail"
+    >
+      <div class="grid h-14 shrink-0 place-items-center" data-testid="app-brand">
+        <AudioLines class="size-5 text-[var(--ring)]" aria-hidden="true" />
+        <span class="sr-only">Onsei Organizer</span>
       </div>
-    </header>
+      <nav aria-label="全局导航" class="flex flex-col gap-1 p-1">
+        <RouterLink
+          v-for="item in GLOBAL_NAV"
+          :key="item.id"
+          :to="item.to"
+          :aria-current="isCurrent(item.id) ? 'page' : undefined"
+          class="flex flex-col items-center gap-1 rounded-md px-1 py-2 text-[10px] font-medium text-sidebar-foreground hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+          :class="isCurrent(item.id) ? 'bg-sidebar-accent' : ''"
+        >
+          <component :is="item.icon" class="size-4" aria-hidden="true" />
+          {{ item.label }}
+        </RouterLink>
+      </nav>
+      <div class="mt-auto p-1">
+        <HeaderMenu />
+      </div>
+    </aside>
 
-    <div class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[196px_minmax(0,1fr)]">
-      <aside class="hidden min-h-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <nav class="p-2" aria-label="主导航">
-          <RouterLink
-            to="/libraries"
-            class="flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            active-class="bg-sidebar-accent"
-          >
-            <LibraryBig class="size-3.5" />
-            媒体库
-          </RouterLink>
-          <RouterLink
-            to="/plans"
-            class="mt-0.5 flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            active-class="bg-sidebar-accent"
-          >
-            <ListMusic class="size-3.5" />
-            计划
-          </RouterLink>
-        </nav>
+    <main class="min-h-0 min-w-0 overflow-y-auto">
+      <slot />
+    </main>
 
-        <div class="mx-3 border-t border-sidebar-border" />
-        <div class="min-h-0 flex-1 overflow-auto p-2">
-          <div class="flex h-7 items-center px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            媒体库条目
-            <span class="ml-auto font-mono">{{ libraries.libraries.length }}</span>
-          </div>
-          <button
-            v-for="library in libraries.libraries"
-            :key="library.id"
-            type="button"
-            class="mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            :class="library.id === libraries.activeLibraryId ? 'bg-sidebar-accent' : ''"
-            @click="openLibrary(library.id)"
-          >
-            <span
-              class="size-1.5 shrink-0 rounded-full"
-              :class="library.last_scan_status === 'completed' ? 'bg-emerald-500' : 'bg-muted-foreground/50'"
-            />
-            <span class="min-w-0">
-              <span class="block truncate font-heading text-xs font-semibold">{{ library.name }}</span>
-              <span class="block truncate font-mono text-[9px] text-muted-foreground">{{ library.root_path }}</span>
-            </span>
-          </button>
-          <p v-if="libraries.libraries.length === 0" class="px-2 py-3 text-[11px] leading-4 text-muted-foreground">
-            添加媒体库后会显示在这里。
-          </p>
-        </div>
-      </aside>
-
-      <main class="min-h-0 min-w-0">
-        <slot />
-      </main>
-    </div>
+    <!-- Mobile bottom bar: the same two entries in the shell's own grid row
+         (N08). The outermost edge owns the safe area once (N16). -->
+    <nav
+      aria-label="全局导航"
+      class="rail:hidden grid grid-cols-2 border-t border-sidebar-border bg-sidebar pb-[env(safe-area-inset-bottom)]"
+      data-testid="global-bottom-bar"
+    >
+      <RouterLink
+        v-for="item in GLOBAL_NAV"
+        :key="item.id"
+        :to="item.to"
+        :aria-current="isCurrent(item.id) ? 'page' : undefined"
+        class="flex min-h-14 flex-col items-center justify-center gap-1 text-[10px] font-medium text-sidebar-foreground hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+        :class="isCurrent(item.id) ? 'bg-sidebar-accent' : ''"
+      >
+        <component :is="item.icon" class="size-5" aria-hidden="true" />
+        {{ item.label }}
+      </RouterLink>
+    </nav>
   </div>
 </template>

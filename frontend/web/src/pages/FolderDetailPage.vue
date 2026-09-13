@@ -1,99 +1,87 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AlertTriangle, ArrowLeft, RefreshCw, WandSparkles } from '@lucide/vue'
+import { AlertTriangle, ArrowLeft, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import FolderTreeCard from '@/features/folders/FolderTreeCard.vue'
 import { useApiClient } from '@/lib/api/client'
-import type { TreeNode } from '@/lib/api/types'
-import { useLibrariesStore } from '@/stores/libraries'
-import { usePlansStore } from '@/stores/plans'
+import { errorDetails } from '@/lib/api/error'
+import { rootPathIdentityKey } from '@/lib/root-path-identity'
+import { folderTreeQueryOptions, useLibraryList } from '@/queries/libraries'
+import { useLibraryUiStore } from '@/stores/library-ui'
 
 const api = useApiClient()
 const route = useRoute()
 const router = useRouter()
-const libraries = useLibrariesStore()
-const plans = usePlansStore()
+const ui = useLibraryUiStore()
 
 const libraryId = computed(() => route.params.libraryId as string)
 const folderId = computed(() => route.params.folderId as string)
-
-const tree = ref<TreeNode | null>(null)
-const loading = ref(false)
-const treeErrorCode = ref<string | null>(null)
-const treeError = ref<string | null>(null)
 const selectedFiles = ref<string[]>([])
 
-const activeLibrary = computed(() => libraries.activeLibrary)
+const { query: librariesQuery, librariesData, activeLibrary } = useLibraryList()
 
-const pageError = computed(() => {
-  if (plans.error) return { code: plans.errorCode, message: plans.error }
-  if (treeError.value) return { code: treeErrorCode.value, message: treeError.value }
+// The tree must not wait for the library list: a direct link (or a library
+// list failure) must still resolve the tree against the route IDs. The root
+// identity is part of the query key so a genuine root change invalidates the
+// old-key cache. While the library list is still pending the tree waits;
+// once it settles without the library (e.g. the list failed), a placeholder
+// identity lets the tree proceed rather than being blocked forever.
+const rootIdentity = computed(() => {
+  const library = librariesData.value.find((item) => item.id === libraryId.value)
+  if (library) return rootPathIdentityKey(library.root_path)
+  // 'unresolved-root' is a deliberate fallback (reviewed and accepted): when
+  // the library list has settled without this route's library — e.g. the
+  // libraries query failed — the tree must still load against the route IDs
+  // rather than being blocked forever. A later list arrival swaps the key and
+  // refetches under the canonical root identity.
+  if (librariesQuery.isSuccess.value || librariesQuery.error.value) return 'unresolved-root'
   return null
 })
 
-let treeRequestSeq = 0
-
-async function loadTree(): Promise<void> {
-  const seq = ++treeRequestSeq
-  loading.value = true
-  treeErrorCode.value = null
-  treeError.value = null
-  try {
-    const result = await api.getFolderTree(libraryId.value, folderId.value)
-    if (seq !== treeRequestSeq) return
-    tree.value = result
-  } catch (error) {
-    if (seq !== treeRequestSeq) return
-    treeErrorCode.value = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : null
-    treeError.value = error instanceof Error ? error.message : '发生未知错误'
-    tree.value = null
-  } finally {
-    if (seq === treeRequestSeq) loading.value = false
-  }
-}
-
-async function prepareLibrary(): Promise<void> {
-  try {
-    if (libraries.libraries.length === 0) await libraries.loadLibraries(api)
-    if (libraries.activeLibraryId !== libraryId.value) libraries.setActiveLibrary(libraryId.value)
-  } catch {
-    // The store exposes the recovery message if the page banner is needed.
-  }
-}
-
-onMounted(async () => {
-  await prepareLibrary()
-  await loadTree()
+const treeQuery = useQuery(() =>
+  folderTreeQueryOptions(api, libraryId.value, rootIdentity.value, folderId.value),
+)
+// Query flags are refs; expose a top-level boolean so template v-if sees a
+// value instead of a truthy ref object.
+const treePending = computed(() => treeQuery.isPending.value)
+const tree = computed(() => treeQuery.data.value ?? null)
+const treeError = computed(() => {
+  const error = treeQuery.error.value
+  return error ? errorDetails(error) : null
 })
 
-watch([libraryId, folderId], async () => {
-  tree.value = null
+// Route library is authoritative for this page; the UI store keeps the global
+// active selection in sync without waiting for the library list.
+watch(
+  libraryId,
+  (id) => {
+    if (id) ui.setActiveLibrary(id)
+  },
+  { immediate: true },
+)
+
+// Tree selection is page-local and resets whenever the tree context changes.
+watch([libraryId, folderId], () => {
   selectedFiles.value = []
-  plans.clearError()
-  // Resolve the new library first so activeLibrary reflects it before the
-  // breadcrumb renders while loadTree is still in flight.
-  await prepareLibrary()
-  void loadTree()
 })
 
 function onSelectionChange(paths: string[]): void {
   selectedFiles.value = paths
 }
 
-async function retryLoad(): Promise<void> {
-  plans.clearError()
-  await loadTree()
-}
+const pageError = computed(() => {
+  if (treeError.value) return { code: treeError.value.code, message: treeError.value.message }
+  return null
+})
 
-async function generatePlan(): Promise<void> {
-  if (selectedFiles.value.length === 0) return
-  try {
-    const plan = await plans.createForFiles(libraryId.value, selectedFiles.value, api)
-    await router.push(`/plans/${encodeURIComponent(plan.plan_id)}`)
-  } catch {
-    // The plans store exposes the envelope code via pageError above.
-  }
+async function retryLoad(): Promise<void> {
+  // The tree query key depends on the resolved root identity, which comes from
+  // the library list. If the list failed (placeholder 'unresolved-root' key)
+  // only refetching the tree can never recover — refetch the list too so the
+  // key flips to the canonical identity (or the page falls back cleanly).
+  await Promise.all([librariesQuery.refetch(), treeQuery.refetch()])
 }
 </script>
 
@@ -102,6 +90,7 @@ async function generatePlan(): Promise<void> {
     <header class="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-5">
       <Button
         data-testid="back-to-libraries"
+        class="size-11 rail:size-8"
         variant="ghost"
         size="icon"
         aria-label="返回媒体库"
@@ -129,13 +118,13 @@ async function generatePlan(): Promise<void> {
       <AlertTriangle class="size-4 shrink-0" />
       <span v-if="pageError.code" class="shrink-0 font-mono font-semibold">{{ pageError.code }}</span>
       <span class="min-w-0 flex-1">{{ pageError.message }}。请检查后端连接或目录权限后重试。</span>
-      <Button data-testid="retry-tree" variant="outline" size="sm" @click="retryLoad">
+      <Button data-testid="retry-tree" class="h-11 rail:h-7" variant="outline" size="sm" @click="retryLoad">
         <RefreshCw class="size-3.5" />
         重试
       </Button>
     </div>
 
-    <div v-if="loading" class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground">
+    <div v-if="treePending" class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground">
       正在读取文件夹树…
     </div>
     <div v-else-if="tree" class="flex min-h-0 flex-1 flex-col p-4">
@@ -148,21 +137,11 @@ async function generatePlan(): Promise<void> {
     <div class="flex min-h-14 shrink-0 items-center gap-3 border-t border-border bg-card px-5 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
       <div class="h-5 w-1 rounded-full bg-[var(--brand)]" aria-hidden="true" />
       <div class="min-w-0">
-        <p class="font-heading text-xs font-semibold">所选文件</p>
+        <p class="font-heading text-xs font-semibold">文件浏览</p>
         <p class="truncate font-mono text-[11px] text-muted-foreground">
-          {{ selectedFiles.length ? `${selectedFiles.length} 个文件，将按当前媒体库生成计划` : '在树中选择文件或文件夹' }}
+          {{ selectedFiles.length ? `${selectedFiles.length} 个文件已选择` : '在树中选择文件或文件夹' }}
         </p>
       </div>
-      <Button
-        data-testid="generate-plan"
-        class="ml-auto bg-[var(--brand)] text-white hover:bg-[var(--brand)]"
-        size="sm"
-        :disabled="selectedFiles.length === 0 || plans.loading || loading"
-        @click="generatePlan"
-      >
-        <WandSparkles class="size-3.5" />
-        {{ plans.loading ? '生成中…' : `对所选文件生成计划${selectedFiles.length ? ` (${selectedFiles.length})` : ''}` }}
-      </Button>
     </div>
   </section>
 </template>

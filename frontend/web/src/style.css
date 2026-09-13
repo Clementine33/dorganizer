@@ -7,6 +7,22 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
+  The global shell breakpoint (N12): application width > 640px shows the
+  desktop rail, <= 640px the mobile bottom bar. One definition for every
+  consumer (AppShell, list-page menus) so the boundary cannot drift; the
+  workbench container tiers keep their own breakpoints in
+  `composables/use-container-tier.ts` (N10).
+*/
+@custom-variant rail (@media (width >= 641px));
+
+/*
+  Touch devices (N25, F15): the 44px minimum applies wherever the pointer is
+  coarse, at any width — a tablet at 900px is touch too, so this is a pointer
+  query rather than a width one.
+*/
+@custom-variant pointer-coarse (@media (pointer: coarse));
+
+/*
   Utility classes referenced by generated shadcn-vue components. The CLI
   normally writes these during `shadcn-vue add`; they must be kept here after
   any manual pruning of style.css.
@@ -64,10 +80,85 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-weak: var(--brand-weak);
+  --color-brand-border: var(--brand-border);
+  --color-success: var(--success);
+  --color-success-weak: var(--success-weak);
+  --color-success-border: var(--success-border);
+  --color-warning: var(--warning);
+  --color-warning-weak: var(--warning-weak);
+  --color-warning-border: var(--warning-border);
+  --color-danger: var(--danger);
+  --color-danger-weak: var(--danger-weak);
+  --color-danger-border: var(--danger-border);
+  --color-info: var(--info);
+  --color-info-weak: var(--info-weak);
+  --color-info-border: var(--info-border);
+  --color-control-border: var(--control-border);
   --font-sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-heading: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, monospace;
 }
+
+/*
+  Onsei Organizer design tokens — music-library workbench.
+
+  Two layers, one authority: the shadcn/semantic tokens above stay the
+  compatibility layer for existing pages (ADR 0004 §7.1, F04); the role tokens
+  below are the finite ladder the workset workbench consumes (F03). Components
+  never invent colors, sizes or durations — they read a role token.
+
+  Roles:
+    --brand-*      identity color for the workbench. The accepted reference is
+                   #5E6AD2; `--brand` is the FILL, `--brand-ink` is the
+                   readable text/link variant, and neither is the neutral
+                   shadcn `--accent` hover surface (F02).
+    --success/warning/danger/info-*   status roles, each with fill, readable
+                   ink, weak background and border variants. Status is never
+                   communicated by color alone: badges carry a label/icon.
+    --text-*       the three text weights (primary, secondary, muted).
+    --control-*    interactive control metrics and the control border, which is
+                   deliberately stronger than the decorative --border hairline
+                   so control boundaries and focus rings reach 3:1 (F05).
+    --row-h/--toolbar-h/--title-h  density for list rows, toolbars and page
+                   titles (F15): 40/36/40px base, sized in rem so zoom grows
+                   them instead of clipping text.
+    --motion-*     durations; a reduced-motion preference collapses them.
+
+  Contrast record (WCAG 2.1, computed from these literal values; ordinary text
+  >= 4.5:1, control boundary and focus indicator >= 3:1):
+
+    light                                          ratio
+      text-primary    #1C1917 on #F7F5F2            16.07
+      text-secondary  #57534E on #FFFFFF             7.63
+      text-muted      #6F6963 on #FFFFFF             5.42 / on #F7F5F2 4.98
+      brand-ink       #4B54B8 on #F7F5F2             5.92
+      brand fill      #FFFFFF on #5E6AD2             4.70
+      control border  #8A8175 on #FFFFFF             3.83
+      focus ring      #5E6AD2 on #FFFFFF             4.70
+      success ink     #146C36 on #E7F5EC             5.78
+      warning ink     #B45309 on #FBF0E3             4.47
+      danger ink      #B91C1C on #FBEBEB             5.60
+      info ink        #0369A1 on #E8F3F9             5.26
+      brand ink       #4B54B8 on #EEEFFB             5.64
+
+    dark
+      text-primary    #E6EAF0 on #0E1116            15.66
+      text-secondary  #B4BCC8 on #16181D             9.28
+      text-muted      #8B93A1 on #16181D             5.74
+      brand-ink       #8B93F0 on #16181D             6.37
+      brand fill      #0E1116 on #8B93F0            6.78
+      control border  #636D82 on #16181D             3.42
+      focus ring      #8B93F0 on #0E1116             6.78
+      success ink     #4ADE80 on #14251B             9.20
+      warning ink     #E0A458 on #2A2115             7.25
+      danger ink      #F87171 on #2A1818             6.11
+      info ink        #7DD3FC on #14232B             9.65
+      brand ink       #8B93F0 on #1E2130             5.72
+*/
 
 /*
   Onsei Organizer design tokens — music-library workbench.
@@ -106,7 +197,7 @@
   --secondary: #F0ECE6;
   --secondary-foreground: #1C1917;
   --muted: #F0ECE6;
-  --muted-foreground: #78716C;
+  --muted-foreground: #6F6963;
   --accent: #F0ECE6;
   --accent-foreground: #1C1917;
   --destructive: #B91C1C;
@@ -129,6 +220,53 @@
   --sidebar-accent-foreground: #1C1917;
   --sidebar-border: #E2DDD4;
   --sidebar-ring: #B45309;
+
+  /* --- Role tokens: brand ------------------------------------------------ */
+  --brand: #5E6AD2;
+  --brand-ink: #4B54B8;
+  --brand-foreground: #FFFFFF;
+  --brand-hover: #4F5AC4;
+  --brand-weak: #EEEFFB;
+  --brand-border: #C3C8F2;
+
+  /* --- Role tokens: status ----------------------------------------------- */
+  --success: #15803D;
+  --success-ink: #146C36;
+  --success-weak: #E7F5EC;
+  --success-border: #A7D8BA;
+  --warning: #B45309;
+  --warning-ink: #B45309;
+  --warning-weak: #FBF0E3;
+  --warning-border: #E4C193;
+  --danger: #B91C1C;
+  --danger-ink: #B91C1C;
+  --danger-weak: #FBEBEB;
+  --danger-border: #EBB0B0;
+  --danger-foreground: #FFFFFF;
+  --info: #0369A1;
+  --info-ink: #0369A1;
+  --info-weak: #E8F3F9;
+  --info-border: #A5CFE5;
+
+  /* --- Role tokens: text ------------------------------------------------- */
+  --text-primary: #1C1917;
+  --text-secondary: #57534E;
+  --text-muted: #6F6963;
+
+  /* --- Role tokens: controls, density, motion ---------------------------- */
+  --control-border: #8A8175;
+  --control-h: 2.25rem;
+  --control-h-sm: 1.75rem;
+  --control-h-lg: 2.5rem;
+  --touch-min: 2.75rem;
+  --input-font: 1rem;
+  --row-h: 2.5rem;
+  --toolbar-h: 2.25rem;
+  --title-h: 2.5rem;
+  --focus-ring: 2px;
+  --motion-fast: 120ms;
+  --motion-med: 200ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 .dark {
@@ -166,6 +304,37 @@
   --sidebar-accent-foreground: #E6EAF0;
   --sidebar-border: #262C37;
   --sidebar-ring: #D9A45B;
+
+  --brand: #8B93F0;
+  --brand-ink: #8B93F0;
+  --brand-foreground: #0E1116;
+  --brand-hover: #A3AAF4;
+  --brand-weak: #1E2130;
+  --brand-border: #454E86;
+
+  --success: #4ADE80;
+  --success-ink: #4ADE80;
+  --success-weak: #14251B;
+  --success-border: #2F6142;
+  --warning: #E0A458;
+  --warning-ink: #E0A458;
+  --warning-weak: #2A2115;
+  --warning-border: #6A5130;
+  --danger: #F87171;
+  --danger-ink: #F87171;
+  --danger-weak: #2A1818;
+  --danger-border: #6E3838;
+  --danger-foreground: #0E1116;
+  --info: #7DD3FC;
+  --info-ink: #7DD3FC;
+  --info-weak: #14232B;
+  --info-border: #31586B;
+
+  --text-primary: #E6EAF0;
+  --text-secondary: #B4BCC8;
+  --text-muted: #8B93A1;
+
+  --control-border: #636D82;
 }
 
 @layer base {
@@ -177,5 +346,14 @@
     font-size: 13px;
     line-height: 1.45;
     font-feature-settings: "cv11", "ss01";
+  }
+  /* The workbench reads role tokens; the reduced-motion preference collapses
+     them so container and carrier changes never animate against the user's
+     stated preference (F19). */
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --motion-fast: 1ms;
+      --motion-med: 1ms;
+    }
   }
 }

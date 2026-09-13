@@ -1,16 +1,29 @@
 import { createPinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { VueQueryPlugin, type QueryClient } from '@tanstack/vue-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiError, apiClientKey } from '@/lib/api/client'
+import { apiStub as sharedApiStub } from '@/test/api-stub'
+import { desktopAdapterKey, type DesktopAdapter } from '@/lib/desktop/desktop-adapter'
 import type {
   ApiClientContract,
   Folder,
   Library,
-  PlanResponse,
   ScanEvent,
 } from '@/lib/api/types'
+import { createTestQueryClient } from '@/test/query-client'
 import LibrariesPage from './LibrariesPage.vue'
+
+// jsdom has no layout, so the folder-list virtualizer's scroller measures a
+// 0-height viewport and renders an empty window. Give every element a
+// viewport-sized box in this file only (the 0-layout semantics itself is
+// covered explicitly in FolderFlatList.test.ts 'renders an empty window…').
+// Set AFTER restoreAllMocks so the describe-level reset cannot strip them.
+function stubViewportMetrics(): void {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800)
+}
 
 const library: Library = {
   id: 'lib-a',
@@ -28,59 +41,45 @@ const folders: Folder[] = [
   { id: 'folder-b', name: 'Kind of Blue', path: 'D:\\Music\\Kind of Blue', relative_path: 'Kind of Blue', audio_file_count: 6 },
 ]
 
-const plan: PlanResponse = {
-  plan_id: 'plan-1',
-  snapshot_token: 'snap-1',
-  root_path: 'D:\\Music',
-  summary: {
-    operation_count: 1,
-    error_count: 0,
-    total_count: 1,
-    actionable_count: 1,
-    summary_reason: 'ACTIONABLE',
-  },
-  operations: [],
-  errors: [],
-  successful_folders: ['D:\\Music\\Blue Train'],
-}
-
 function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract {
-  return {
-    getHealth: vi.fn(),
+  return sharedApiStub({
     listLibraries: vi.fn().mockResolvedValue([library]),
-    getLibrary: vi.fn(),
-    createLibrary: vi.fn(),
-    updateLibrary: vi.fn(),
-    deleteLibrary: vi.fn(),
     scanLibrary: vi.fn(() =>
       (async function* (): AsyncGenerator<ScanEvent> {
         yield { type: 'completed', data: { stage: 'scan', scan_id: 'scan-1', root_path: library.root_path, files_scanned: 11 } }
       })(),
     ),
     listFolders: vi.fn().mockResolvedValue(folders),
-    getFolderTree: vi.fn(),
-    getPlan: vi.fn(),
-    createPlan: vi.fn().mockResolvedValue(plan),
-    listPlans: vi.fn(),
     ...overrides,
-  }
+  })
 }
 
 async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper; router: Router }> {
+  return mountPageWithClient(api, createTestQueryClient())
+}
+
+async function mountPageWithClient(
+  api: ApiClientContract,
+  queryClient: QueryClient,
+): Promise<{ wrapper: VueWrapper; router: Router }> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/libraries', component: LibrariesPage },
       { path: '/libraries/:libraryId/folders/:folderId', component: { template: '<div>folder</div>' } },
-      { path: '/plans/:id', component: { template: '<div>plan</div>' } },
     ],
   })
   await router.push('/libraries')
   await router.isReady()
   const wrapper = mount(LibrariesPage, {
     global: {
-      plugins: [createPinia(), router],
-      provide: { [apiClientKey as symbol]: api },
+      plugins: [createPinia(), router, [VueQueryPlugin, { queryClient }]],
+      provide: {
+        [apiClientKey as symbol]: api,
+        [desktopAdapterKey as symbol]: {
+          pickFolder: vi.fn().mockResolvedValue(null),
+        } as unknown as DesktopAdapter,
+      },
     },
   })
   await flushPromises()
@@ -88,7 +87,10 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
 }
 
 describe('LibrariesPage', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    stubViewportMetrics()
+  })
 
   it('renders a library switcher and the flat folder list', async () => {
     const { wrapper } = await mountPage(apiStub())
@@ -97,6 +99,12 @@ describe('LibrariesPage', () => {
     expect(wrapper.text()).toContain('Blue Train')
     expect(wrapper.text()).toContain('5 个音频文件')
     expect(wrapper.text()).toContain('D:\\Music')
+  })
+
+  it('exposes the 更多 trigger that carries the mobile theme entry in the page header', async () => {
+    const { wrapper } = await mountPage(apiStub())
+
+    expect(wrapper.get('header').find('[aria-label="更多"]').exists()).toBe(true)
   })
 
   it('shows the API envelope code in the recovery banner', async () => {
@@ -160,54 +168,144 @@ describe('LibrariesPage', () => {
     release()
   })
 
-  it('selects folders and creates one batch plan before navigating to review', async () => {
-    const api = apiStub()
+  it('selects folders, opens the create dialog, and creates one workset before navigating to it', async () => {
+    const api = apiStub({
+      createWorkset: vi.fn().mockResolvedValue({
+        workset: {
+          workset_id: 'ws-1', title: 't', version: 1, library: null, planning_state: 'unplanned',
+          current_revision: null, active_generation: null, latest_generation: null, members: [],
+          updated_at: '', created_at: '',
+        },
+        created: true,
+      }),
+    })
     const { wrapper, router } = await mountPage(api)
-    const planButton = wrapper.get('[data-testid="generate-plan"]')
-    expect(planButton.attributes('disabled')).toBeDefined()
+    // The batch bar belongs to a selection: with nothing checked there is no
+    // empty strip and no create button (N15, L07).
+    expect(wrapper.find('[data-testid="create-workset"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="folder-checkbox-folder-a"]').setValue(true)
-    expect(planButton.attributes('disabled')).toBeUndefined()
+    const createButton = wrapper.get('[data-testid="create-workset"]')
+    expect(createButton.attributes('disabled')).toBeUndefined()
+    expect(createButton.text()).toContain('创建工作集 (1)')
 
-    await planButton.trigger('click')
+    await createButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="create-workset-dialog"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="workset-folder-review"]').text()).toContain('Blue Train')
+
+    await wrapper.get('[data-testid="confirm-create-workset"]').trigger('click')
     await flushPromises()
 
-    expect(api.createPlan).toHaveBeenCalledWith({
-      library_id: 'lib-a',
-      folder_ids: ['folder-a'],
-      plan_type: 'slim',
-      target_format: 'slim:mode1',
-      prune_matched_excluded: false,
-    })
-    expect(router.currentRoute.value.fullPath).toBe('/plans/plan-1')
+    expect(api.createWorkset).toHaveBeenCalledTimes(1)
+    const [input, key] = vi.mocked(api.createWorkset).mock.calls[0]
+    expect(input).toEqual({ library_id: 'lib-a', title: 'Lossless archive 工作集', folder_ids: ['folder-a'] })
+    expect(String(key)).not.toBe('')
+    expect(router.currentRoute.value.fullPath).toBe('/worksets/ws-1')
   })
 
-  it('retries the failed plan request from the page error banner', async () => {
-    const failure = new ApiError(500, 'INTERNAL', 'failed to create plan')
-    const api = apiStub({
-      createPlan: vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(plan),
-    })
-    const { wrapper, router } = await mountPage(api)
-
+  it('rejects an empty workset title in the create dialog', async () => {
+    const api = apiStub()
+    const { wrapper } = await mountPage(api)
     await wrapper.get('[data-testid="folder-checkbox-folder-a"]').setValue(true)
-    await wrapper.get('[data-testid="generate-plan"]').trigger('click')
+    await wrapper.get('[data-testid="create-workset"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="page-error"]').text()).toContain('failed to create plan')
 
-    await wrapper.get('[data-testid="retry-page"]').trigger('click')
-    await flushPromises()
-    expect(api.createPlan).toHaveBeenCalledTimes(2)
-    expect(router.currentRoute.value.fullPath).toBe('/plans/plan-1')
+    const input = wrapper.get('[data-testid="workset-title-input"]')
+    await input.setValue('   ')
+    expect(wrapper.get('[data-testid="confirm-create-workset"]').attributes('disabled')).toBeDefined()
+    expect(api.createWorkset).not.toHaveBeenCalled()
   })
 
   it('selects every folder from the table header and opens folder detail from its name', async () => {
     const { wrapper, router } = await mountPage(apiStub())
 
     await wrapper.get('[data-testid="select-all-folders"]').setValue(true)
-    expect(wrapper.get('[data-testid="generate-plan"]').text()).toContain('2')
+    expect(wrapper.get('[data-testid="create-workset"]').text()).toContain('2')
 
     await wrapper.get('[data-testid="folder-link-folder-b"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/libraries/lib-a/folders/folder-b')
+  })
+
+  it('fetches folders exactly once on a cold mount', async () => {
+    const api = apiStub()
+    await mountPage(api)
+
+    expect(api.listLibraries).toHaveBeenCalledTimes(1)
+    expect(api.listFolders).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides scan progress on other libraries without cancelling the running scan', async () => {
+    let release!: () => void
+    const scanLibrary = vi.fn((_id: string, signal: AbortSignal) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'started', data: { stage: 'scan', message: 'Scanning' } } as ScanEvent
+        await new Promise<void>((resolve) => {
+          release = resolve
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        if (signal.aborted) yield { type: 'cancelled', data: { stage: 'scan', message: 'scan canceled' } } as ScanEvent
+      },
+    }))
+    const secondLibrary: Library = { ...library, id: 'lib-b', name: 'Other library' }
+    const { wrapper } = await mountPage(apiStub({ scanLibrary, listLibraries: vi.fn().mockResolvedValue([library, secondLibrary]) }))
+
+    await wrapper.get('[data-testid="scan-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(true)
+
+    // Switch to another library: progress + cancel hide, the backend scan
+    // keeps running, and the disabled scan button still signals the
+    // background scan.
+    await wrapper.get('[aria-label="切换媒体库"]').setValue('lib-b')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="scan-button"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('扫描中…')
+    expect(scanLibrary.mock.calls[0]?.[1].aborted).toBe(false)
+
+    // Switching back reveals the still-running scan.
+    await wrapper.get('[aria-label="切换媒体库"]').setValue('lib-a')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-scan"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('扫描中…')
+    await wrapper.get('[data-testid="cancel-scan"]').trigger('click')
+    await flushPromises()
+    release()
+  })
+
+  it('clears folder selection when the active library root genuinely changes', async () => {
+    const api = apiStub({
+      updateLibrary: vi.fn().mockResolvedValue({ ...library, root_path: 'E:\\NewRoot' }),
+    })
+    const { wrapper } = await mountPage(api)
+
+    await wrapper.get('[data-testid="folder-checkbox-folder-a"]').setValue(true)
+    expect(wrapper.get('[data-testid="create-workset"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[aria-label="编辑媒体库"]').trigger('click')
+    await wrapper.get('#library-root').setValue('E:\\NewRoot')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateLibrary).toHaveBeenCalledWith('lib-a', { name: 'Lossless archive', root_path: 'E:\\NewRoot' })
+    // The selection was cleared with the root change, so the batch bar is gone.
+    expect(wrapper.find('[data-testid="create-workset"]').exists()).toBe(false)
+  })
+
+  it('remounts from the cached folder list without issuing new GETs', async () => {
+    const api = apiStub()
+    const queryClient = createTestQueryClient()
+
+    const first = await mountPageWithClient(api, queryClient)
+    expect(first.wrapper.text()).toContain('Blue Train')
+    first.wrapper.unmount()
+    await flushPromises()
+
+    const second = await mountPageWithClient(api, queryClient)
+    expect(second.wrapper.text()).toContain('Blue Train')
+    expect(api.listLibraries).toHaveBeenCalledTimes(1)
+    expect(api.listFolders).toHaveBeenCalledTimes(1)
   })
 })
