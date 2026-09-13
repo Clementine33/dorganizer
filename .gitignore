@@ -26,7 +26,6 @@ frontend/flutter_app/.dev_data
 
 # AI
 .worktrees/
-docs/plans
 .claude/
 .pi/
 .superpowers/
