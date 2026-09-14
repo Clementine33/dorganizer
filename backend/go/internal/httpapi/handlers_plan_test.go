@@ -121,9 +121,9 @@ func seedWorkflowFolder(
 	insertEntryMeta(t, repo, "/music", "", "music", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA", "/music", "albumA", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, nil, "flac")
-	insertEntryMeta(t, repo, "/music/albumA/01.mp3", "/music/albumA", "01.mp3", false, 1234, int64Ptr(0), "mpeg")
+	insertEntryMeta(t, repo, "/music/albumA/01.mp3", "/music/albumA", "01.mp3", false, 1234, ptr(int64(0)), "mpeg")
 	insertEntryMeta(t, repo, "/music/albumA/02.flac", "/music/albumA", "02.flac", false, 2048, nil, "flac")
-	insertEntryMeta(t, repo, "/music/albumA/02.mp3", "/music/albumA", "02.mp3", false, 2048, int64Ptr(0), "mpeg")
+	insertEntryMeta(t, repo, "/music/albumA/02.mp3", "/music/albumA", "02.mp3", false, 2048, ptr(int64(0)), "mpeg")
 	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {
 		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
 	}
@@ -136,8 +136,6 @@ func seedWorkflowFolder(
 	}
 	return libID, folders[0]
 }
-
-func int64Ptr(v int64) *int64 { return &v }
 
 // =============================================================================
 // Workflow create
@@ -319,7 +317,7 @@ func TestCreateSingleActionDelete(t *testing.T) {
 
 	libID := createLibraryViaAPI(t, engine, "Music", rootPosix)
 	insertEntryMeta(t, repo, rootPosix, "", "Music", true, 0, nil, "")
-	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, int64Ptr(320000), "mpeg")
+	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, ptr(int64(320000)), "mpeg")
 
 	w := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
 		"library_id": libID,
@@ -447,7 +445,7 @@ func TestSingleActionDetailCarriesPlanKind(t *testing.T) {
 
 	libID := createLibraryViaAPI(t, engine, "Music", rootPosix)
 	insertEntryMeta(t, repo, rootPosix, "", "Music", true, 0, nil, "")
-	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, int64Ptr(320000), "mpeg")
+	insertEntryMeta(t, repo, sourcePosix, rootPosix, "01.mp3", false, 5, ptr(int64(320000)), "mpeg")
 
 	created := doRequest(t, engine, http.MethodPost, "/api/v1/plans", map[string]any{
 		"library_id": libID,

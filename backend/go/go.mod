@@ -1,6 +1,6 @@
 module github.com/onsei/organizer/backend
 
-go 1.25.0
+go 1.27.1
 
 require (
 	facette.io/natsort v0.0.0-20181210072756-2cd4dd1e2dcb

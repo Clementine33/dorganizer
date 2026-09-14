@@ -256,8 +256,7 @@ func runServer(
 			if errors.As(err, &opErr) {
 				sysErr := &os.SyscallError{}
 				if errors.As(opErr.Err, &sysErr) {
-					var errno syscall.Errno
-					if errors.As(sysErr.Err, &errno) {
+					if _, ok := errors.AsType[syscall.Errno](sysErr.Err); ok {
 						return
 					}
 				}

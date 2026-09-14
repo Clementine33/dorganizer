@@ -150,8 +150,7 @@ func TestDelete_SoftDelete_PermissionDenied_NoRetry(t *testing.T) {
 	}
 
 	// EXPECTED: Error should be a ToolError with appropriate code
-	var toolErr *ToolError
-	if errors.As(err, &toolErr) {
+	if toolErr, ok := errors.AsType[*ToolError](err); ok {
 		if toolErr.Code != errdomain.FILE_LOCKED {
 			t.Errorf("Expected error code FILE_LOCKED for permission denied, got %v", toolErr.Code)
 		}

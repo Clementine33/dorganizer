@@ -72,8 +72,7 @@ func (e *Error) Unwrap() error { return e.Cause }
 
 // AsError extracts a *Error from an error chain.
 func AsError(err error) (*Error, bool) {
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*Error](err); ok {
 		return e, true
 	}
 	return nil, false

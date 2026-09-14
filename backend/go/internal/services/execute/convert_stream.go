@@ -56,8 +56,7 @@ func (s *ExecuteService) processConvertJob(
 	}
 
 	if err := runtime.runEncoderToTmpFn(src, tmpOut, runtime); err != nil {
-		var openErr *sourceOpenError
-		if errors.As(err, &openErr) {
+		if openErr, ok := errors.AsType[*sourceOpenError](err); ok {
 			return &stageFailureError{stage: "stage1", itemIndex: itemIndex, err: openErr}
 		}
 		return &stageFailureError{stage: "stage2", itemIndex: itemIndex, err: err}

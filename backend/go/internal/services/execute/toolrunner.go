@@ -289,8 +289,7 @@ func (r *ToolRunner) softDelete(path string) error {
 
 // isPermissionDenied checks if the error is a permission denied error.
 func isPermissionDenied(err error) bool {
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
 		return errors.Is(pathErr.Err, os.ErrPermission)
 	}
 	return false
@@ -298,8 +297,7 @@ func isPermissionDenied(err error) bool {
 
 // isLockedOrBusy checks if the error indicates a locked or busy file.
 func isLockedOrBusy(err error) bool {
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
 		errStr := pathErr.Err.Error()
 		// Windows locked/busy indicators
 		if strings.Contains(errStr, "locked") ||

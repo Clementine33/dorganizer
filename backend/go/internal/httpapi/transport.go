@@ -22,8 +22,7 @@ type payloadError struct {
 func (e *payloadError) Error() string { return e.message }
 
 func asPayloadError(err error) (*payloadError, bool) {
-	var pe *payloadError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*payloadError](err); ok {
 		return pe, true
 	}
 	return nil, false
@@ -75,8 +74,7 @@ func decodeJSONAllowEmpty(w http.ResponseWriter, r *http.Request, dst any) error
 }
 
 func classifyDecodeError(err error) error {
-	var maxErr *http.MaxBytesError
-	if errors.As(err, &maxErr) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return &payloadError{http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "request body too large"}
 	}
 	return &payloadError{http.StatusBadRequest, "INVALID_ARGUMENT", "invalid JSON payload"}

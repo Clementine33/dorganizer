@@ -90,6 +90,16 @@ func errorEnvelope(t *testing.T, w *httptest.ResponseRecorder) (code, message st
 	return env.Code, env.Message
 }
 
+// ptr returns a pointer to a copy of v for nullable DTO fixture fields.
+//
+// The body uses new(expr) (Go 1.26+) rather than &v so the modernize newexpr
+// analyzer stays quiet. Do not add //go:fix inline: govet's inline pass would
+// then report every call site, and it cannot inline generic calls at all
+// ("type parameter inference is not yet supported"). Call sites must pass a
+// typed value, e.g. ptr(int64(320)), since inference would otherwise pick the
+// untyped constant's default type (int).
+func ptr[T any](v T) *T { return new(v) }
+
 func TestHealthEndpoint(t *testing.T) {
 	engine := newTestServer(t, nil)
 

@@ -120,8 +120,7 @@ func MapError(err error) errdomain.DomainErrorCode {
 		return 0
 	}
 
-	var toolErr *ToolError
-	if errors.As(err, &toolErr) {
+	if toolErr, ok := errors.AsType[*ToolError](err); ok {
 		return toolErr.Code
 	}
 

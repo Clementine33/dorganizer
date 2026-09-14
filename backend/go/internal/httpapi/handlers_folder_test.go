@@ -9,9 +9,6 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// int64ptr returns a pointer to v for nullable DTO assertions.
-func int64ptr(v int64) *int64 { return &v }
-
 // insertEntryMeta inserts a row into the entries table with size/bitrate/
 // format metadata, under the fixed root /music.
 func insertEntryMeta(
@@ -65,7 +62,7 @@ func TestListLibraryFolders(t *testing.T) {
 	// Seed entries and derive the folders through the repo, mirroring a scan.
 	insertEntryMeta(t, repo, "/music", "", "music", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA", "/music", "albumA", true, 0, nil, "")
-	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, int64ptr(320), "flac")
+	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, ptr(int64(320)), "flac")
 	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {
 		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
 	}
@@ -118,7 +115,7 @@ func TestFolderTree(t *testing.T) {
 	insertEntryMeta(t, repo, "/music", "", "music", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA", "/music", "albumA", true, 0, nil, "")
 	insertEntryMeta(t, repo, "/music/albumA/disc2", "/music/albumA", "disc2", true, 0, nil, "")
-	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, int64ptr(320), "flac")
+	insertEntryMeta(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false, 1234, ptr(int64(320)), "flac")
 	insertEntryMeta(t, repo, "/music/albumA/disc2/02.flac", "/music/albumA/disc2", "02.flac", false, 2048, nil, "flac")
 	insertEntryMeta(t, repo, "/music/albumA/cover.jpg", "/music/albumA", "cover.jpg", false, 999, nil, "")
 	if _, err := repo.ReplaceLibraryFolders(libID, "/music"); err != nil {

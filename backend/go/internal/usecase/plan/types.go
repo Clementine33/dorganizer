@@ -168,8 +168,7 @@ func (e *Error) Unwrap() error {
 
 // AsError extracts a *plan.Error from an error chain. Returns nil, false if not a plan.Error.
 func AsError(err error) (*Error, bool) {
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*Error](err); ok {
 		return e, true
 	}
 	return nil, false

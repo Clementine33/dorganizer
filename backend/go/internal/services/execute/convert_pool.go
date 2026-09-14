@@ -344,8 +344,7 @@ func (s *ExecuteService) executeConvertBatchWithPool(
 				if domain != "" {
 					failedDomains.Store(domain, struct{}{})
 				}
-				var stageErr *stageFailureError
-				if errors.As(err, &stageErr) {
+				if stageErr, ok := errors.AsType[*stageFailureError](err); ok {
 					recordFailure(itemFailure{itemIndex: itemIndex, stage: stageErr.stage, err: stageErr})
 					continue
 				}
