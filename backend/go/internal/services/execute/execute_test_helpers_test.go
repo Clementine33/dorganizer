@@ -3,7 +3,16 @@ package execute //nolint:testpackage // white-box tests exercise unexported inte
 import (
 	"os"
 	"sync"
+	"testing"
 )
+
+// validToolsConfig resolves both binaries to the test executable, so convert
+// preflight passes without requiring ffmpeg on PATH.
+func validToolsConfig(t *testing.T) ToolsConfig {
+	t.Helper()
+	bin := getValidExecutablePath(t)
+	return ToolsConfig{FFmpegPath: bin, FFprobePath: bin}
+}
 
 type mockBatchBarrierRunner struct {
 	mu              sync.Mutex

@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -56,61 +55,28 @@ func (e sentinelError) Error() string { return e.msg }
 
 var _ = exesvc.PlanItem{} // ensure import used
 
-// fakeEncoderSource is a tiny native encoder: it copies the source argument to
-// the output argument and exits 0, matching the lame encoder argument layout
-// (-b 320 <src> <out>). It is compiled at test time so no shell script or
-// platform-specific batch file is needed.
-const fakeEncoderSource = `package main
-
-import (
-	"io"
-	"os"
-)
-
-func main() {
-	args := os.Args[1:]
-	if len(args) < 2 {
-		os.Exit(1)
-	}
-	src, dst := args[len(args)-2], args[len(args)-1]
-	in, err := os.Open(src)
-	if err != nil {
-		os.Exit(1)
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		os.Exit(1)
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		os.Exit(1)
-	}
-	if err := out.Close(); err != nil {
-		os.Exit(1)
-	}
-}
-`
-
-// createFakeEncoder builds a deterministic fake encoder executable for tests.
-// It copies src to dst and exits 0, ensuring the convert success path works on
-// both Windows and Linux without relying on a batch interpreter.
-func createFakeEncoder(t *testing.T, tmpDir string) string {
+// writeAudioFixture writes a real 2s stereo WAV with the ffmpeg on PATH, so the
+// adapter can probe and encode it.
+func writeAudioFixture(t *testing.T, path string) os.FileInfo {
 	t.Helper()
-	srcFile := filepath.Join(tmpDir, "fake_encoder_main.go")
-	if err := os.WriteFile(srcFile, []byte(fakeEncoderSource), 0o600); err != nil {
-		t.Fatalf("failed to write fake encoder source: %v", err)
-	}
-	encoderPath := filepath.Join(tmpDir, "fake_lame")
-	if runtime.GOOS == "windows" {
-		encoderPath += ".exe"
-	}
-	cmd := exec.Command("go", "build", "-o", encoderPath, srcFile)
-	cmd.Dir = tmpDir
+	cmd := exec.Command(
+		"ffmpeg",
+		"-nostdin",
+		"-v", "error",
+		"-f", "lavfi",
+		"-i", "anoisesrc=duration=2:sample_rate=44100:seed=1",
+		"-ac", "2",
+		"-c:a", "pcm_s16le",
+		path,
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("failed to build fake encoder: %v\n%s", err, out)
+		t.Fatalf("ffmpeg fixture: %v: %s", err, out)
 	}
-	return encoderPath
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
 }
 
 // findErrorEventByCode queries error_events directly for a given code, returning

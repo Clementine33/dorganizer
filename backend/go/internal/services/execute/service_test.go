@@ -8,10 +8,11 @@ import (
 )
 
 // TestConvertWithoutToolPath tests that empty tool path returns TOOL_NOT_FOUND.
-// This is the only coverage of the empty-QAACPath guard in convertWithQAAC,
+// This is the only coverage of the PATH lookup in ffmpeg preflight,
 // distinct from the LookPath-missing branch covered by TestExecuteReturnsToolNotFoundCode.
 func TestConvertWithoutToolPath(t *testing.T) {
-	svc := NewService(ToolsConfig{Encoder: "qaac"})
+	t.Setenv("PATH", t.TempDir())
+	svc := NewService(ToolsConfig{})
 	tmp := t.TempDir()
 
 	item := PlanItem{
@@ -33,8 +34,8 @@ func TestConvertWithoutToolPath(t *testing.T) {
 
 // TestExecuteReturnsToolNotFoundCode tests that convert with missing tool returns TOOL_NOT_FOUND.
 func TestExecuteReturnsToolNotFoundCode(t *testing.T) {
-	// Use a non-existent qaac path to trigger TOOL_NOT_FOUND
-	svc := NewService(ToolsConfig{Encoder: "qaac", QAACPath: "/nonexistent/qaac.exe"})
+	// Use a non-existent ffmpeg path to trigger TOOL_NOT_FOUND
+	svc := NewService(ToolsConfig{FFmpegPath: "/nonexistent/ffmpeg"})
 	tmp := t.TempDir()
 
 	item := PlanItem{

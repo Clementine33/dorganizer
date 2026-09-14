@@ -80,11 +80,7 @@ func TestExecutePlan_MixedOrdering_ConvertFailStopsDelete(t *testing.T) {
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that fails conversion
 	mockRunner := newMockPipelineRunner()
@@ -145,11 +141,7 @@ func TestExecutePlan_MixedOrdering_ConvertSuccessThenDelete(t *testing.T) {
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that succeeds
 	mockRunner := newMockPipelineRunner()
@@ -212,7 +204,7 @@ func TestExecutePlan_BatchFailure_SkipsConvertedSourceDelete(t *testing.T) {
 		},
 	}}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	runner.convertFailures[srcB] = errors.New("forced convert failure")
 	svc.SetRunner(runner)
@@ -267,7 +259,7 @@ func TestExecutePlan_BatchSuccess_ConvertedSourcesDeletedBeforeExplicitDelete(t 
 		{Type: ItemTypeDelete, SourcePath: explicitDelete, PreconditionPath: explicitDelete, PreconditionSize: 4},
 	}}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	svc.SetRunner(runner)
 
@@ -322,7 +314,7 @@ func TestExecutePlan_MissingSourceRoutesToStage1Callback(t *testing.T) {
 		PreconditionSize: int64(len("audio")),
 	}}}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	h := newMockEventHandler()
 	svc.SetEventHandler(h)
 
@@ -373,7 +365,7 @@ func TestExecutePlan_DeleteBarrierFailure_RoutesToOnDeleteFailed(t *testing.T) {
 		},
 	}}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	// Make delete fail for source A - this tests delete-barrier failure routing
 	runner.deleteFailures[srcA] = errors.New("simulated delete failure for source A")
@@ -471,11 +463,7 @@ func TestExecutePlan_NonRootedDeleteBarrierFailure_StopsExecution(t *testing.T) 
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	runner := newMockBatchBarrierRunner()
 	// Make delete fail for srcA - this is a converted-source delete barrier failure
@@ -544,11 +532,7 @@ func TestConvertFailure_DoesNotDeleteSourceFile(t *testing.T) {
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockPipelineRunner()
 	mockRunner.failOnConvertIndex = 0

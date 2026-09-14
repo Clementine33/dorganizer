@@ -1,139 +1,51 @@
-package execute //nolint:testpackage // white-box tests exercise unexported internals
+package execute_test
 
 import (
-	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
-	errdomain "github.com/onsei/organizer/backend/internal/errors"
+	"github.com/onsei/organizer/backend/internal/services/execute"
 )
 
-// capturedCmd stores the captured command for testing.
-type capturedCmd struct {
-	argv []string
-	err  error
+// TestToolRunnerAACBitrate checks the real adapter's subprocess arguments.
+func TestToolRunnerAACBitrate(t *testing.T) { checkToolRunnerArguments(t, ".m4a", "aac", "256k") }
+
+func TestToolRunnerMP3Bitrate(t *testing.T) {
+	checkToolRunnerArguments(t, ".mp3", "libmp3lame", "320k")
 }
 
-// toolRunnerWithCapture is a ToolRunner that captures commands instead of executing them.
-type toolRunnerWithCapture struct {
-	toolsConfig  ToolsConfig
-	capturedQAAC *capturedCmd
-	capturedLAME *capturedCmd
-}
-
-func newToolRunnerWithCapture(config ToolsConfig) *toolRunnerWithCapture {
-	return &toolRunnerWithCapture{
-		toolsConfig:  config,
-		capturedQAAC: &capturedCmd{},
-		capturedLAME: &capturedCmd{},
+func checkToolRunnerArguments(t *testing.T, extension, codec, bitrate string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("argument recorder uses a POSIX shell; real codec tests are portable")
 	}
-}
-
-// Convert implements the conversion by capturing the argv.
-func (r *toolRunnerWithCapture) Convert(src, dst string) error {
-	encoder := r.toolsConfig.Encoder
-	switch encoder {
-	case "qaac":
-		return r.convertWithQAAC(src, dst)
-	case "lame":
-		return r.convertWithLAME(src, dst)
-	default:
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "invalid encoder: must be 'qaac' or 'lame'",
-			Err:     errors.New("invalid encoder"),
-		}
+	_, src := audioFixture(t)
+	dir := t.TempDir()
+	recorder := filepath.Join(dir, "ffmpeg-recorder")
+	logPath := filepath.Join(dir, "arguments")
+	t.Setenv("ONSEI_TEST_FFMPEG_ARGS", logPath)
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$ONSEI_TEST_FFMPEG_ARGS\"\nexec ffmpeg \"$@\"\n"
+	if err := os.WriteFile(recorder, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
 	}
-}
-
-// convertWithQAACCapture captures argv without executing.
-func (r *toolRunnerWithCapture) convertWithQAAC(src, dst string) error {
-	r.capturedQAAC.argv = []string{
-		r.toolsConfig.QAACPath,
-		"--ignorelength",
-		"--no-optimize",
-		"-s",
-		"-v", "256",
-		"-o", dst,
-		src,
+	runner := execute.NewToolRunner(execute.ToolsConfig{FFmpegPath: recorder})
+	if err := runner.Convert(src, filepath.Join(dir, "output"+extension)); err != nil {
+		t.Fatal(err)
 	}
-	return r.capturedQAAC.err
-}
-
-// convertWithLAMECapture captures argv without executing.
-func (r *toolRunnerWithCapture) convertWithLAME(src, dst string) error {
-	r.capturedLAME.argv = []string{
-		r.toolsConfig.LAMEPath,
-		"-b", "320",
-		src,
-		dst,
-	}
-	return r.capturedLAME.err
-}
-
-func (r *toolRunnerWithCapture) Delete(path string, soft bool) error {
-	return os.Remove(path)
-}
-
-// TestQAAC_ExactArgv_AssertsCorrectArguments validates qaac command uses exact expected argv.
-func TestQAAC_ExactArgv_AssertsCorrectArguments(t *testing.T) {
-	runner := newToolRunnerWithCapture(ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: "/path/to/qaac.exe",
-	})
-
-	err := runner.Convert("/input/song.wav", "/output/song.m4a")
+	raw, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("conversion failed: %v", err)
+		t.Fatal(err)
 	}
-
-	expectedArgv := []string{
-		"/path/to/qaac.exe",
-		"--ignorelength",
-		"--no-optimize",
-		"-s",
-		"-v", "256",
-		"-o", "/output/song.m4a",
-		"/input/song.wav",
-	}
-
-	if len(runner.capturedQAAC.argv) != len(expectedArgv) {
-		t.Fatalf("qaac argv length mismatch: expected %d, got %d", len(expectedArgv), len(runner.capturedQAAC.argv))
-	}
-
-	for i, arg := range expectedArgv {
-		if runner.capturedQAAC.argv[i] != arg {
-			t.Errorf("qaac argv[%d]: expected %q, got %q", i, arg, runner.capturedQAAC.argv[i])
+	args := string(raw)
+	for _, want := range []string{"-c:a\n" + codec + "\n", "-b:a\n" + bitrate + "\n"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("missing %q in arguments: %s", want, args)
 		}
 	}
-}
-
-// TestLAME_ExactArgv_AssertsCorrectArguments validates lame command uses exact expected argv.
-func TestLAME_ExactArgv_AssertsCorrectArguments(t *testing.T) {
-	runner := newToolRunnerWithCapture(ToolsConfig{
-		Encoder:  "lame",
-		LAMEPath: "/path/to/lame.exe",
-	})
-
-	err := runner.Convert("/input/song.wav", "/output/song.mp3")
-	if err != nil {
-		t.Fatalf("conversion failed: %v", err)
-	}
-
-	expectedArgv := []string{
-		"/path/to/lame.exe",
-		"-b", "320",
-		"/input/song.wav",
-		"/output/song.mp3",
-	}
-
-	if len(runner.capturedLAME.argv) != len(expectedArgv) {
-		t.Fatalf("lame argv length mismatch: expected %d, got %d", len(expectedArgv), len(runner.capturedLAME.argv))
-	}
-
-	for i, arg := range expectedArgv {
-		if runner.capturedLAME.argv[i] != arg {
-			t.Errorf("lame argv[%d]: expected %q, got %q", i, arg, runner.capturedLAME.argv[i])
-		}
+	if strings.Contains(args, "-q:a\n") || strings.Contains(args, "--cvbr\n") {
+		t.Fatalf("unexpected VBR option: %s", args)
 	}
 }

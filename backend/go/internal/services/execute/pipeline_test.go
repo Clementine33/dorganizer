@@ -143,11 +143,7 @@ func TestExecutePlan_FailFast_StopsOnFirstError(t *testing.T) {
 	plan := &Plan{PlanID: "plan-failfast", Items: items}
 
 	// Create service with valid tools config
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that fails on first convert
 	mockRunner := newMockPipelineRunner()
@@ -243,11 +239,7 @@ func TestExecutePlan_FailFast_StopsFeedingTasks(t *testing.T) {
 	}
 	plan := &Plan{PlanID: "plan-failfast-many", Items: items}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that fails on 3rd convert (allows some to succeed first)
 	mockRunner := newMockPipelineRunner()
@@ -344,11 +336,7 @@ func TestExecutePlan_Stage3_OriginalSourcePreservedOnConvertFailure(t *testing.T
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that fails conversion
 	mockRunner := newMockPipelineRunner()
@@ -401,11 +389,7 @@ func TestExecutePlan_Stage3_DeletesOriginalOnSuccess(t *testing.T) {
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that succeeds
 	mockRunner := newMockPipelineRunner()
@@ -463,11 +447,7 @@ func TestExecutePlan_Overlap_PartialSuccessThenFail(t *testing.T) {
 	}
 	plan := &Plan{PlanID: "plan-partial-fail", Items: items}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Inject mock runner that fails on 3rd convert (index 2)
 	mockRunner := newMockPipelineRunner()
@@ -532,11 +512,7 @@ func TestExecutePlan_Cleanup_RemovesScratchOnSuccess(t *testing.T) {
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockPipelineRunner()
 	svc.SetRunner(mockRunner)
@@ -589,11 +565,7 @@ func TestExecutePlan_Cleanup_RemovesScratchOnFailure(t *testing.T) {
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockPipelineRunner()
 	mockRunner.failOnConvertIndex = 0
@@ -655,11 +627,7 @@ func TestExecutePlan_FailedConvertNotCommitted(t *testing.T) {
 	}
 	plan := &Plan{PlanID: "plan-failed-convert-not-committed", Items: items}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	// Mock runner fails on FIRST item (index 0)
 	mockRunner := newMockPipelineRunner()

@@ -222,7 +222,7 @@ func TestDelete_SoftDelete_RelativePath_ReturnsError(t *testing.T) {
 }
 
 func TestConvert_RelativePaths_ReturnsError(t *testing.T) {
-	runner := NewToolRunner(ToolsConfig{Encoder: "qaac", QAACPath: "qaac"})
+	runner := NewToolRunner(ToolsConfig{})
 
 	err := runner.Convert("relative/in.wav", "relative/out.m4a")
 	if err == nil {

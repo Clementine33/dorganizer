@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// TestToolsConfig_InvalidEncoder_Fails validates that invalid encoder fails.
+// TestToolsConfig_InvalidFFmpeg_Fails validates that invalid encoder fails.
 //
 //nolint:dupl // distinct encoder-validation scenarios
-func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
+func TestToolsConfig_InvalidFFmpeg_Fails(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -35,7 +35,7 @@ func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 
 	// Invalid encoder should fail validation
 	toolsConfig := ToolsConfig{
-		Encoder: "invalid-encoder",
+		FFmpegPath: "/nonexistent/ffmpeg",
 	}
 
 	svc := NewExecuteService(nil, toolsConfig)
@@ -43,15 +43,14 @@ func TestToolsConfig_InvalidEncoder_Fails(t *testing.T) {
 	if execErr == nil {
 		t.Fatal("expected error for invalid encoder, got nil")
 	}
-	if !containsString(execErr.Error(), "invalid encoder") {
+	if !containsString(execErr.Error(), "tool unavailable") {
 		t.Fatalf("expected error message to contain 'invalid encoder', got: %v", execErr)
 	}
 }
 
-// TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop validates qaac selected but qaac_path missing fails before item loop.
-//
-//nolint:dupl // distinct qaac validation scenarios
-func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
+// TestToolsConfig_FFmpeg_MissingPath_FailsBeforeItemLoop validates a missing ffmpeg path fails before item loop.
+func TestToolsConfig_FFmpeg_MissingPath_FailsBeforeItemLoop(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -63,7 +62,7 @@ func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 
 	plan := &Plan{
-		PlanID: "plan-qaac-missing",
+		PlanID: "plan-ffmpeg-missing",
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
@@ -75,26 +74,22 @@ func TestToolsConfig_QAAC_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 		}},
 	}
 
-	// qaac encoder without qaac_path should fail at preflight validation
-	toolsConfig := ToolsConfig{
-		Encoder: "qaac",
-		// QAACPath is missing
-	}
+	// Unconfigured paths fall back to an empty PATH and must fail at preflight
+	toolsConfig := ToolsConfig{}
 
 	svc := NewExecuteService(nil, toolsConfig)
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
-		t.Fatal("expected error for missing qaac_path, got nil")
+		t.Fatal("expected error for missing ffmpeg path, got nil")
 	}
-	if !containsString(execErr.Error(), "qaac") {
-		t.Fatalf("expected error message to mention 'qaac', got: %v", execErr)
+	if !containsString(execErr.Error(), "ffmpeg") {
+		t.Fatalf("expected error message to mention 'ffmpeg', got: %v", execErr)
 	}
 }
 
-// TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop validates lame selected but lame_path missing fails before item loop.
-//
-//nolint:dupl // distinct lame validation scenarios
-func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
+// TestToolsConfig_FFprobe_MissingPath_FailsBeforeItemLoop validates a missing ffprobe path fails before item loop.
+func TestToolsConfig_FFprobe_MissingPath_FailsBeforeItemLoop(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -106,7 +101,7 @@ func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 
 	plan := &Plan{
-		PlanID: "plan-lame-missing",
+		PlanID: "plan-ffprobe-missing",
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
@@ -118,26 +113,26 @@ func TestToolsConfig_LAME_MissingPath_FailsBeforeItemLoop(t *testing.T) {
 		}},
 	}
 
-	// lame encoder without lame_path should fail at preflight validation
+	// ffmpeg adapter without ffprobe_path should fail at preflight validation
 	toolsConfig := ToolsConfig{
-		Encoder: "lame",
-		// LAMEPath is missing
+		FFmpegPath: getValidExecutablePath(t),
+		// FFprobePath uses PATH, which is empty
 	}
 
 	svc := NewExecuteService(nil, toolsConfig)
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
-		t.Fatal("expected error for missing lame_path, got nil")
+		t.Fatal("expected error for missing ffprobe_path, got nil")
 	}
-	if !containsString(execErr.Error(), "lame") {
-		t.Fatalf("expected error message to mention 'lame', got: %v", execErr)
+	if !containsString(execErr.Error(), "ffprobe") {
+		t.Fatalf("expected error message to mention 'ffprobe', got: %v", execErr)
 	}
 }
 
-// TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop validates qaac selected but qaac_path invalid fails before item loop.
+// TestToolsConfig_FFmpeg_InvalidPath_FailsBeforeItemLoop validates an invalid ffmpeg path fails before item loop.
 //
 //nolint:dupl // distinct invalid-path scenarios
-func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
+func TestToolsConfig_FFmpeg_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -149,7 +144,7 @@ func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 
 	plan := &Plan{
-		PlanID: "plan-qaac-invalid",
+		PlanID: "plan-ffmpeg-invalid",
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
@@ -161,26 +156,23 @@ func TestToolsConfig_QAAC_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 		}},
 	}
 
-	// qaac encoder with invalid qaac_path should fail at preflight validation
+	// Invalid ffmpeg path should fail at preflight validation
 	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: "/nonexistent/qaac.exe",
+		FFmpegPath: "/nonexistent/ffmpeg",
 	}
 
 	svc := NewExecuteService(nil, toolsConfig)
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
-		t.Fatal("expected error for invalid qaac_path, got nil")
+		t.Fatal("expected error for invalid ffmpeg path, got nil")
 	}
-	if !containsString(execErr.Error(), "qaac") {
-		t.Fatalf("expected error message to mention 'qaac', got: %v", execErr)
+	if !containsString(execErr.Error(), "ffmpeg") {
+		t.Fatalf("expected error message to mention 'ffmpeg', got: %v", execErr)
 	}
 }
 
-// TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop validates lame selected but lame_path invalid fails before item loop.
-//
-//nolint:dupl // distinct invalid-path scenarios
-func TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
+// TestToolsConfig_FFprobe_InvalidPath_FailsBeforeItemLoop validates an invalid ffprobe path fails before item loop.
+func TestToolsConfig_FFprobe_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -192,7 +184,7 @@ func TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 	}
 
 	plan := &Plan{
-		PlanID: "plan-lame-invalid",
+		PlanID: "plan-ffprobe-invalid",
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
@@ -204,19 +196,19 @@ func TestToolsConfig_LAME_InvalidPath_FailsBeforeItemLoop(t *testing.T) {
 		}},
 	}
 
-	// lame encoder with invalid lame_path should fail at preflight validation
+	// ffmpeg adapter with invalid ffprobe_path should fail at preflight validation
 	toolsConfig := ToolsConfig{
-		Encoder:  "lame",
-		LAMEPath: "/nonexistent/lame.exe",
+		FFmpegPath:  getValidExecutablePath(t),
+		FFprobePath: "/nonexistent/ffprobe",
 	}
 
 	svc := NewExecuteService(nil, toolsConfig)
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
-		t.Fatal("expected error for invalid lame_path, got nil")
+		t.Fatal("expected error for invalid ffprobe_path, got nil")
 	}
-	if !containsString(execErr.Error(), "lame") {
-		t.Fatalf("expected error message to mention 'lame', got: %v", execErr)
+	if !containsString(execErr.Error(), "ffprobe") {
+		t.Fatalf("expected error message to mention 'ffprobe', got: %v", execErr)
 	}
 }
 
@@ -272,8 +264,9 @@ func TestDeleteOnlyPlan_SkipsToolsConfigValidation(t *testing.T) {
 	}
 }
 
-// TestConvertPlan_EmptyEncoder_FailsPreflight validates convert plans fail at preflight if encoder is empty.
-func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
+// TestConvertPlan_MissingTools_FailsPreflight validates convert plans fail at preflight if the tools are unset.
+func TestConvertPlan_MissingTools_FailsPreflight(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -284,9 +277,9 @@ func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Convert plan with EMPTY encoder
+	// Convert plan with no tools configured
 	plan := &Plan{
-		PlanID: "plan-convert-empty-encoder",
+		PlanID: "plan-convert-missing-tools",
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
@@ -298,18 +291,16 @@ func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
 		}},
 	}
 
-	// Empty encoder should fail at preflight (not runtime)
-	toolsConfig := ToolsConfig{
-		Encoder: "", // Empty encoder
-	}
+	// Unresolvable tools should fail at preflight (not runtime)
+	toolsConfig := ToolsConfig{}
 
 	svc := NewExecuteService(nil, toolsConfig)
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
-		t.Fatal("expected error for empty encoder, got nil")
+		t.Fatal("expected error for missing tools, got nil")
 	}
-	if !containsString(execErr.Error(), "encoder not configured") {
-		t.Fatalf("expected error message to contain 'encoder not configured', got: %v", execErr)
+	if !containsString(execErr.Error(), "tool unavailable") {
+		t.Fatalf("expected error message to contain 'tool unavailable', got: %v", execErr)
 	}
 	// Verify source file was NOT deleted (mutation was blocked)
 	if _, err := os.Stat(testFile); os.IsNotExist(err) {
@@ -318,9 +309,7 @@ func TestConvertPlan_EmptyEncoder_FailsPreflight(t *testing.T) {
 }
 
 // TestConvertPlan_TargetExtensionMismatch_FailsPreflight validates convert plan target extension
-// must strictly match configured encoder suffix mapping.
-//
-//nolint:dupl // distinct encoder target-extension scenarios
+// must be one the adapter can encode.
 func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 	tmp := t.TempDir()
 	testFile := filepath.Join(tmp, "song.wav")
@@ -337,7 +326,7 @@ func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 		Items: []PlanItem{{
 			Type:                   ItemTypeConvert,
 			SourcePath:             testFile,
-			TargetPath:             filepath.Join(tmp, "song.m4a"), // mismatch for lame
+			TargetPath:             filepath.Join(tmp, "song.ogg"), // unsupported target
 			PreconditionPath:       testFile,
 			PreconditionSize:       info.Size(),
 			PreconditionMtime:      info.ModTime().Unix(),
@@ -345,12 +334,7 @@ func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 		}},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "lame",
-		LAMEPath: getValidExecutablePath(t),
-	}
-
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	_, execErr := svc.ExecutePlan(plan)
 	if execErr == nil {
 		t.Fatal("expected target extension mismatch error, got nil")
@@ -358,50 +342,7 @@ func TestConvertPlan_TargetExtensionMismatch_FailsPreflight(t *testing.T) {
 	if !containsString(execErr.Error(), "target extension") {
 		t.Fatalf("expected error message to contain 'target extension', got: %v", execErr)
 	}
-	if !containsString(execErr.Error(), ".mp3") {
-		t.Fatalf("expected error message to mention required '.mp3', got: %v", execErr)
-	}
-}
-
-//nolint:dupl // distinct encoder target-extension scenarios
-func TestConvertPlan_TargetExtensionMismatch_QAAC_FailsPreflight(t *testing.T) {
-	tmp := t.TempDir()
-	testFile := filepath.Join(tmp, "song.wav")
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	plan := &Plan{
-		PlanID: "plan-target-ext-mismatch-qaac",
-		Items: []PlanItem{{
-			Type:                   ItemTypeConvert,
-			SourcePath:             testFile,
-			TargetPath:             filepath.Join(tmp, "song.mp3"), // mismatch for qaac
-			PreconditionPath:       testFile,
-			PreconditionSize:       info.Size(),
-			PreconditionMtime:      info.ModTime().Unix(),
-			PreconditionContentRev: 0,
-		}},
-	}
-
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-
-	svc := NewExecuteService(nil, toolsConfig)
-	_, execErr := svc.ExecutePlan(plan)
-	if execErr == nil {
-		t.Fatal("expected target extension mismatch error, got nil")
-	}
-	if !containsString(execErr.Error(), "target extension") {
-		t.Fatalf("expected error message to contain 'target extension', got: %v", execErr)
-	}
-	if !containsString(execErr.Error(), ".m4a") {
-		t.Fatalf("expected error message to mention required '.m4a', got: %v", execErr)
+	if !containsString(execErr.Error(), ".ogg") {
+		t.Fatalf("expected error message to mention the offending '.ogg', got: %v", execErr)
 	}
 }

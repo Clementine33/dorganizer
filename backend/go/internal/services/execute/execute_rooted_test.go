@@ -51,11 +51,7 @@ func TestExecutePlan_RootedConvertFailure_NotCompleted(t *testing.T) {
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockPipelineRunner()
 	mockRunner.failOnConvertIndex = 0
@@ -122,11 +118,7 @@ func TestExecutePlan_RootedMixedFailure_ContinuesOtherFolder(t *testing.T) {
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockPipelineRunner()
 	mockRunner.failOnConvertIndex = 0
@@ -193,11 +185,7 @@ func TestExecutePlan_RootedConsecutiveConvertFailure_ContinuesOtherFolder(t *tes
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	mockRunner := newMockBatchBarrierRunner()
 	mockRunner.convertFailures[fileA] = errors.New("forced folder A convert failure")
@@ -279,7 +267,7 @@ func TestExecutePlan_RootedExplicitDeleteSkippedAfterFlushMarksFolderFailed(t *t
 		},
 	}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	runner.convertFailures[aConvert] = errors.New("forced folder A convert failure")
 	svc.SetRunner(runner)
@@ -346,7 +334,7 @@ func TestExecutePlan_RootedMixedResultBatch_EmitsCompletedForSuccessfulFolderOnl
 		},
 	}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	runner.convertFailures[a] = errors.New("forced folder A convert failure")
 	svc.SetRunner(runner)
@@ -435,11 +423,7 @@ func TestExecutePlan_RootedDeleteBarrierFailure_ContinuesOtherFolder(t *testing.
 		},
 	}
 
-	toolsConfig := ToolsConfig{
-		Encoder:  "qaac",
-		QAACPath: getValidExecutablePath(t),
-	}
-	svc := NewExecuteService(nil, toolsConfig)
+	svc := NewExecuteService(nil, validToolsConfig(t))
 
 	runner := newMockBatchBarrierRunner()
 	// Make delete fail for srcA (AlbumA) - this is a converted-source delete barrier failure

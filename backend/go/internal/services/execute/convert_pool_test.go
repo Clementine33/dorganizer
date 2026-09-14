@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // TestMaxCPUWorkers_EqualsNumCPU pins the exact concurrency cap: the pool
@@ -106,7 +108,7 @@ func TestExecuteConvertBatchWithPool_SemaphorePeaksAndNoReentry(t *testing.T) {
 	runtime := poolRuntime{
 		ioSem:  ioSem,
 		cpuSem: cpuSem,
-		runEncoderToTmpFn: func(src, tmpOut string, rt poolRuntime) error {
+		runEncoderToTmpFn: func(src, tmpOut string, _ reconcile.AudioOutputSpec, rt poolRuntime) error {
 			rt.ioSem.Acquire()
 			defer rt.ioSem.Release()
 			rt.cpuSem.Acquire()
@@ -203,7 +205,7 @@ func TestExecutePlan_NoScratchInArtifactsAfterConvert(t *testing.T) {
 		PreconditionSize: 5,
 	}}}
 
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	svc.scratchRoot = filepath.Join(tmp, "scratch")
 	svc.SetRunner(newMockPipelineRunner())
 	var copyObserved atomic.Bool
@@ -256,7 +258,7 @@ func TestProcessConvertJob_CommitFailure_RemovesTmp(t *testing.T) {
 	runtime := poolRuntime{
 		ioSem:  testNoopSem{},
 		cpuSem: testNoopSem{},
-		runEncoderToTmpFn: func(_, tmpOut string, _ poolRuntime) error {
+		runEncoderToTmpFn: func(_, tmpOut string, _ reconcile.AudioOutputSpec, _ poolRuntime) error {
 			return os.WriteFile(tmpOut, []byte("encoded"), 0644)
 		},
 		commitReplaceFn: func(_, _ string) error {
@@ -294,7 +296,7 @@ func TestProcessConvertJob_CreatesDstParentBeforeCommit(t *testing.T) {
 	runtime := poolRuntime{
 		ioSem:  testNoopSem{},
 		cpuSem: testNoopSem{},
-		runEncoderToTmpFn: func(_, tmpOut string, _ poolRuntime) error {
+		runEncoderToTmpFn: func(_, tmpOut string, _ reconcile.AudioOutputSpec, _ poolRuntime) error {
 			return os.WriteFile(tmpOut, []byte("encoded"), 0644)
 		},
 		commitReplaceFn: func(tmpOut, commitDst string) error {
@@ -343,7 +345,7 @@ func TestExecuteConvertBatchWithPool_RecordsFirstAndAllFailures(t *testing.T) {
 	runtime := poolRuntime{
 		ioSem:  testNoopSem{},
 		cpuSem: testNoopSem{},
-		runEncoderToTmpFn: func(src, tmpOut string, _ poolRuntime) error {
+		runEncoderToTmpFn: func(src, tmpOut string, _ reconcile.AudioOutputSpec, _ poolRuntime) error {
 			n := started.Add(1)
 			if n == 2 {
 				readyOnce.Do(func() { close(readyCh) })
@@ -440,7 +442,7 @@ func TestExecuteConvertPoolWithTracking_RootedFailureSkipsSameFolderAndContinues
 	indices := []int{0, 1, 2, 3, 4}
 
 	plan := &Plan{PlanID: "pool-rooted-domain-skip", RootPath: filepath.ToSlash(tmp), Items: items}
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	runner.convertFailures[a1] = errors.New("forced convert failure in folder A")
 	svc.SetRunner(runner)
@@ -506,7 +508,7 @@ func TestExecuteConvertPoolWithTracking_NonRootedFailureSkipsDeleteBarrier(t *te
 	indices := []int{0, 1}
 
 	plan := &Plan{PlanID: "pool-nonrooted-delete-skip", RootPath: "", Items: items}
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockBatchBarrierRunner()
 	runner.convertFailures[a] = errors.New("forced convert failure")
 	svc.SetRunner(runner)
@@ -546,7 +548,7 @@ func TestExecuteConvertPoolWithTracking_NonRootedGlobalFailFastStopsFurtherAdmis
 	}
 
 	plan := &Plan{PlanID: "pool-nonrooted-global-stop", RootPath: "", Items: items}
-	svc := NewExecuteService(nil, ToolsConfig{Encoder: "qaac", QAACPath: getValidExecutablePath(t)})
+	svc := NewExecuteService(nil, validToolsConfig(t))
 	runner := newMockPipelineRunner()
 	runner.failOnConvertIndex = 0
 	runner.convertDelay = 20 * time.Millisecond

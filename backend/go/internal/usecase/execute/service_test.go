@@ -523,8 +523,9 @@ func TestExecute_DeleteMissingTargetPath_Fails(t *testing.T) {
 // =============================================================================
 
 // TestExecute_ConvertPlanWithoutToolsConfig_Fails validates that convert plans
-// fail when tools config is missing.
+// fail when tools config is missing and nothing is on PATH either.
 func TestExecute_ConvertPlanWithoutToolsConfig_Fails(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	tmpDir, err := os.MkdirTemp("", "onsei-usecase-convert-no-tools-*")
 	if err != nil {
 		t.Fatal(err)
@@ -642,7 +643,7 @@ func TestExecute_DeleteOnlyPlan_IgnoresMalformedToolsConfig(t *testing.T) {
 	repo := newTestRepo(t, tmpDir)
 
 	// Malformed JSON in tools section
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "C:/tools/lame.exe"}`
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"ffmpeg_path": "C:/tools/ffmpeg.exe"}`
 	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
@@ -670,23 +671,17 @@ func TestExecute_DeleteOnlyPlan_IgnoresMalformedToolsConfig(t *testing.T) {
 // Convert operation tests
 // =============================================================================
 
-// TestExecute_ConvertWithFakeEncoder_SoftDelete validates convert + soft_delete
-// using a deterministic fake encoder.
-func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
+// TestExecute_ConvertWithFFmpeg_SoftDelete validates convert + soft_delete
+// using the ffmpeg on PATH.
+func TestExecute_ConvertWithFFmpeg_SoftDelete(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-usecase-convert-soft-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create deterministic fake encoder
-	encoderPath := createFakeEncoder(t, tmpDir)
-
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(
-		encoderPath,
-		"\\",
-		"\\\\",
-	) + `"}}`
+	// Empty tools config: the adapter falls back to ffmpeg/ffprobe on PATH
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {}}`
 	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
@@ -694,7 +689,7 @@ func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
 	repo := newTestRepo(t, tmpDir)
 
 	testFile := filepath.Join(tmpDir, "test.wav")
-	info := writeTestFile(t, testFile, "dummy audio content")
+	info := writeAudioFixture(t, testFile)
 
 	_, err = repo.DB().Exec(`
 		INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime)
@@ -739,20 +734,15 @@ func TestExecute_ConvertWithFakeEncoder_SoftDelete(t *testing.T) {
 	}
 }
 
-// TestExecute_ConvertWithFakeEncoder_HardDelete validates convert + hard delete.
-func TestExecute_ConvertWithFakeEncoder_HardDelete(t *testing.T) {
+// TestExecute_ConvertWithFFmpeg_HardDelete validates convert + hard delete.
+func TestExecute_ConvertWithFFmpeg_HardDelete(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-usecase-convert-hard-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	encoderPath := createFakeEncoder(t, tmpDir)
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "` + strings.ReplaceAll(
-		encoderPath,
-		"\\",
-		"\\\\",
-	) + `"}}`
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {}}`
 	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
@@ -760,7 +750,7 @@ func TestExecute_ConvertWithFakeEncoder_HardDelete(t *testing.T) {
 	repo := newTestRepo(t, tmpDir)
 
 	testFile := filepath.Join(tmpDir, "test.wav")
-	info := writeTestFile(t, testFile, "dummy audio content")
+	info := writeAudioFixture(t, testFile)
 
 	_, err = repo.DB().Exec(`
 		INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime)
@@ -815,7 +805,7 @@ func TestExecute_ConvertFailure_PreservesSource(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Config with nonexistent encoder
-	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"encoder": "lame", "lame_path": "nonexistent_lame_encoder"}}`
+	configJSON := `{"prune": {"regex_pattern": "^\\."}, "tools": {"ffmpeg_path": "nonexistent_ffmpeg_encoder"}}`
 	if writeErr := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(configJSON), 0644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
