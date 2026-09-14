@@ -56,9 +56,8 @@ func normalizeTags(tags []string) []string {
 
 // ToolsConfig defines encoder tool settings in config.json.
 type ToolsConfig struct {
-	Encoder  string `json:"encoder"`
-	QAACPath string `json:"qaac_path"`
-	LAMEPath string `json:"lame_path"`
+	FFmpegPath  string `json:"ffmpeg_path"`
+	FFprobePath string `json:"ffprobe_path"`
 }
 
 // ExecuteConfig defines execution-related settings in config.json.

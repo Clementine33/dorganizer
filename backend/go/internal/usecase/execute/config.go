@@ -27,9 +27,8 @@ func getToolsConfig(configDir string) (exesvc.ToolsConfig, error) {
 	}
 
 	return exesvc.ToolsConfig{
-		Encoder:  cfg.Tools.Encoder,
-		QAACPath: cfg.Tools.QAACPath,
-		LAMEPath: cfg.Tools.LAMEPath,
+		FFmpegPath:  cfg.Tools.FFmpegPath,
+		FFprobePath: cfg.Tools.FFprobePath,
 	}, nil
 }
 

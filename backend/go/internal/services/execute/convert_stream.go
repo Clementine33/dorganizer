@@ -1,15 +1,15 @@
 package execute
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 func (s *ExecuteService) processConvertJob(
@@ -27,8 +27,17 @@ func (s *ExecuteService) processConvertJob(
 	if dst == "" {
 		dst = item.Dst
 	}
+	spec, err := legacyTargetSpec(dst)
+	if err != nil {
+		return &stageFailureError{stage: "stage2", itemIndex: itemIndex, err: err}
+	}
 
-	tmpOut := filepath.Join(s.scratchRoot, "out", sessionID, filepath.Base(dst)+".pool."+uuid.NewString()[:8])
+	tmpOut := filepath.Join(
+		s.scratchRoot,
+		"out",
+		sessionID,
+		filepath.Base(dst)+".pool."+uuid.NewString()[:8],
+	)
 	if err := os.MkdirAll(filepath.Dir(tmpOut), 0755); err != nil {
 		return &stageFailureError{
 			stage:     "stage3",
@@ -41,8 +50,8 @@ func (s *ExecuteService) processConvertJob(
 	}()
 
 	if runtime.runEncoderToTmpFn == nil {
-		runtime.runEncoderToTmpFn = func(srcPath, tmpPath string, rt poolRuntime) error {
-			return s.runEncoderToTmp(srcPath, tmpPath, rt)
+		runtime.runEncoderToTmpFn = func(srcPath, tmpPath string, spec reconcile.AudioOutputSpec, rt poolRuntime) error {
+			return s.runEncoderToTmp(srcPath, tmpPath, spec, rt)
 		}
 	}
 	if runtime.commitReplaceFn == nil {
@@ -55,7 +64,7 @@ func (s *ExecuteService) processConvertJob(
 		runtime.cpuSem = newBoundedSem(maxCPUWorkers())
 	}
 
-	if err := runtime.runEncoderToTmpFn(src, tmpOut, runtime); err != nil {
+	if err := runtime.runEncoderToTmpFn(src, tmpOut, spec, runtime); err != nil {
 		if openErr, ok := errors.AsType[*sourceOpenError](err); ok {
 			return &stageFailureError{stage: "stage1", itemIndex: itemIndex, err: openErr}
 		}
@@ -80,17 +89,16 @@ func (s *ExecuteService) processConvertJob(
 	return nil
 }
 
-func (s *ExecuteService) runEncoderToTmp(src, tmpOut string, runtime poolRuntime) error {
+func (s *ExecuteService) runEncoderToTmp(
+	src, tmpOut string,
+	spec reconcile.AudioOutputSpec,
+	runtime poolRuntime,
+) error {
 	if runtime.ioSem == nil {
 		runtime.ioSem = newBoundedSem(s.maxIOWorkers())
 	}
 	if runtime.cpuSem == nil {
 		runtime.cpuSem = newBoundedSem(maxCPUWorkers())
-	}
-
-	toolPath, args, err := s.encoderCommandArgs(src, tmpOut)
-	if err != nil {
-		return err
 	}
 
 	runtime.ioSem.Acquire()
@@ -100,24 +108,9 @@ func (s *ExecuteService) runEncoderToTmp(src, tmpOut string, runtime poolRuntime
 		return &sourceOpenError{err: fmt.Errorf("open src: %w", err)}
 	}
 
-	cmd := exec.Command(toolPath, args...)
-	cmd.Dir = filepath.Dir(src)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
 	runtime.cpuSem.Acquire()
-	runErr := cmd.Run()
-	runtime.cpuSem.Release()
-
-	if runErr != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return fmt.Errorf("encoder run failed: %w: %s", runErr, msg)
-		}
-		return fmt.Errorf("encoder run failed: %w", runErr)
-	}
-
-	return nil
+	defer runtime.cpuSem.Release()
+	return newFFmpeg(s.toolsConfig).Encode(context.Background(), src, tmpOut, spec)
 }
 
 type sourceOpenError struct {
@@ -132,30 +125,3 @@ func (e *sourceOpenError) Error() string {
 }
 
 func (e *sourceOpenError) Unwrap() error { return e.err }
-
-func (s *ExecuteService) encoderCommandArgs(src, tmpOut string) (string, []string, error) {
-	encoder := strings.ToLower(strings.TrimSpace(s.toolsConfig.Encoder))
-	switch encoder {
-	case "qaac":
-		if s.toolsConfig.QAACPath == "" {
-			return "", nil, fmt.Errorf("qaac selected but qaac_path is not configured")
-		}
-		return s.toolsConfig.QAACPath, []string{
-			"--ignorelength",
-			"--no-optimize",
-			"-s",
-			"-v",
-			"256",
-			"-o",
-			tmpOut,
-			src,
-		}, nil
-	case "lame":
-		if s.toolsConfig.LAMEPath == "" {
-			return "", nil, fmt.Errorf("lame selected but lame_path is not configured")
-		}
-		return s.toolsConfig.LAMEPath, []string{"-b", "320", src, tmpOut}, nil
-	default:
-		return "", nil, fmt.Errorf("invalid encoder: %s", s.toolsConfig.Encoder)
-	}
-}

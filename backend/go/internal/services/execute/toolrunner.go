@@ -1,9 +1,9 @@
 package execute
 
 import (
+	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,7 +15,7 @@ import (
 // renameFunc is a package-level variable for os.Rename to enable testing of retry logic.
 var renameFunc = os.Rename
 
-// ToolRunner runs external tools like qaac, lame.
+// ToolRunner runs ffmpeg conversion and filesystem deletion.
 type ToolRunner struct {
 	toolsConfig ToolsConfig
 	rootPath    string
@@ -47,7 +47,7 @@ func (e *ToolError) Unwrap() error {
 	return e.Err
 }
 
-// Convert converts a file using qaac or lame.
+// Convert uses the destination codec and the legacy default bitrate.
 func (r *ToolRunner) Convert(src, dst string) error {
 	absSrc, err := validateAbsolutePath(src)
 	if err != nil {
@@ -67,126 +67,17 @@ func (r *ToolRunner) Convert(src, dst string) error {
 		}
 	}
 
-	encoder := r.toolsConfig.Encoder
-
-	switch encoder {
-	case "qaac":
-		return r.convertWithQAAC(absSrc, absDst)
-	case "lame":
-		return r.convertWithLAME(absSrc, absDst)
-	default:
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "invalid encoder: must be 'qaac' or 'lame'",
-			Err:     errors.New("invalid encoder"),
-		}
-	}
-}
-
-// convertWithQAAC runs qaac to convert a file.
-func (r *ToolRunner) convertWithQAAC(src, dst string) error {
-	qaacPath := r.toolsConfig.QAACPath
-	if qaacPath == "" {
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "qaac_path not configured",
-			Err:     errors.New("qaac_path not set"),
-		}
-	}
-
-	// Check if qaac exists
-	if _, err := exec.LookPath(qaacPath); err != nil {
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "qaac not found",
-			Err:     err,
-		}
-	}
-
-	// Build qaac command: [qaac_path, "--ignorelength", "--no-optimize", "-s", "-v", "256", "-o", dst, src]
-	cmd := exec.Command(
-		qaacPath,
-		"--ignorelength",
-		"--no-optimize",
-		"-s",
-		"-v", "256",
-		"-o", dst,
-		src,
-	)
-
-	// Execute in the same directory as source to handle relative paths
-	cmd.Dir = filepath.Dir(src)
-
-	output, err := cmd.CombinedOutput()
+	spec, err := legacyTargetSpec(absDst)
 	if err != nil {
-		// Check for specific errors
-		outputStr := string(output)
-		if contains(outputStr, "Permission denied") || contains(outputStr, "cannot open") {
-			return &ToolError{
-				Code:    errdomain.FILE_LOCKED,
-				Message: "file is locked",
-				Err:     err,
-			}
-		}
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "conversion failed: " + outputStr,
-			Err:     err,
-		}
+		return &ToolError{Code: errdomain.TOOL_NOT_FOUND, Message: err.Error(), Err: err}
 	}
-
-	return nil
-}
-
-// convertWithLAME runs lame to convert a file.
-func (r *ToolRunner) convertWithLAME(src, dst string) error {
-	lamePath := r.toolsConfig.LAMEPath
-	if lamePath == "" {
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "lame_path not configured",
-			Err:     errors.New("lame_path not set"),
-		}
+	encoder := newFFmpeg(r.toolsConfig)
+	if err := encoder.Check(); err != nil {
+		return &ToolError{Code: errdomain.TOOL_NOT_FOUND, Message: err.Error(), Err: err}
 	}
-
-	// Check if lame exists
-	if _, err := exec.LookPath(lamePath); err != nil {
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "lame not found",
-			Err:     err,
-		}
+	if err := encoder.Encode(context.Background(), absSrc, absDst, spec); err != nil {
+		return &ToolError{Code: errdomain.FILE_LOCKED, Message: err.Error(), Err: err}
 	}
-
-	// Build lame command: [lame_path, "-b", "320", src, dst]
-	cmd := exec.Command(
-		lamePath,
-		"-b", "320",
-		src,
-		dst,
-	)
-
-	// Execute in the same directory as source to handle relative paths
-	cmd.Dir = filepath.Dir(src)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Check for specific errors
-		outputStr := string(output)
-		if contains(outputStr, "Permission denied") || contains(outputStr, "cannot open") {
-			return &ToolError{
-				Code:    errdomain.FILE_LOCKED,
-				Message: "file is locked",
-				Err:     err,
-			}
-		}
-		return &ToolError{
-			Code:    errdomain.TOOL_NOT_FOUND,
-			Message: "conversion failed: " + outputStr,
-			Err:     err,
-		}
-	}
-
 	return nil
 }
 
@@ -313,19 +204,6 @@ func isLockedOrBusy(err error) bool {
 		strings.Contains(errStr, "being used") ||
 		strings.Contains(errStr, "accessed by another process") ||
 		strings.Contains(errStr, "file is locked")
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func validateAbsolutePath(path string) (string, error) {

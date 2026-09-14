@@ -8,9 +8,8 @@ import (
 
 // ToolsConfig represents the tools configuration for conversion.
 type ToolsConfig struct {
-	Encoder  string
-	QAACPath string
-	LAMEPath string
+	FFmpegPath  string
+	FFprobePath string
 }
 
 // ExecuteConfig represents the execution configuration.

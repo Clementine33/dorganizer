@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -32,59 +29,14 @@ type precheckFolderFailure struct {
 // validateToolsConfig validates the tools configuration before executing any items.
 // This is called only when the plan contains convert operations.
 func (s *ExecuteService) validateToolsConfig() error {
-	encoder := s.toolsConfig.Encoder
-
-	// For convert plans, encoder must be specified
-	if encoder == "" {
-		return fmt.Errorf("encoder not configured (must be 'qaac' or 'lame')")
-	}
-
-	// Validate encoder is one of the supported types
-	if encoder != "qaac" && encoder != "lame" {
-		return fmt.Errorf("invalid encoder: %s (must be 'qaac' or 'lame')", encoder)
-	}
-
-	// If encoder is qaac, validate qaac_path is provided
-	if encoder == "qaac" {
-		if s.toolsConfig.QAACPath == "" {
-			return fmt.Errorf("qaac selected but qaac_path is not configured")
-		}
-	}
-
-	// If encoder is lame, validate lame_path is provided
-	if encoder == "lame" {
-		if s.toolsConfig.LAMEPath == "" {
-			return fmt.Errorf("lame selected but lame_path is not configured")
-		}
-	}
-
-	// If paths are provided, verify the tools exist
-	if encoder == "qaac" && s.toolsConfig.QAACPath != "" {
-		if _, err := exec.LookPath(s.toolsConfig.QAACPath); err != nil {
-			return fmt.Errorf("qaac selected but qaac_path is invalid: %w", err)
-		}
-	}
-
-	if encoder == "lame" && s.toolsConfig.LAMEPath != "" {
-		if _, err := exec.LookPath(s.toolsConfig.LAMEPath); err != nil {
-			return fmt.Errorf("lame selected but lame_path is invalid: %w", err)
-		}
-	}
-
-	return nil
+	return newFFmpeg(s.toolsConfig).Check()
 }
 
-// validateConvertTargetExtensions ensures convert target suffix strictly matches configured encoder.
+// validateConvertTargetExtensions validates all four supported destination codecs.
 func (s *ExecuteService) validateConvertTargetExtensions(plan *Plan) error {
 	if plan == nil {
 		return nil
 	}
-
-	expectedExt := ".m4a"
-	if strings.EqualFold(strings.TrimSpace(s.toolsConfig.Encoder), "lame") {
-		expectedExt = ".mp3"
-	}
-
 	for i, item := range plan.Items {
 		if item.Type != ItemTypeConvert {
 			continue
@@ -93,21 +45,10 @@ func (s *ExecuteService) validateConvertTargetExtensions(plan *Plan) error {
 		if target == "" {
 			target = item.Dst
 		}
-		if target == "" {
-			continue
-		}
-		if !strings.EqualFold(filepath.Ext(target), expectedExt) {
-			return fmt.Errorf(
-				"convert item %d target extension mismatch: expected %s for encoder %q, got %s (%s)",
-				i,
-				expectedExt,
-				s.toolsConfig.Encoder,
-				filepath.Ext(target),
-				target,
-			)
+		if _, err := legacyTargetSpec(target); err != nil {
+			return fmt.Errorf("convert item %d (%s): %w", i, target, err)
 		}
 	}
-
 	return nil
 }
 

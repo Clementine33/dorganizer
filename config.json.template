@@ -9,9 +9,8 @@
     ]
   },
   "tools": {
-    "encoder": "lame",
-    "qaac_path": "qaac",
-    "lame_path": "lame"
+    "ffmpeg_path": "ffmpeg",
+    "ffprobe_path": "ffprobe"
   },
   "execute": {
     "max_io_workers": 6

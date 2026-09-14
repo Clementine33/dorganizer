@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 type itemFailure struct {
@@ -31,7 +33,7 @@ type semAcquireRelease interface {
 type poolRuntime struct {
 	ioSem             semAcquireRelease
 	cpuSem            semAcquireRelease
-	runEncoderToTmpFn func(src, tmpOut string, runtime poolRuntime) error
+	runEncoderToTmpFn func(src, tmpOut string, spec reconcile.AudioOutputSpec, runtime poolRuntime) error
 	commitReplaceFn   func(tmpOut, dst string) error
 }
 
@@ -73,11 +75,11 @@ func defaultPoolRuntime(s *ExecuteService) poolRuntime {
 	return poolRuntime{
 		ioSem:  newBoundedSem(s.maxIOWorkers()),
 		cpuSem: newBoundedSem(maxCPUWorkers()),
-		runEncoderToTmpFn: func(src, tmpOut string, runtime poolRuntime) error {
+		runEncoderToTmpFn: func(src, tmpOut string, spec reconcile.AudioOutputSpec, runtime poolRuntime) error {
 			if _, ok := s.runner.(*ToolRunner); !ok {
 				return s.runner.Convert(src, tmpOut)
 			}
-			return s.runEncoderToTmp(src, tmpOut, runtime)
+			return s.runEncoderToTmp(src, tmpOut, spec, runtime)
 		},
 		commitReplaceFn: s.commitReplace,
 	}
