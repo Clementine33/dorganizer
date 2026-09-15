@@ -9,11 +9,10 @@ import (
 	appconfig "github.com/onsei/organizer/backend/internal/config"
 )
 
-// planConfig mirrors the workflow-relevant plan settings. Only bitrate batch
-// enrichment is consumed by the workflow planner; the former slim/root-resolve
-// knobs were removed with the legacy pipeline.
+// planConfig holds bitrate enrichment settings and the shared probe tool path.
 type planConfig struct {
-	Bitrate struct {
+	FFprobePath string
+	Bitrate     struct {
 		BatchUpdate bool
 	}
 }
@@ -43,5 +42,6 @@ func getPlanConfig(configDir string) (planConfig, error) {
 	}
 
 	out.Bitrate.BatchUpdate = cfg.Plan.Bitrate.BatchUpdate
+	out.FFprobePath = cfg.Tools.FFprobePath
 	return out, nil
 }

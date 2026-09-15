@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -8,12 +9,16 @@ import (
 
 // Analyzer provides analyze operations against the repository.
 type Analyzer struct {
-	repo *sqlite.Repository
+	repo        *sqlite.Repository
+	ffprobePath string
 }
 
 // NewAnalyzer creates a new analyzer.
-func NewAnalyzer(repo *sqlite.Repository) *Analyzer {
-	return &Analyzer{repo: repo}
+func NewAnalyzer(repo *sqlite.Repository, ffprobePath string) *Analyzer {
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
+	}
+	return &Analyzer{repo: repo, ffprobePath: ffprobePath}
 }
 
 func isSQLiteBusyLockedError(err error) bool {
@@ -25,12 +30,16 @@ func isSQLiteBusyLockedError(err error) bool {
 		strings.Contains(msg, "sqlite_locked")
 }
 
-// EnrichScopedEntriesBitrate enriches missing MP3 bitrates for scoped entries and persists them.
-func (a *Analyzer) EnrichScopedEntriesBitrate(entries []Entry) error {
-	return a.enrichMissingMP3Bitrate(entries, true)
+// EnrichScopedEntriesBitrate enriches missing MP3/AAC bitrates for scoped entries and persists them.
+func (a *Analyzer) EnrichScopedEntriesBitrate(ctx context.Context, entries []Entry) error {
+	return a.enrichMissingBitrate(ctx, entries, true)
 }
 
-// EnrichScopedEntriesBitrateWithBatchOption enriches missing MP3 bitrates with configurable persistence mode.
-func (a *Analyzer) EnrichScopedEntriesBitrateWithBatchOption(entries []Entry, batchUpdate bool) error {
-	return a.enrichMissingMP3Bitrate(entries, batchUpdate)
+// EnrichScopedEntriesBitrateWithBatchOption enriches missing MP3/AAC bitrates with configurable persistence mode.
+func (a *Analyzer) EnrichScopedEntriesBitrateWithBatchOption(
+	ctx context.Context,
+	entries []Entry,
+	batchUpdate bool,
+) error {
+	return a.enrichMissingBitrate(ctx, entries, batchUpdate)
 }

@@ -32,10 +32,10 @@ func NewService(repo *sqlite.Repository, configDir string) Service {
 	return &serviceImpl{repo: repo, configDir: configDir}
 }
 
-func (s *serviceImpl) Plan(_ context.Context, req Request) (Response, error) {
+func (s *serviceImpl) Plan(ctx context.Context, req Request) (Response, error) {
 	switch {
 	case req.Workflow != nil:
-		return s.planWorkflow(req)
+		return s.planWorkflow(ctx, req)
 	case req.SingleAction != nil:
 		return s.planSingleAction(req)
 	}
@@ -50,8 +50,8 @@ func (s *serviceImpl) Plan(_ context.Context, req Request) (Response, error) {
 // planWorkflow runs the declarative reconcile_audio_outputs step over each
 // planning root and persists snapshots. The reconciliation itself delegates to
 // RunWorkflow so the workset planning session reuses one implementation.
-func (s *serviceImpl) planWorkflow(req Request) (Response, error) {
-	result, err := RunWorkflow(context.Background(), s.repo, s.configDir, req.Workflow, req.PlanningRoots, RunOptions{})
+func (s *serviceImpl) planWorkflow(ctx context.Context, req Request) (Response, error) {
+	result, err := RunWorkflow(ctx, s.repo, s.configDir, req.Workflow, req.PlanningRoots, RunOptions{})
 	if err != nil {
 		return Response{}, err
 	}
@@ -274,16 +274,17 @@ func collectWorkflowEntries(repo *sqlite.Repository, root string) ([]reconcile.A
 // enrichWorkflowBitrate bridges reconcile entries into the existing analyzer
 // enrichment path and copies probed bitrate facts back.
 func enrichWorkflowBitrate(
+	ctx context.Context,
 	repo *sqlite.Repository,
 	entries []reconcile.AudioEntry,
-	batch bool,
+	cfg planConfig,
 ) ([]reconcile.AudioEntry, error) {
-	analyzer := analyze.NewAnalyzer(repo)
+	analyzer := analyze.NewAnalyzer(repo, cfg.FFprobePath)
 	an := make([]analyze.Entry, 0, len(entries))
 	for _, e := range entries {
 		an = append(an, analyze.Entry{PathPosix: e.PathPosix, FileSize: e.Size, Bitrate: e.Bitrate, Format: e.Format})
 	}
-	if err := analyzer.EnrichScopedEntriesBitrateWithBatchOption(an, batch); err != nil {
+	if err := analyzer.EnrichScopedEntriesBitrateWithBatchOption(ctx, an, cfg.Bitrate.BatchUpdate); err != nil {
 		return nil, err
 	}
 	for i := range entries {

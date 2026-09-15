@@ -2,10 +2,12 @@ package analyze //nolint:testpackage // white-box tests exercise unexported inte
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,28 +16,39 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
+var mp3Fixture = sync.OnceValues(func() ([]byte, error) {
+	return exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+		"-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", "pipe:1").Output()
+})
+
 func writeTestMP3Frame(t *testing.T, path string) {
 	t.Helper()
-	data := append([]byte{0xFF, 0xFB, 0x90, 0x64}, make([]byte, 1024)...)
+	data, err := mp3Fixture()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("failed to write mp3 %s: %v", path, err)
+		t.Fatal(err)
 	}
 }
 
-func TestSelectScopedProbeCandidates_OnlyScopedMissingMP3(t *testing.T) {
+func TestSelectScopedProbeCandidates_OnlyScopedMissingMP3AndAAC(t *testing.T) {
 	entries := []Entry{
 		{PathPosix: "/scope/a.mp3", Bitrate: 0},
 		{PathPosix: "/scope/b.mp3", Bitrate: 128000},
 		{PathPosix: "/scope/c.flac", Bitrate: 0},
 		{PathPosix: "/scope/d.MP3", Bitrate: 0},
+		{PathPosix: "/scope/e.aac", Bitrate: 0},
+		{PathPosix: "/scope/f.M4A", Bitrate: 0},
+		{PathPosix: "/scope/g.m4a", Bitrate: 256000},
 	}
 
 	idx := selectScopedProbeCandidates(entries)
-	if len(idx) != 2 {
-		t.Fatalf("expected 2 scoped probe candidates, got %d", len(idx))
+	if len(idx) != 4 {
+		t.Fatalf("expected 4 scoped probe candidates, got %d", len(idx))
 	}
-	if idx[0] != 0 || idx[1] != 3 {
-		t.Fatalf("unexpected candidate indexes: got %v want [0 3]", idx)
+	if idx[0] != 0 || idx[1] != 3 || idx[2] != 4 || idx[3] != 5 {
+		t.Fatalf("unexpected candidate indexes: got %v want [0 3 4 5]", idx)
 	}
 }
 
@@ -94,8 +107,8 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 		t.Fatalf("failed to insert out-of-scope entry: %v", err)
 	}
 
-	a := NewAnalyzer(repo)
-	if err := a.EnrichScopedEntriesBitrate(scopedEntries); err != nil {
+	a := NewAnalyzer(repo, "")
+	if err := a.EnrichScopedEntriesBitrate(context.Background(), scopedEntries); err != nil {
 		t.Fatalf("expected enrich scoped entries bitrate success, got %v", err)
 	}
 
@@ -131,7 +144,7 @@ func TestPersistBitrateUpdates_ReturnsBeginError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	a := NewAnalyzer(repo)
+	a := NewAnalyzer(repo, "")
 
 	repo.Close()
 
@@ -158,7 +171,7 @@ func TestPersistBitrateUpdates_ReturnsExecError(t *testing.T) {
 		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
-	a := NewAnalyzer(repo)
+	a := NewAnalyzer(repo, "")
 	err = a.persistBitrateUpdates([]bitrateUpdate{{pathPosix: "/scope/a.mp3", bitrate: 128000}}, true)
 	if err == nil {
 		t.Fatal("expected exec error, got nil")
@@ -209,7 +222,7 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 		t.Fatalf("failed to create failure trigger: %v", triggerErr)
 	}
 
-	a := NewAnalyzer(repo)
+	a := NewAnalyzer(repo, "")
 	err = a.persistBitrateUpdates(updates, true)
 	if err == nil {
 		t.Fatal("expected persist error, got nil")
@@ -259,8 +272,8 @@ func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
 		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
-	a := NewAnalyzer(repo)
-	err = a.EnrichScopedEntriesBitrate(
+	a := NewAnalyzer(repo, "")
+	err = a.EnrichScopedEntriesBitrate(context.Background(),
 		[]Entry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}},
 	)
 	if err == nil {
@@ -286,7 +299,7 @@ func TestEnrichScopedEntriesBitrateWithBatchOption_DoesNotEmitGlobalLogMetrics(t
 	}()
 
 	a := &Analyzer{}
-	err := a.EnrichScopedEntriesBitrateWithBatchOption(
+	err := a.EnrichScopedEntriesBitrateWithBatchOption(context.Background(),
 		[]Entry{{PathPosix: "/scope/a.flac", Bitrate: 0, Format: "audio/flac"}},
 		true,
 	)
@@ -417,7 +430,7 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 			defer wg.Done()
 			start := goroutineIdx * perGoroutine
 			end := min(start+perGoroutine, len(updates))
-			a := NewAnalyzer(repo)
+			a := NewAnalyzer(repo, "")
 			if err := a.persistBitrateUpdates(updates[start:end], true); err != nil {
 				errCh <- err
 			}

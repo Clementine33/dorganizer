@@ -4,7 +4,6 @@ go 1.27.1
 
 require (
 	facette.io/natsort v0.0.0-20181210072756-2cd4dd1e2dcb
-	github.com/dmulholl/mp3lib v1.0.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/grpc v1.64.0

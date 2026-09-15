@@ -149,7 +149,7 @@ func RunWorkflow(
 				outcomes <- planOutcome{index: i, root: root, err: collectErr}
 				return
 			}
-			enriched, enrichErr := enrichWorkflowBitrate(s.repo, entries, planCfg.Bitrate.BatchUpdate)
+			enriched, enrichErr := enrichWorkflowBitrate(ctx, s.repo, entries, planCfg)
 			if enrichErr != nil {
 				outcomes <- planOutcome{index: i, root: root, err: enrichErr}
 				return

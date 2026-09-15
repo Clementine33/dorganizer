@@ -1,15 +1,16 @@
 package analyze
 
 import (
+	"context"
+	"encoding/json"
 	"math/rand"
-	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/dmulholl/mp3lib"
 )
 
 const bitrateUpdateBatchSize = 100
@@ -21,30 +22,28 @@ const bitratePersistRetryLimit = 3
 // bitratePersistRetryBase is the base delay for retry backoff.
 const bitratePersistRetryBase = 50 * time.Millisecond
 
-func probeBitrate(pathPosix string) (int64, error) {
-	f, err := os.Open(filepath.FromSlash(pathPosix))
+func (a *Analyzer) probeBitrate(ctx context.Context, pathPosix string) (int64, error) {
+	//nolint:gosec // Tool path comes from local config; arguments are passed directly without a shell.
+	data, err := exec.CommandContext(ctx, a.ffprobePath, "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=bit_rate", "-of", "json", "-i", filepath.FromSlash(pathPosix)).Output()
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
-
-	frame := mp3lib.NextFrame(f)
-	if frame == nil {
+	var result struct {
+		Streams []struct {
+			Bitrate string `json:"bit_rate"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, err
+	}
+	if len(result.Streams) != 1 {
 		return 0, nil
 	}
-	if mp3lib.IsXingHeader(frame) || mp3lib.IsVbriHeader(frame) {
-		frame = mp3lib.NextFrame(f)
-		if frame == nil {
-			return 0, nil
-		}
-	}
-	if frame.BitRate <= 0 {
-		return 0, nil
-	}
-	return int64(frame.BitRate), nil
+	return strconv.ParseInt(result.Streams[0].Bitrate, 10, 64)
 }
 
-func (a *Analyzer) enrichMissingMP3Bitrate(entries []Entry, batchUpdate bool) error {
+func (a *Analyzer) enrichMissingBitrate(ctx context.Context, entries []Entry, batchUpdate bool) error {
 	idx := selectScopedProbeCandidates(entries)
 	if len(idx) == 0 {
 		return nil
@@ -59,7 +58,10 @@ func (a *Analyzer) enrichMissingMP3Bitrate(entries []Entry, batchUpdate bool) er
 	for range workers {
 		wg.Go(func() {
 			for i := range jobs {
-				bitrate, err := probeBitrate(entries[i].PathPosix)
+				if ctx.Err() != nil {
+					return
+				}
+				bitrate, err := a.probeBitrate(ctx, entries[i].PathPosix)
 				if err != nil || bitrate <= 0 {
 					continue
 				}
@@ -72,10 +74,19 @@ func (a *Analyzer) enrichMissingMP3Bitrate(entries []Entry, batchUpdate bool) er
 	}
 
 	for _, i := range idx {
-		jobs <- i
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return ctx.Err()
+		}
 	}
 	close(jobs)
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if err := a.persistBitrateUpdates(updates, batchUpdate); err != nil {
 		return err
@@ -92,7 +103,11 @@ type bitrateUpdate struct {
 func selectScopedProbeCandidates(entries []Entry) []int {
 	idx := make([]int, 0, len(entries))
 	for i := range entries {
-		if strings.ToLower(path.Ext(entries[i].PathPosix)) == ".mp3" && entries[i].Bitrate <= 0 {
+		if entries[i].Bitrate > 0 {
+			continue
+		}
+		switch strings.ToLower(path.Ext(entries[i].PathPosix)) {
+		case ".mp3", ".aac", ".m4a":
 			idx = append(idx, i)
 		}
 	}
