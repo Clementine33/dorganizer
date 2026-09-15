@@ -14,7 +14,7 @@ import (
 // filtering used at planning time). A missing root whose inventory remains
 // empty is not stale (it is represented by root_status/SOURCE_MISSING).
 // A collection failure is never "valid": fail closed toward stale.
-func rootIsStale(repo *sqlite.Repository, r sqlite.WorkflowRootRecord) bool {
+func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
 	if r.RootPath == "" {
 		return false
 	}

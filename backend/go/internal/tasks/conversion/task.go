@@ -245,7 +245,7 @@ func (t *Task) FreezeExecution(
 			policyByRoot[e.FolderPath] = e.Policy
 		}
 	}
-	rootByIndex := map[int]sqlite.WorkflowRootRecord{}
+	rootByIndex := map[int]sqlite.PlanRootRecord{}
 	for _, r := range in.Detail.Roots {
 		rootByIndex[r.RootIndex] = r
 	}

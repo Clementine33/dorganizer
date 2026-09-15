@@ -24,9 +24,9 @@ func TestGenerationPublishesRevisionAndReplays(t *testing.T) {
 
 	// The persisted snapshot round-trips: one plan with its single step, the
 	// root's live inventory facts, and the component outcome.
-	detail, detailErr := f.repo.GetWorkflowPlanDetail(gen.RevisionID)
+	detail, detailErr := f.repo.GetPlanDetail(gen.RevisionID)
 	if detailErr != nil {
-		t.Fatalf("GetWorkflowPlanDetail: %v", detailErr)
+		t.Fatalf("GetPlanDetail: %v", detailErr)
 	}
 	if len(detail.Steps) != 1 || len(detail.Roots) != 1 || len(detail.Components) != 1 {
 		t.Fatalf("detail steps=%d roots=%d components=%d", len(detail.Steps), len(detail.Roots), len(detail.Components))

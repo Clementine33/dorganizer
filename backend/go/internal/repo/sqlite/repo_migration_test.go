@@ -165,12 +165,12 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	return NewRepository(dbPath)
 }
 
-// TestWorkflowMigrationPurgesLegacyPlans is the breaking migration contract:
-// opening a pre-workflow database purges every legacy plan row, drops the
-// retired standalone plan-execute tables entirely, and the workflow schema is
-// created so new workflow plans round-trip. Libraries, entries and scans
-// survive (covered implicitly by NewRepository succeeding and a new workflow
-// plan listing).
+// TestTaskSeamMigrationResetsLegacyPlans is the breaking-migration contract:
+// opening a pre-task-seam database resets the whole plan, revision and
+// execution domain (compatibility is declined during the rapid-iteration
+// phase), drops the retired standalone plan-execute tables, and the current
+// schema is created so new plans round-trip. Libraries, entries and scans
+// survive.
 func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	repo, err := openLegacyPlansDB(t)
 	if err != nil {
@@ -179,8 +179,8 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	defer repo.Close()
 
 	// Legacy plans are intermediate-state only: all purged.
-	if _, planErr := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
-		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", planErr)
+	if _, planErr := repo.GetPlanDetail("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+		t.Fatalf("GetPlanDetail(plan-1) = %v, want ErrPlanNotFound", planErr)
 	}
 
 	// The retired standalone plan-execute tables are dropped entirely.
@@ -201,33 +201,34 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	err = CreateWorkflowPlanTx(
+	err = CreatePlanTx(
 		repo.DB(),
 		"wf-1",
-		"workflow",
+		"conversion",
+		1,
 		"/new",
 		"snap-wf",
 		lib.ID,
-		[]WorkflowStepRecord{{
+		[]PlanStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
 			PolicySchemaVersion: 1, PolicyJSON: `{"schema_version":1}`, PolicyHash: "h",
 			ClassifierTags: "se\xe3\x81\xaa\xe3\x81\x97", ClassifierHash: "ch",
 			StepSummaryJSON: `{"summary_reason":"NO_MATCH"}`,
 		}},
-		[]WorkflowRootRecord{
+		[]PlanRootRecord{
 			{RootIndex: 0, RootPath: "/new", RootIdentity: "/new", InventoryFingerprint: "fp", EntryCount: 0},
 		},
-		[]WorkflowComponentRecord{{
+		[]PlanComponentRecord{{
 			ComponentIndex: 0, ComponentID: "cid", RootIndex: 0, Partition: "unmatched",
 			Status: "ok", OutcomeJSON: `{}`,
 		}},
 	)
 	if err != nil {
-		t.Fatalf("CreateWorkflowPlanTx failed: %v", err)
+		t.Fatalf("CreatePlanTx failed: %v", err)
 	}
-	detail, err := repo.GetWorkflowPlanDetail("wf-1")
+	detail, err := repo.GetPlanDetail("wf-1")
 	if err != nil {
-		t.Fatalf("GetWorkflowPlanDetail(wf-1) failed: %v", err)
+		t.Fatalf("GetPlanDetail(wf-1) failed: %v", err)
 	}
 	if len(detail.Steps) != 1 || len(detail.Components) != 1 || len(detail.Roots) != 1 {
 		t.Fatalf(
@@ -237,7 +238,7 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 			len(detail.Components),
 		)
 	}
-	if detail.Plan.PlanKind != "workflow" || detail.Plan.WorkflowSchemaVersion != 1 {
-		t.Fatalf("plan kind=%q schema=%d", detail.Plan.PlanKind, detail.Plan.WorkflowSchemaVersion)
+	if detail.Plan.TaskKind != "conversion" || detail.Plan.TaskSchemaVersion != 1 {
+		t.Fatalf("plan kind=%q schema=%d", detail.Plan.TaskKind, detail.Plan.TaskSchemaVersion)
 	}
 }

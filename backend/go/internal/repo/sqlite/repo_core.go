@@ -44,17 +44,15 @@ func parseTimestamp(s string) time.Time {
 
 // Plan represents a persisted plan.
 type Plan struct {
-	PlanID                string
-	RootPath              string
-	ScanRootPath          string
-	LibraryID             string  // nullable: owning library when known
-	PlanType              string  // display label: workflow
-	SlimMode              *string // nullable legacy column; unused
-	SnapshotToken         string
-	Status                string // ready, executed, stale, canceled, failed
-	PlanKind              string // workflow
-	WorkflowSchemaVersion int    // >0 for workflow plans
-	CreatedAt             time.Time
+	PlanID            string
+	RootPath          string
+	ScanRootPath      string
+	LibraryID         string // nullable: owning library when known
+	SnapshotToken     string
+	Status            string // ready, executed, stale, canceled, failed
+	TaskKind          string // the Task that owns the payload
+	TaskSchemaVersion int    // >0 once the payload schema is known
+	CreatedAt         time.Time
 }
 
 // ScanSession represents a scan operation.
@@ -108,31 +106,19 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, err
 	}
 
+	// Pre-task-seam databases are reset before the current schema is created:
+	// the whole plan/revision/execution domain is intermediate state.
+	if err := resetLegacyPlanSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	if err := initSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	// Lightweight migration: add plans.scan_root_path for split semantics.
-	if _, err := db.Exec("ALTER TABLE plans ADD COLUMN scan_root_path TEXT NOT NULL DEFAULT ''"); err != nil {
-		// Ignore duplicate-column errors for existing DBs.
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			db.Close()
-			return nil, err
-		}
-	}
-
 	if err := migrateLibraryRootPathKeys(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if err := migratePlansLibrarySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if err := migratePlansWorkflowSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -248,313 +234,46 @@ func migrateLibraryRootPathKeys(db *sql.DB) error {
 	return nil
 }
 
-// migratePlansLibrarySchema upgrades pre-library_id plans schemas. SQLite
-// cannot add a REFERENCES column via ALTER TABLE, so the plans table is
-// rebuilt in a transaction (DDL is transactional) with foreign-key enforcement
-// off for the rebuild. After the column exists it backfills ownership from the
-// canonical root identity and ensures the listing index.
-func migratePlansLibrarySchema(db *sql.DB) error {
-	hasCol, err := tableHasColumn(db, "plans", "library_id")
+// resetLegacyPlanSchema removes every pre-task-seam revision and execution
+// state and drops the legacy plan-domain tables. Compatibility is declined
+// (rapid-iteration phase): the whole plan/revision/execution domain is
+// intermediate state, while libraries, entries, scans, worksets, members,
+// operations, drafts and policy slots are preserved. It runs before
+// initSchema, which then recreates the current shapes.
+func resetLegacyPlanSchema(db *sql.DB) error {
+	hasCurrent, err := tableHasColumn(db, "plans", "task_schema_version")
 	if err != nil {
 		return err
 	}
-	if !hasCol {
-		if _, fkErr := db.Exec("PRAGMA foreign_keys=OFF"); fkErr != nil {
-			return fkErr
-		}
-		defer func() {
-			_, _ = db.Exec("PRAGMA foreign_keys=ON")
-		}()
-
-		if _, beginErr := db.Exec("BEGIN"); beginErr != nil {
-			return beginErr
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				_, _ = db.Exec("ROLLBACK")
-			}
-		}()
-
-		steps := []string{
-			`CREATE TABLE plans_new (
-				plan_id TEXT PRIMARY KEY,
-				root_path TEXT NOT NULL,
-				scan_root_path TEXT NOT NULL DEFAULT '',
-				library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
-				plan_type TEXT NOT NULL,
-				slim_mode TEXT,
-				snapshot_token TEXT NOT NULL,
-				status TEXT NOT NULL DEFAULT 'ready',
-				created_at TEXT DEFAULT CURRENT_TIMESTAMP
-			)`,
-			`INSERT INTO plans_new (plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at)
-			 SELECT plan_id, root_path, scan_root_path, plan_type, slim_mode, snapshot_token, status, created_at FROM plans`,
-			`DROP TABLE plans`,
-			`ALTER TABLE plans_new RENAME TO plans`,
-			`CREATE INDEX idx_plans_root ON plans(root_path)`,
-			`CREATE INDEX idx_plans_status ON plans(status)`,
-			`CREATE INDEX idx_plans_library_created ON plans(library_id, created_at)`,
-		}
-		for _, s := range steps {
-			if _, stepErr := db.Exec(s); stepErr != nil {
-				return fmt.Errorf("plans schema migration: %w", stepErr)
-			}
-		}
-		if _, commitErr := db.Exec("COMMIT"); commitErr != nil {
-			return commitErr
-		}
-		committed = true
-	}
-
-	// Backfill ownership: a legacy plan whose scan_root_path uniquely matches a
-	// library's canonical root key is attributed to that library. Unmatched or
-	// ambiguous plans stay nullable and remain visible in the global list.
-	libKeys := map[string]string{}
-	libs, err := db.Query("SELECT id, root_path_key FROM libraries")
-	if err != nil {
-		return err
-	}
-	for libs.Next() {
-		var id, key string
-		if scanErr := libs.Scan(&id, &key); scanErr != nil {
-			libs.Close()
-			return scanErr
-		}
-		libKeys[key] = id
-	}
-	libs.Close()
-	if rowsErr := libs.Err(); rowsErr != nil {
-		return rowsErr
-	}
-
-	return backfillPlansLibraryOwnership(db, libKeys)
-}
-
-// backfillPlansLibraryOwnership attributes legacy nullable-library plans to the
-// library whose canonical root key matches the plan's scan_root_path.
-func backfillPlansLibraryOwnership(db *sql.DB, libKeys map[string]string) error {
-	plans, err := db.Query("SELECT plan_id, scan_root_path FROM plans WHERE library_id IS NULL")
-	if err != nil {
-		return err
-	}
-	var toUpdate []struct{ id, libraryID string }
-	for plans.Next() {
-		var planID, scanRoot string
-		if scanErr := plans.Scan(&planID, &scanRoot); scanErr != nil {
-			plans.Close()
-			return scanErr
-		}
-		if scanRoot == "" {
-			continue
-		}
-		if libraryID, ok := libKeys[pathnorm.RootPathKey(scanRoot)]; ok {
-			toUpdate = append(toUpdate, struct{ id, libraryID string }{planID, libraryID})
-		}
-	}
-	plans.Close()
-	if rowsErr := plans.Err(); rowsErr != nil {
-		return rowsErr
-	}
-
-	for _, u := range toUpdate {
-		if _, updateErr := db.Exec(
-			"UPDATE plans SET library_id = ? WHERE plan_id = ?",
-			u.libraryID,
-			u.id,
-		); updateErr != nil {
-			return updateErr
-		}
-	}
-	return createPlansLibraryIndex(db)
-}
-
-func createPlansLibraryIndex(db *sql.DB) error {
-	_, err := db.Exec(
-		"CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)",
-	)
-	return err
-}
-
-// migratePlansWorkflowSchema is the breaking migration for the workflow plan
-// refactor. Plan rows and their per-plan/execute intermediate state are
-// intermediate-state only: every legacy plan and execute session is purged in
-// one transaction, and the plans table is rebuilt with the new plan_kind /
-// workflow_schema_version columns. Libraries, entries and error_events are
-// preserved.
-func migratePlansWorkflowSchema(db *sql.DB) error {
-	hasWorkflow, err := tableHasColumn(db, "plans", "workflow_schema_version")
-	if err != nil {
-		return err
-	}
-	if !hasWorkflow {
-		if err := migrateWorkflowSchemaInner(db); err != nil {
-			return err
-		}
-	}
-	return migratePolicySlotsSchema(db)
-}
-
-// migratePolicySlotsSchema converges every schema onto the fixed-three
-// policy_slots table and the trimmed plan_workflow_steps columns. The old
-// named/versioned classifier registry has no successor: legacy databases are
-// rebuilt per the no-compatibility agreement (fresh dev data was accepted).
-func migratePolicySlotsSchema(db *sql.DB) error {
-	// Fresh databases already have the new plan_workflow_steps (no
-	// policy_source_kind column) from initSchema.
-	hasSourceKind, err := tableHasColumn(db, "plan_workflow_steps", "policy_source_kind")
-	if err != nil {
-		return err
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS policy_slots (
-		slot_index INTEGER PRIMARY KEY CHECK (slot_index BETWEEN 1 AND 3),
-		name TEXT NOT NULL DEFAULT '',
-		policy_json TEXT,
-		updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-	)`); err != nil {
-		return fmt.Errorf("policy slots migration: %w", err)
-	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`); err != nil {
-		return fmt.Errorf("policy slots seed: %w", err)
-	}
-	if !hasSourceKind {
+	if hasCurrent {
 		return nil
 	}
-	// Legacy workflow schema: plan snapshots carry classifier name/version and
-	// preset-source metadata. Compat was declined; drop and rebuild the table
-	// (snapshots are intermediate state, same rationale as the plans purge).
-	if _, err := db.Exec(`DROP TABLE plan_workflow_steps`); err != nil {
-		return fmt.Errorf("policy slots migration drop: %w", err)
-	}
-	steps := []string{
-		`CREATE TABLE plan_workflow_steps (
-			plan_id TEXT NOT NULL,
-			step_index INTEGER NOT NULL,
-			step_type TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'ok',
-			policy_schema_version INTEGER NOT NULL DEFAULT 0,
-			policy_json TEXT NOT NULL DEFAULT '',
-			policy_hash TEXT NOT NULL DEFAULT '',
-			classifier_pattern TEXT NOT NULL DEFAULT '',
-			classifier_hash TEXT NOT NULL DEFAULT '',
-			step_summary_json TEXT NOT NULL DEFAULT '',
-			PRIMARY KEY (plan_id, step_index),
-			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
-		`DROP TABLE IF EXISTS classifiers`,
-		`DROP INDEX IF EXISTS idx_classifiers_version`,
-	}
-	for _, stmt := range steps {
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("policy slots migration rebuild: %w", err)
+	// Children first: drops stay safe with foreign keys enabled. Legacy and
+	// current table names are both listed so either vintage converges.
+	for _, table := range []string{
+		"plan_executions",
+		"plan_generations",
+		"workset_operation_confirmations",
+		"workset_operation_revisions",
+		"conversion_components",
+		"plan_components",
+		"conversion_steps",
+		"plan_workflow_steps",
+		"plan_roots",
+		"plans",
+	} {
+		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+			return fmt.Errorf("reset legacy plan schema: drop %s: %w", table, err)
 		}
 	}
-	return nil
-}
-
-func migrateWorkflowSchemaInner(db *sql.DB) error {
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+	// Operations survive the reset; their revision pointers must not dangle.
+	if has, err := tableHasColumn(db, "workset_operations", "current_revision_id"); err != nil {
 		return err
-	}
-	if _, err := db.Exec("BEGIN"); err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = db.Exec("ROLLBACK")
-		}
-	}()
-
-	// Legacy plan rows are intermediate-state only. Their child tables are
-	// dropped wholesale by migrateRetireStandalonePlanSchema right after this
-	// migration; the plans cascade keeps this purge self-contained either way.
-	purge := []string{
-		"DELETE FROM plans",
-	}
-	for _, stmt := range purge {
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("workflow migration purge: %w", err)
+	} else if has {
+		if _, err := db.Exec("UPDATE workset_operations SET current_revision_id = NULL"); err != nil {
+			return fmt.Errorf("reset legacy plan schema: clear current revisions: %w", err)
 		}
 	}
-
-	// Rebuild plans via create + drop + rename (the same pattern the library
-	// migration uses) so remaining legacy child tables re-resolve their FK
-	// REFERENCES plans to the new table by name. A plain RENAME TO <legacy>
-	// would retarget those FKs at the legacy name and leave them dangling
-	// after the drop; the child tables themselves are dropped by
-	// migrateRetireStandalonePlanSchema just after.
-	steps := []string{
-		`CREATE TABLE plans_new (
-			plan_id TEXT PRIMARY KEY,
-			root_path TEXT NOT NULL,
-			scan_root_path TEXT NOT NULL DEFAULT '',
-			library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
-			plan_type TEXT NOT NULL,
-			slim_mode TEXT,
-			snapshot_token TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'ready',
-			plan_kind TEXT NOT NULL DEFAULT 'workflow',
-			workflow_schema_version INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`DROP TABLE plans`,
-		`ALTER TABLE plans_new RENAME TO plans`,
-		`CREATE TABLE IF NOT EXISTS plan_workflow_steps (
-			plan_id TEXT NOT NULL,
-			step_index INTEGER NOT NULL,
-			step_type TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'ok',
-			policy_schema_version INTEGER NOT NULL DEFAULT 0,
-			policy_json TEXT NOT NULL DEFAULT '',
-			policy_hash TEXT NOT NULL DEFAULT '',
-			classifier_pattern TEXT NOT NULL DEFAULT '',
-			classifier_hash TEXT NOT NULL DEFAULT '',
-			step_summary_json TEXT NOT NULL DEFAULT '',
-			PRIMARY KEY (plan_id, step_index),
-			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS plan_roots (
-			plan_id TEXT NOT NULL,
-			root_index INTEGER NOT NULL,
-			root_path TEXT NOT NULL,
-			root_identity TEXT NOT NULL DEFAULT '',
-			inventory_fingerprint TEXT NOT NULL DEFAULT '',
-			entry_count INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (plan_id, root_index),
-			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS plan_components (
-			plan_id TEXT NOT NULL,
-			step_index INTEGER NOT NULL,
-			component_index INTEGER NOT NULL,
-			component_id TEXT NOT NULL,
-			root_index INTEGER NOT NULL DEFAULT 0,
-			partition TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT '',
-			reason_code TEXT NOT NULL DEFAULT '',
-			outcome_json TEXT NOT NULL DEFAULT '',
-			PRIMARY KEY (plan_id, component_index),
-			FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path)`,
-		`CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
-		`CREATE INDEX IF NOT EXISTS idx_plans_library_created ON plans(library_id, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id)`,
-	}
-	for _, stmt := range steps {
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("workflow migration rebuild: %w", err)
-		}
-	}
-
-	if _, err := db.Exec("COMMIT"); err != nil {
-		return err
-	}
-	committed = true
 	return nil
 }
 
@@ -772,22 +491,20 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     finished_at TEXT
 );
 
--- Persisted plans: the standalone plan-execute flow was retired; every row now
--- belongs to a workset revision. Legacy schemas without library_id are
--- upgraded by migratePlansLibrarySchema (the FK cannot be added via ALTER
--- TABLE). workset_id is set for workset-owned revision plans (FK semantics
--- are managed in app logic).
+-- Persisted plans: one immutable revision snapshot of one workset operation.
+-- Everything task-specific is opaque here: task_kind names the Task that owns
+-- the payload and task_schema_version is that payload's schema version. The
+-- legacy standalone plan columns (plan_type, slim_mode) are gone, and
+-- pre-task-seam databases are reset by resetLegacyPlanSchema.
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
     scan_root_path TEXT NOT NULL DEFAULT '',
     library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
-    plan_type TEXT NOT NULL,
-    slim_mode TEXT,
     snapshot_token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ready',
-    plan_kind TEXT NOT NULL DEFAULT 'workflow',
-    workflow_schema_version INTEGER NOT NULL DEFAULT 0,
+    task_kind TEXT NOT NULL DEFAULT '',
+    task_schema_version INTEGER NOT NULL DEFAULT 0,
     workset_id TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -802,12 +519,12 @@ CREATE TABLE IF NOT EXISTS policy_slots (
     policy_json TEXT,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3);
 
--- Workflow plan steps: resolved policy/classifier snapshots plus the step
--- summary. Policy snapshots are immutable per plan. classifier_pattern stores
--- the canonical normalized tag snapshot (newline-joined) and classifier_hash
--- the tag-set hash.
-CREATE TABLE IF NOT EXISTS plan_workflow_steps (
+-- Task payload rows of one plan (owned by the task named in plans.task_kind;
+-- the conversion task stores its resolved policy/classifier snapshots here).
+-- classifier_pattern stores the task's canonical tag snapshot.
+CREATE TABLE IF NOT EXISTS conversion_steps (
     plan_id TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_type TEXT NOT NULL,
@@ -841,7 +558,7 @@ CREATE TABLE IF NOT EXISTS plan_roots (
 
 -- Component outcomes (lanes, decisions, operations, projected inventory)
 -- persisted as deterministic JSON snapshots.
-CREATE TABLE IF NOT EXISTS plan_components (
+CREATE TABLE IF NOT EXISTS conversion_components (
     plan_id TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     component_index INTEGER NOT NULL,
@@ -1036,7 +753,6 @@ CREATE TABLE IF NOT EXISTS plan_executions (
     operation_type TEXT NOT NULL DEFAULT '',
     plan_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
-    delete_mode TEXT NOT NULL DEFAULT 'soft',
     idempotency_key TEXT NOT NULL DEFAULT '',
     request_hash TEXT NOT NULL DEFAULT '',
     expected_operation_version INTEGER NOT NULL DEFAULT 0,
@@ -1103,9 +819,9 @@ CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 -- idx_plans_library_created is created by migratePlansLibrarySchema after the
 -- library_id column exists on both new and legacy schemas.
-CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id);
+CREATE INDEX IF NOT EXISTS idx_conversion_steps_plan ON conversion_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
-CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id);
+CREATE INDEX IF NOT EXISTS idx_conversion_components_plan ON conversion_components(plan_id);
 `
 
 // initSchema creates the full schema (tables, indexes, seed rows).

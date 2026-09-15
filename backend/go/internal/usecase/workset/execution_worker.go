@@ -85,7 +85,7 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 		d.finishExecution(ex, sqlite.ExecStatusFailed, "WORKSET_LOAD_FAILED", "failed to load workset", report)
 		return nil, false
 	}
-	plan, err := d.svc.repo.GetWorkflowPlanDetail(ex.PlanID)
+	plan, err := d.svc.repo.GetPlanDetail(ex.PlanID)
 	if err != nil {
 		d.finishExecution(
 			ex,

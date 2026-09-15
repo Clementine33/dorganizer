@@ -178,11 +178,11 @@ func (f *execFixture) liveFingerprint(root string) (string, int) {
 // promoting it: the operation's current revision stays whatever it was.
 func (f *execFixture) seedUnpromotedRevision(planID string) {
 	f.t.Helper()
-	if err := sqlite.CreateWorkflowPlanTx(
-		f.repo.DB(), planID, "workflow", filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
+	if err := sqlite.CreatePlanTx(
+		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
 		nil, nil, nil,
 	); err != nil {
-		f.t.Fatalf("CreateWorkflowPlanTx: %v", err)
+		f.t.Fatalf("CreatePlanTx: %v", err)
 	}
 	now := time.Now().Format(timeFmt)
 	if _, err := f.repo.DB().Exec(`
@@ -209,8 +209,8 @@ type seedComponent struct {
 func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedComponent) {
 	f.t.Helper()
 	rootIndex := map[string]int{}
-	roots := make([]sqlite.WorkflowRootRecord, 0, len(comps))
-	var compsRecords []sqlite.WorkflowComponentRecord
+	roots := make([]sqlite.PlanRootRecord, 0, len(comps))
+	var compsRecords []sqlite.PlanComponentRecord
 	for i, c := range comps {
 		member, ok := f.members[c.member]
 		if !ok {
@@ -221,7 +221,7 @@ func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedCom
 			idx = len(roots)
 			rootIndex[member.FolderPath] = idx
 			digest, count := f.liveFingerprint(member.FolderPath)
-			roots = append(roots, sqlite.WorkflowRootRecord{
+			roots = append(roots, sqlite.PlanRootRecord{
 				RootIndex:            idx,
 				RootPath:             member.FolderPath,
 				InventoryFingerprint: digest,
@@ -246,7 +246,7 @@ func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedCom
 		if err != nil {
 			f.t.Fatalf("marshal outcome: %v", err)
 		}
-		compsRecords = append(compsRecords, sqlite.WorkflowComponentRecord{
+		compsRecords = append(compsRecords, sqlite.PlanComponentRecord{
 			StepIndex:      0,
 			ComponentIndex: i,
 			ComponentID:    outcome.ComponentID,
@@ -256,17 +256,17 @@ func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedCom
 			OutcomeJSON:    string(raw),
 		})
 	}
-	steps := []sqlite.WorkflowStepRecord{{
+	steps := []sqlite.PlanStepRecord{{
 		StepIndex:       0,
 		StepType:        "reconcile_audio",
 		Status:          "ok",
 		StepSummaryJSON: `{"component_count":` + strconv.Itoa(len(comps)) + `,"summary_reason":"ACTIONABLE"}`,
 	}}
-	if err := sqlite.CreateWorkflowPlanTx(
-		f.repo.DB(), planID, "workflow", filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
+	if err := sqlite.CreatePlanTx(
+		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
 		steps, roots, compsRecords,
 	); err != nil {
-		f.t.Fatalf("CreateWorkflowPlanTx: %v", err)
+		f.t.Fatalf("CreatePlanTx: %v", err)
 	}
 	now := time.Now().Format(timeFmt)
 	if _, err := f.repo.DB().Exec(`
@@ -443,7 +443,7 @@ func TestStartExecutionSnapshotGates(t *testing.T) {
 		f := newExecFixture(t)
 		f.seedRevision("plan-bl", true, seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
 		if _, err := f.repo.DB().Exec(
-			"UPDATE plan_components SET status = 'blocked' WHERE plan_id = 'plan-bl'",
+			"UPDATE conversion_components SET status = 'blocked' WHERE plan_id = 'plan-bl'",
 		); err != nil {
 			t.Fatalf("block component: %v", err)
 		}

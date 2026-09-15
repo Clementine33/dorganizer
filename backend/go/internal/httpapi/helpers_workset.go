@@ -148,7 +148,7 @@ func toWorkflowPlanResponse(plan worksetusecase.RevisionPlan) workflowPlanRespon
 		PlanID:        plan.PlanID,
 		SnapshotToken: plan.SnapshotToken,
 		RootPath:      plan.RootPath,
-		PlanKind:      plan.PlanKind,
+		PlanKind:      plan.TaskKind,
 		Summary: planSummaryResponse{
 			OperationCount: plan.Summary.OperationCount,
 			ErrorCount:     plan.Summary.ErrorCount,

@@ -186,7 +186,7 @@ func (s *serviceImpl) replayCurrentRevision(
 	if err != nil || rev.DraftHash != input.draftHash || rev.MemberHash != input.request.MemberHash {
 		return nil, false, nil
 	}
-	detail, detailErr := s.repo.GetWorkflowPlanDetail(op.CurrentRevisionID)
+	detail, detailErr := s.repo.GetPlanDetail(op.CurrentRevisionID)
 	if detailErr != nil {
 		return nil, false, nil
 	}
@@ -204,7 +204,7 @@ func (s *serviceImpl) replayCurrentRevision(
 // revisionHealth asks the operation's task for the business health of one
 // frozen revision.
 func (s *serviceImpl) revisionHealth(
-	operationType string, detail *sqlite.WorkflowPlanDetail,
+	operationType string, detail *sqlite.PlanDetail,
 ) (RevisionHealth, error) {
 	task, err := s.requireTask(operationType)
 	if err != nil {

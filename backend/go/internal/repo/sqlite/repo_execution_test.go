@@ -52,8 +52,8 @@ func seedExecutionWorkset(t *testing.T, repo *sqlite.Repository, worksetID, root
 		t.Fatalf("seed draft: %v", err)
 	}
 	if _, err := repo.DB().Exec(`
-		INSERT INTO plans (plan_id, root_path, snapshot_token, plan_type, plan_kind, workflow_schema_version, created_at)
-		VALUES ('plan-1', ?, 'snap', 'workflow', 'workflow', 1, ?)
+		INSERT INTO plans (plan_id, root_path, snapshot_token, task_kind, task_schema_version, created_at)
+		VALUES ('plan-1', ?, 'snap', 'conversion', 1, ?)
 	`, root, now); err != nil {
 		t.Fatalf("seed plan: %v", err)
 	}
@@ -71,12 +71,12 @@ func insertExecutionRow(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExe
 	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := repo.DB().Exec(`
 		INSERT INTO plan_executions (
-			execution_id, workset_id, operation_type, plan_id, status, delete_mode,
+			execution_id, workset_id, operation_type, plan_id, status,
 			idempotency_key, request_hash, expected_operation_version, request_json,
 			total_components, total_operations, report_json, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, 0, ?, 0, 0, ?, ?, ?)
-	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID, e.DeleteMode,
+		VALUES (?, ?, ?, ?, 'queued', ?, ?, 0, ?, 0, 0, ?, ?, ?)
+	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID,
 		e.IdempotencyKey, e.RequestHash, e.RequestJSON, e.ReportJSON, now, now); err != nil {
 		t.Fatalf("insert execution row %s: %v", e.ExecutionID, err)
 	}
@@ -100,10 +100,9 @@ func newExecution(id, worksetID, planID, key string) *sqlite.PlanExecution {
 		WorksetID:       worksetID,
 		OperationType:   "conversion",
 		PlanID:          planID,
-		DeleteMode:      "soft",
 		IdempotencyKey:  key,
 		RequestHash:     "hash-" + key,
-		RequestJSON:     `{"plan_id":"` + planID + `","delete_mode":"soft","components":[]}`,
+		RequestJSON:     `{"delete_mode":"soft","units":[]}`,
 		ReportJSON:      `[]`,
 		TotalComponents: 0,
 		CreatedAt:       time.Now(),

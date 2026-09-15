@@ -88,7 +88,7 @@ func (s *serviceImpl) ConfirmRevision(
 
 	// (5) Input freshness and (6) unresolved blocked units, answered by the
 	// operation's task over the frozen revision.
-	detail, err := s.repo.GetWorkflowPlanDetail(planID)
+	detail, err := s.repo.GetPlanDetail(planID)
 	if err != nil {
 		return nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 	}

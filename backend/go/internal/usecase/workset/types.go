@@ -277,7 +277,7 @@ type RevisionPlan struct {
 	PlanID         string
 	SnapshotToken  string
 	RootPath       string
-	PlanKind       string
+	TaskKind       string
 	StepType       string
 	StepIndex      int
 	Status         string

@@ -35,11 +35,11 @@ func seedConfirmedRevision(
 	if err != nil {
 		t.Fatalf("MarshalDraft: %v", err)
 	}
-	if err := sqlite.CreateWorkflowPlanTx(
-		repo.DB(), planID, "workflow", "/music", "snap-"+planID, libID,
+	if err := sqlite.CreatePlanTx(
+		repo.DB(), planID, "conversion", 1, "/music", "snap-"+planID, libID,
 		nil, nil, nil,
 	); err != nil {
-		t.Fatalf("CreateWorkflowPlanTx: %v", err)
+		t.Fatalf("CreatePlanTx: %v", err)
 	}
 	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := repo.DB().Exec(`

@@ -291,10 +291,10 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		OperationVersion: 1,
 		ExcludedScope:    "m-test-b-rev",
 		DraftSnapshot:    `{"schema_version":1}`,
-		Steps: []WorkflowStepRecord{{
+		Steps: []PlanStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
 		}},
-		Roots: []WorkflowRootRecord{
+		Roots: []PlanRootRecord{
 			{
 				RootIndex:            0,
 				RootPath:             "/music/albumA",
@@ -364,8 +364,8 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 			DraftHash:        "hash-2",
 			MemberHash:       "members-1",
 			OperationVersion: 2,
-			Steps:            []WorkflowStepRecord{{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"}},
-			Roots: []WorkflowRootRecord{
+			Steps:            []PlanStepRecord{{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"}},
+			Roots: []PlanRootRecord{
 				{
 					RootIndex:            0,
 					RootPath:             "/music/albumA",

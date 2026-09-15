@@ -155,7 +155,7 @@ type PlanSummary struct {
 type RevisionFacts struct {
 	DraftSnapshot []byte
 	Members       []*sqlite.WorksetMember
-	Detail        *sqlite.WorkflowPlanDetail
+	Detail        *sqlite.PlanDetail
 }
 
 // RevisionHealth is a task's business evaluation of one frozen revision.

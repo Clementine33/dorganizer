@@ -288,7 +288,7 @@ func (s *serviceImpl) executionEligibility(
 // from the fail-forward reasons.
 func (s *serviceImpl) executionBlockReasons(
 	op *sqlite.Operation, planID string, rev *sqlite.OperationRevision,
-) (*sqlite.WorkflowPlanDetail, []string, error) {
+) (*sqlite.PlanDetail, []string, error) {
 	reasons := make([]string, 0, 4)
 	done, err := s.repo.GetExecutionForRevision(planID)
 	if err != nil {
@@ -317,7 +317,7 @@ func (s *serviceImpl) executionBlockReasons(
 	if generating != nil {
 		reasons = append(reasons, ExecBlockedGeneration)
 	}
-	detail, err := s.repo.GetWorkflowPlanDetail(planID)
+	detail, err := s.repo.GetPlanDetail(planID)
 	if err != nil {
 		return nil, nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 	}
@@ -339,7 +339,7 @@ func (s *serviceImpl) executionBlockReasons(
 // fail-forward values, not errors.
 func (s *serviceImpl) freezeExecution(
 	op *sqlite.Operation,
-	detail *sqlite.WorkflowPlanDetail,
+	detail *sqlite.PlanDetail,
 	rev *sqlite.OperationRevision,
 	deleteMode string,
 ) (FrozenExecution, error) {
@@ -366,6 +366,17 @@ func (s *serviceImpl) freezeExecution(
 }
 
 // persistExecution writes the queued session and pokes the worker.
+// executionDeleteModeOf reads the frozen session option back out of the
+// session's own request payload: the option is stored once, with the frozen
+// units, and never mirrored into a column.
+func executionDeleteModeOf(e *sqlite.PlanExecution) string {
+	req, err := parseExecutionRequest(e.RequestJSON)
+	if err != nil {
+		return ""
+	}
+	return req.DeleteMode
+}
+
 func (s *serviceImpl) persistExecution(
 	op *sqlite.Operation,
 	planID, deleteMode, key, requestHash, revisionDraftHash string,
@@ -378,7 +389,6 @@ func (s *serviceImpl) persistExecution(
 		OperationType:            op.OperationType,
 		PlanID:                   planID,
 		Status:                   sqlite.ExecStatusQueued,
-		DeleteMode:               deleteMode,
 		IdempotencyKey:           key,
 		RequestHash:              requestHash,
 		ExpectedOperationVersion: op.Version,
@@ -548,7 +558,7 @@ func executionViewOf(e *sqlite.PlanExecution) *ExecutionView {
 		OperationType:       e.OperationType,
 		PlanID:              e.PlanID,
 		Status:              e.Status,
-		DeleteMode:          e.DeleteMode,
+		DeleteMode:          executionDeleteModeOf(e),
 		TotalComponents:     e.TotalComponents,
 		CompletedComponents: e.CompletedComponents,
 		TotalOperations:     e.TotalOperations,
@@ -587,7 +597,7 @@ func executionProgressOf(e *sqlite.PlanExecution) *ExecutionProgress {
 		ExecutionID:         e.ExecutionID,
 		PlanID:              e.PlanID,
 		Status:              e.Status,
-		DeleteMode:          e.DeleteMode,
+		DeleteMode:          executionDeleteModeOf(e),
 		TotalComponents:     e.TotalComponents,
 		CompletedComponents: e.CompletedComponents,
 		TotalOperations:     e.TotalOperations,

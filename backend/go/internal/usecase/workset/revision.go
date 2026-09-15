@@ -16,7 +16,7 @@ import (
 //   - any root's live input facts moved: (true, "stale");
 //   - otherwise: (false, "valid").
 func (s *serviceImpl) validateRevision(
-	operationType string, orphaned bool, detail *sqlite.WorkflowPlanDetail,
+	operationType string, orphaned bool, detail *sqlite.PlanDetail,
 ) (*bool, string) {
 	if orphaned {
 		return nil, ValidationUnavailable
@@ -34,12 +34,12 @@ func (s *serviceImpl) validateRevision(
 // current revision and returns the already-loaded roots for coverage.
 func (s *serviceImpl) loadCurrentRevision(
 	op *sqlite.Operation,
-) (*RevisionSummary, []sqlite.WorkflowRootRecord, error) {
+) (*RevisionSummary, []sqlite.PlanRootRecord, error) {
 	rev, err := s.repo.GetOperationRevision(op.WorksetID, op.OperationType, op.CurrentRevisionID)
 	if err != nil {
 		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load current revision", err)
 	}
-	detail, err := s.repo.GetWorkflowPlanDetail(op.CurrentRevisionID)
+	detail, err := s.repo.GetPlanDetail(op.CurrentRevisionID)
 	if err != nil {
 		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision plan", err)
 	}
@@ -67,7 +67,7 @@ func (s *serviceImpl) loadCurrentRevision(
 // revisionReview asks the operation's task for the reviewable view of one
 // persisted revision.
 func (s *serviceImpl) revisionReview(
-	operationType string, detail *sqlite.WorkflowPlanDetail,
+	operationType string, detail *sqlite.PlanDetail,
 ) (PlanReview, error) {
 	task, err := s.requireTask(operationType)
 	if err != nil {
@@ -78,7 +78,7 @@ func (s *serviceImpl) revisionReview(
 
 // planSummaryOf parses the generic plan-summary facts out of a persisted
 // revision.
-func planSummaryOf(detail *sqlite.WorkflowPlanDetail) PlanSummary {
+func planSummaryOf(detail *sqlite.PlanDetail) PlanSummary {
 	if len(detail.Steps) == 0 {
 		return PlanSummary{}
 	}
@@ -87,14 +87,14 @@ func planSummaryOf(detail *sqlite.WorkflowPlanDetail) PlanSummary {
 	return summary
 }
 
-func revisionSummaryReason(detail *sqlite.WorkflowPlanDetail) string {
+func revisionSummaryReason(detail *sqlite.PlanDetail) string {
 	return planSummaryOf(detail).SummaryReason
 }
 
 // revisionCounts derives the four independent plan facts from the frozen
 // snapshot. Changed, unmet, blocked and unchanged are separate facts that may
 // overlap; no exclusive status label is used to derive them (ADR 0004 §4).
-func revisionCounts(detail *sqlite.WorkflowPlanDetail, review PlanReview) RevisionCounts {
+func revisionCounts(detail *sqlite.PlanDetail, review PlanReview) RevisionCounts {
 	summary := planSummaryOf(detail)
 	withOperations := map[string]bool{}
 	blockedComponents := 0
@@ -157,7 +157,7 @@ func (s *serviceImpl) ListRevisions(
 	}
 	out := make([]*RevisionSummary, 0, len(revs))
 	for _, r := range revs {
-		detail, derr := s.repo.GetWorkflowPlanDetail(r.PlanID)
+		detail, derr := s.repo.GetPlanDetail(r.PlanID)
 		if derr != nil {
 			continue // detached plan rows are skipped rather than failing the page
 		}
@@ -206,7 +206,7 @@ func (s *serviceImpl) GetRevision(
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", err)
 	}
-	detail, err := s.repo.GetWorkflowPlanDetail(planID)
+	detail, err := s.repo.GetPlanDetail(planID)
 	if err != nil {
 		return nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 	}
@@ -336,12 +336,12 @@ func excludedSet(scope string) map[string]bool {
 // — never from live policy/classifier state. A revision carries exactly one
 // plan, so the persisted single step flattens into it; the payload decode
 // belongs to the operation's task.
-func (s *serviceImpl) planView(operationType string, detail *sqlite.WorkflowPlanDetail) RevisionPlan {
+func (s *serviceImpl) planView(operationType string, detail *sqlite.PlanDetail) RevisionPlan {
 	out := RevisionPlan{
 		PlanID:        detail.Plan.PlanID,
 		SnapshotToken: detail.Plan.SnapshotToken,
 		RootPath:      detail.Plan.RootPath,
-		PlanKind:      detail.Plan.PlanKind,
+		TaskKind:      detail.Plan.TaskKind,
 		Summary:       planSummaryOf(detail),
 	}
 	if len(detail.Steps) > 0 {

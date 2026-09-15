@@ -31,15 +31,15 @@ const (
 
 // PlanExecution is one persisted execution session: the durable record of a
 // confirmed revision being executed against the disk. RequestJSON freezes the
-// ordered component worklist (root, partition and effective target profile per
-// component) at creation time; ReportJSON is the per-component outcome report.
+// ordered execution units (generic identity plus the task's opaque payload)
+// and the frozen session options at creation time; ReportJSON is the unit
+// outcome report.
 type PlanExecution struct {
 	ExecutionID              string
 	WorksetID                string
 	OperationType            string
 	PlanID                   string
 	Status                   string
-	DeleteMode               string
 	IdempotencyKey           string
 	RequestHash              string
 	ExpectedOperationVersion int
@@ -62,7 +62,7 @@ type PlanExecution struct {
 	UpdatedAt                time.Time
 }
 
-const executionColumns = `execution_id, workset_id, operation_type, plan_id, status, delete_mode,
+const executionColumns = `execution_id, workset_id, operation_type, plan_id, status,
 	idempotency_key, request_hash, expected_operation_version, request_json,
 	total_components, completed_components, total_operations, completed_operations,
 	current_root, current_component_id, current_component_index, current_phase, report_json,
@@ -79,7 +79,6 @@ func scanExecution(scanner interface{ Scan(...any) error }) (*PlanExecution, err
 		&e.OperationType,
 		&e.PlanID,
 		&e.Status,
-		&e.DeleteMode,
 		&e.IdempotencyKey,
 		&e.RequestHash,
 		&e.ExpectedOperationVersion,
@@ -154,11 +153,11 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 	now := e.CreatedAt.Format(timeFormat)
 	result, err := r.db.Exec(`
 		INSERT INTO plan_executions (
-			execution_id, workset_id, operation_type, plan_id, status, delete_mode,
+			execution_id, workset_id, operation_type, plan_id, status,
 			idempotency_key, request_hash, expected_operation_version, request_json,
 			total_components, total_operations, report_json, created_at, updated_at
 		)
-		SELECT ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		SELECT ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE EXISTS (
 			SELECT 1 FROM worksets w WHERE w.id = ? AND w.library_id IS NOT NULL
 		)
@@ -178,7 +177,7 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 			SELECT 1 FROM plan_generations gen
 			WHERE gen.workset_id = ? AND gen.operation_type = ? AND gen.status IN ('queued','running')
 		)
-	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID, e.DeleteMode,
+	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID,
 		e.IdempotencyKey, e.RequestHash, e.ExpectedOperationVersion, e.RequestJSON,
 		e.TotalComponents, e.TotalOperations, e.ReportJSON, now, now,
 		e.WorksetID,

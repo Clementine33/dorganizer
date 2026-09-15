@@ -154,18 +154,19 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		gen.OperationType,
 		now,
 		sqlite.OperationRevisionPersist{
-			PlanID:           "plan-" + genIDNano(gen.GenerationID),
-			RootPath:         snap.RootPath,
-			SnapshotToken:    "snapshot-" + genIDNano(gen.GenerationID),
-			LibraryID:        w.LibraryID,
-			DraftHash:        req.DraftHash,
-			MemberHash:       req.MemberHash,
-			OperationVersion: gen.ExpectedDraftVersion,
-			ExcludedScope:    snap.ExcludedScope,
-			DraftSnapshot:    string(req.Draft),
-			Steps:            steps,
-			Roots:            roots,
-			Components:       components,
+			PlanID:            "plan-" + genIDNano(gen.GenerationID),
+			RootPath:          snap.RootPath,
+			SnapshotToken:     "snapshot-" + genIDNano(gen.GenerationID),
+			LibraryID:         w.LibraryID,
+			DraftHash:         req.DraftHash,
+			MemberHash:        req.MemberHash,
+			OperationVersion:  gen.ExpectedDraftVersion,
+			ExcludedScope:     snap.ExcludedScope,
+			DraftSnapshot:     string(req.Draft),
+			TaskSchemaVersion: snap.PayloadSchemaVersion,
+			Steps:             steps,
+			Roots:             roots,
+			Components:        components,
 		},
 	); persistErr != nil {
 		d.fail(gen, "PERSIST_FAILED", "failed to persist revision")
@@ -180,11 +181,11 @@ const reconcileAudioStepType = "reconcile_audio_outputs"
 // toRevisionRecords freezes a task plan snapshot into the repository's
 // revision records (the storage adapter's shape).
 func toRevisionRecords(snap *PlanSnapshot) (
-	steps []sqlite.WorkflowStepRecord,
-	roots []sqlite.WorkflowRootRecord,
-	components []sqlite.WorkflowComponentRecord,
+	steps []sqlite.PlanStepRecord,
+	roots []sqlite.PlanRootRecord,
+	components []sqlite.PlanComponentRecord,
 ) {
-	steps = []sqlite.WorkflowStepRecord{{
+	steps = []sqlite.PlanStepRecord{{
 		StepIndex:           0,
 		StepType:            reconcileAudioStepType,
 		Status:              snap.Status,
@@ -195,9 +196,9 @@ func toRevisionRecords(snap *PlanSnapshot) (
 		ClassifierHash:      snap.TagsHash,
 		StepSummaryJSON:     string(snap.Summary),
 	}}
-	roots = make([]sqlite.WorkflowRootRecord, 0, len(snap.Roots))
+	roots = make([]sqlite.PlanRootRecord, 0, len(snap.Roots))
 	for _, r := range snap.Roots {
-		roots = append(roots, sqlite.WorkflowRootRecord{
+		roots = append(roots, sqlite.PlanRootRecord{
 			RootIndex:            r.Index,
 			RootPath:             r.Path,
 			RootIdentity:         r.Identity,
@@ -208,9 +209,9 @@ func toRevisionRecords(snap *PlanSnapshot) (
 			RootErrorMessage:     r.ErrorMessage,
 		})
 	}
-	components = make([]sqlite.WorkflowComponentRecord, 0, len(snap.Units))
+	components = make([]sqlite.PlanComponentRecord, 0, len(snap.Units))
 	for _, u := range snap.Units {
-		components = append(components, sqlite.WorkflowComponentRecord{
+		components = append(components, sqlite.PlanComponentRecord{
 			StepIndex:      0,
 			ComponentIndex: u.Index,
 			ComponentID:    u.ID,

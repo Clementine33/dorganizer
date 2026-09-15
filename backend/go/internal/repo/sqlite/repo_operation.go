@@ -310,7 +310,7 @@ func (r *Repository) ListOperationRevisions(
 	return out, rows.Err()
 }
 
-// OperationRevisionPersist bundles the atomic completion payload: the workflow
+// OperationRevisionPersist bundles the atomic completion payload: the plan
 // plan snapshot inserts, the revision association, the operation's
 // current-revision promotion and the generation completion. DraftHash and
 // MemberHash are the canonical frozen inputs for dedup and needs_planning
@@ -331,9 +331,12 @@ type OperationRevisionPersist struct {
 	// DraftSnapshot is the frozen sparse draft JSON: the review UI resolves the
 	// per-member effective configs and inheritance sources from it.
 	DraftSnapshot string
-	Steps         []WorkflowStepRecord
-	Roots         []WorkflowRootRecord
-	Components    []WorkflowComponentRecord
+	// TaskSchemaVersion is the plan payload's schema version, stored on the
+	// plan row so the review envelope can name it.
+	TaskSchemaVersion int
+	Steps             []PlanStepRecord
+	Roots             []PlanRootRecord
+	Components        []PlanComponentRecord
 }
 
 // PersistOperationRevision atomically writes a completed generation: the plan
@@ -352,10 +355,12 @@ func (r *Repository) PersistOperationRevision(
 	}
 	defer tx.Rollback()
 
-	if insertErr := InsertWorkflowPlanTx(
+	taskKind := operationType
+	if insertErr := InsertPlanTx(
 		tx,
 		p.PlanID,
-		"workflow",
+		taskKind,
+		p.TaskSchemaVersion,
 		p.RootPath,
 		p.SnapshotToken,
 		p.LibraryID,
