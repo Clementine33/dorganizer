@@ -7,14 +7,13 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // Dependencies carries the wiring for the HTTP API. ScanService is used by the
-// scan route; PlanService by the plan routes; WorksetService by the workset
-// routes. Any may be nil until wired, and the handlers guard against that.
+// scan route; WorksetService by the workset routes. Any may be nil until
+// wired, and the handlers guard against that.
 type Dependencies struct {
 	Repo           *sqlite.Repository
 	ConfigDir      string
@@ -22,7 +21,6 @@ type Dependencies struct {
 	CORSOrigins    []string
 	Version        string
 	ScanService    scanusecase.Service
-	PlanService    planusecase.Service
 	WorksetService worksetusecase.Service
 }
 
@@ -41,9 +39,6 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("POST /api/v1/libraries/{id}/scans", protect(http.HandlerFunc(s.postLibraryScan)))
 	mux.Handle("GET /api/v1/libraries/{id}/folders", protect(http.HandlerFunc(s.listLibraryFolders)))
 	mux.Handle("GET /api/v1/libraries/{id}/folders/{folderId}/tree", protect(http.HandlerFunc(s.getFolderTree)))
-	mux.Handle("POST /api/v1/plans", protect(http.HandlerFunc(s.createPlan)))
-	mux.Handle("GET /api/v1/plans", protect(http.HandlerFunc(s.listPlans)))
-	mux.Handle("GET /api/v1/plans/{id}", protect(http.HandlerFunc(s.getPlanDetail)))
 	mux.Handle("GET /api/v1/policy-slots", protect(http.HandlerFunc(s.listPolicySlots)))
 	mux.Handle("PUT /api/v1/policy-slots/{slot}", protect(http.HandlerFunc(s.putPolicySlot)))
 	mux.Handle("GET /api/v1/classifier-tags", protect(http.HandlerFunc(s.listClassifierTags)))

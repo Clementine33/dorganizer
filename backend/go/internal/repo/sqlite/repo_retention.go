@@ -8,19 +8,6 @@ import (
 
 // ==================== Retention Cleanup ====================
 
-// DeleteErrorEventsOlderThanTx deletes error_events rows with created_at < cutoff within tx.
-func (r *Repository) DeleteErrorEventsOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
-	result, err := tx.Exec(
-		"DELETE FROM error_events WHERE julianday(created_at) < julianday(?)",
-		cutoff.Format(timeFormat),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("delete error_events older than %s: %w", cutoff.Format(timeFormat), err)
-	}
-	n, _ := result.RowsAffected()
-	return n, nil
-}
-
 // DeleteScanSessionsOlderThanTx deletes scan_sessions rows where COALESCE(finished_at, started_at) < cutoff within tx.
 func (r *Repository) DeleteScanSessionsOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
 	result, err := tx.Exec(
@@ -29,23 +16,6 @@ func (r *Repository) DeleteScanSessionsOlderThanTx(tx *sql.Tx, cutoff time.Time)
 	)
 	if err != nil {
 		return 0, fmt.Errorf("delete scan_sessions older than %s: %w", cutoff.Format(timeFormat), err)
-	}
-	n, _ := result.RowsAffected()
-	return n, nil
-}
-
-// DeletePlansOlderThanTx deletes standalone plans rows with created_at <
-// cutoff within tx. Workset-owned revision plans are exempt: they are durable
-// aggregate history and must never be automatically purged, even when their
-// owners are orphaned. Cascading deletes remove associated plan_items and
-// execute_sessions automatically.
-func (r *Repository) DeletePlansOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
-	result, err := tx.Exec(
-		"DELETE FROM plans WHERE workset_id = '' AND julianday(created_at) < julianday(?)",
-		cutoff.Format(timeFormat),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("delete plans older than %s: %w", cutoff.Format(timeFormat), err)
 	}
 	n, _ := result.RowsAffected()
 	return n, nil
@@ -67,13 +37,13 @@ func (r *Repository) DeletePlanGenerationsFinishedOlderThanTx(tx *sql.Tx, cutoff
 	return n, nil
 }
 
-// RunRetentionCleanup deletes old rows in order: error_events -> scan_sessions
-// -> plan_generations (terminal session ledger, generationCutoff) -> plans
-// (standalone plans, cutoff; workset revisions exempt). It opens a
+// RunRetentionCleanup deletes old rows in order: scan_sessions (cutoff) ->
+// plan_generations (terminal session ledger, generationCutoff). It opens a
 // transaction, runs all deletes, and commits on success or rolls back on
-// error. The 7-day legacy cutoff and the 30-day generation window are kept
-// separate so the idempotency-key guarantee horizon stays aligned with the
-// terminal-session purge.
+// error. The 7-day cutoff and the 30-day generation window are kept separate
+// so the idempotency-key guarantee horizon stays aligned with the
+// terminal-session purge. Workset revisions are durable aggregate history and
+// are never automatically purged.
 func (r *Repository) RunRetentionCleanup(cutoff time.Time) (CleanupStats, error) {
 	return r.RunRetentionCleanupWithCutoffs(cutoff, cutoff)
 }
@@ -95,20 +65,7 @@ func (r *Repository) RunRetentionCleanupWithCutoffs(cutoff, generationCutoff tim
 		}
 	}()
 
-	// Ensure foreign key enforcement on the transaction connection.
-	// PRAGMA settings are connection-scoped in SQLite and do not carry over
-	// to a transaction started on a connection that may have been reset,
-	// so we re-enable explicitly before any cascade-dependent deletes.
-	if _, fkErr := tx.Exec("PRAGMA foreign_keys = ON;"); fkErr != nil {
-		return CleanupStats{}, fmt.Errorf("enable foreign keys in retention tx: %w", fkErr)
-	}
-
 	var stats CleanupStats
-
-	stats.DeletedErrorEvents, err = r.DeleteErrorEventsOlderThanTx(tx, cutoff)
-	if err != nil {
-		return CleanupStats{}, err
-	}
 
 	stats.DeletedScanSessions, err = r.DeleteScanSessionsOlderThanTx(tx, cutoff)
 	if err != nil {
@@ -116,11 +73,6 @@ func (r *Repository) RunRetentionCleanupWithCutoffs(cutoff, generationCutoff tim
 	}
 
 	stats.DeletedGenerations, err = r.DeletePlanGenerationsFinishedOlderThanTx(tx, generationCutoff)
-	if err != nil {
-		return CleanupStats{}, err
-	}
-
-	stats.DeletedPlans, err = r.DeletePlansOlderThanTx(tx, cutoff)
 	if err != nil {
 		return CleanupStats{}, err
 	}

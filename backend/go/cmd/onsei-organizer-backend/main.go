@@ -26,7 +26,6 @@ import (
 	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -70,11 +69,9 @@ func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
 	}
 	elapsed := time.Since(start)
 	log.Printf(
-		"startup retention cleanup: deleted error_events=%d scan_sessions=%d generations=%d plans=%d cutoff=%s elapsed_ms=%d",
-		stats.DeletedErrorEvents,
+		"startup retention cleanup: deleted scan_sessions=%d generations=%d cutoff=%s elapsed_ms=%d",
 		stats.DeletedScanSessions,
 		stats.DeletedGenerations,
-		stats.DeletedPlans,
 		cutoff.Format(time.RFC3339),
 		elapsed.Milliseconds(),
 	)
@@ -177,10 +174,9 @@ func runServer(
 	}
 	httpPort := httpListener.Addr().(*net.TCPAddr).Port
 
-	// Shared scan/plan/workset usecases power both the gRPC server and the
-	// HTTP API. The workset service owns the async planning dispatcher.
+	// Shared scan/workset usecases power both the gRPC server and the HTTP
+	// API. The workset service owns the async planning dispatcher.
 	scanSvc := scanusecase.NewService(repo)
-	planSvc := planusecase.NewService(repo, configDir)
 	generationConcurrency := appconfig.DefaultAppConfig().Workset.GenerationConcurrency
 	if cfg, err := os.ReadFile(filepath.Join(configDir, "config.json")); err == nil {
 		var appCfg appconfig.AppConfig
@@ -207,7 +203,6 @@ func runServer(
 			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
 			Version:        version,
 			ScanService:    scanSvc,
-			PlanService:    planSvc,
 			WorksetService: worksetSvc,
 		}),
 	}

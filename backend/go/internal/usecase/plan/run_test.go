@@ -68,16 +68,13 @@ func seedWorkflowEntries(t *testing.T, repo *sqlite.Repository) {
 	}
 }
 
-func balancedWorkflowRequest() Request {
-	return Request{
-		PlanningRoots: []string{"/music"},
-		Workflow: &Workflow{
-			SchemaVersion: 1,
-			Steps: []WorkflowStep{{
-				StepType: StepTypeReconcileAudio,
-				Policy:   PolicySource{Kind: "inline", InlinePolicy: inlinePolicyPtr("SEなし")},
-			}},
-		},
+func balancedWorkflow() *Workflow {
+	return &Workflow{
+		SchemaVersion: 1,
+		Steps: []WorkflowStep{{
+			StepType: StepTypeReconcileAudio,
+			Policy:   PolicySource{Kind: "inline", InlinePolicy: inlinePolicyPtr("SEなし")},
+		}},
 	}
 }
 
@@ -99,7 +96,7 @@ func inlinePolicyPtr(tags ...string) *reconcile.Policy {
 	}
 }
 
-func TestWorkflowPlanBalancedSatisfied(t *testing.T) {
+func TestRunWorkflowBalancedSatisfied(t *testing.T) {
 	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("new repo: %v", err)
@@ -107,24 +104,17 @@ func TestWorkflowPlanBalancedSatisfied(t *testing.T) {
 	defer repo.Close()
 	seedWorkflowEntries(t, repo)
 
-	svc := NewService(repo, "")
-	res, err := svc.Plan(context.Background(), balancedWorkflowRequest())
+	res, err := RunWorkflow(context.Background(), repo, "", balancedWorkflow(), []string{"/music"}, RunOptions{})
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	if res.PlanKind != PlanKindWorkflow {
-		t.Fatalf("plan_kind = %q, want workflow", res.PlanKind)
-	}
-	if len(res.Steps) != 1 {
-		t.Fatalf("steps = %d, want 1", len(res.Steps))
+		t.Fatalf("RunWorkflow: %v", err)
 	}
 	if res.Summary.SummaryReason != "NO_MATCH" {
 		t.Fatalf("summary = %q, want NO_MATCH (balanced satisfied)", res.Summary.SummaryReason)
 	}
-	if len(res.Steps[0].Components) != 2 {
-		t.Fatalf("components = %d, want 2 partitions", len(res.Steps[0].Components))
+	if len(res.AllComponents) != 2 {
+		t.Fatalf("components = %d, want 2 partitions", len(res.AllComponents))
 	}
-	for _, c := range res.Steps[0].Components {
+	for _, c := range res.AllComponents {
 		if c.Status != "ok" {
 			t.Fatalf("component %s status = %s: %s", c.ComponentID, c.Status, c.Message)
 		}
@@ -134,7 +124,20 @@ func TestWorkflowPlanBalancedSatisfied(t *testing.T) {
 	}
 
 	// Persisted round-trip: steps/roots/components + fingerprint survive.
-	detail, err := repo.GetWorkflowPlanDetail(res.PlanID)
+	if persistErr := sqlite.CreateWorkflowPlanTx(
+		repo.DB(),
+		"plan-balanced",
+		"workflow",
+		res.RootPath,
+		"snap-balanced",
+		"",
+		res.StepRecords,
+		res.Roots,
+		res.Components,
+	); persistErr != nil {
+		t.Fatalf("CreateWorkflowPlanTx: %v", persistErr)
+	}
+	detail, err := repo.GetWorkflowPlanDetail("plan-balanced")
 	if err != nil {
 		t.Fatalf("GetWorkflowPlanDetail: %v", err)
 	}
@@ -150,15 +153,9 @@ func TestWorkflowPlanBalancedSatisfied(t *testing.T) {
 	if detail.Steps[0].ClassifierTags == "" {
 		t.Fatal("classifier tag snapshot must be persisted")
 	}
-
-	// Execute boundary guard rejects workflow plans.
-	kind, schema, err := repo.GetPlanWorkflowSchema(res.PlanID)
-	if err != nil || kind != "workflow" || schema != 1 {
-		t.Fatalf("workflow schema = %q/%d/%v", kind, schema, err)
-	}
 }
 
-func TestWorkflowPlanInvalidSchema(t *testing.T) {
+func TestRunWorkflowInvalidSchema(t *testing.T) {
 	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("new repo: %v", err)
@@ -166,33 +163,14 @@ func TestWorkflowPlanInvalidSchema(t *testing.T) {
 	defer repo.Close()
 	seedWorkflowEntries(t, repo)
 
-	svc := NewService(repo, "")
-	req := balancedWorkflowRequest()
-	req.Workflow.SchemaVersion = 99
-	_, err = svc.Plan(context.Background(), req)
+	wf := balancedWorkflow()
+	wf.SchemaVersion = 99
+	_, err = RunWorkflow(context.Background(), repo, "", wf, []string{"/music"}, RunOptions{})
 	if err == nil {
 		t.Fatal("expected error for unsupported schema version")
 	}
 	planErr, ok := AsError(err)
 	if !ok || planErr.Code != "INVALID_WORKFLOW_SCHEMA" {
 		t.Fatalf("error = %v, want INVALID_WORKFLOW_SCHEMA", err)
-	}
-}
-
-func TestWorkflowPlanRejectsSingleActionMix(t *testing.T) {
-	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("new repo: %v", err)
-	}
-	defer repo.Close()
-	seedWorkflowEntries(t, repo)
-
-	svc := NewService(repo, "")
-	_, err = svc.Plan(context.Background(), Request{})
-	if err == nil {
-		t.Fatal("expected INVALID_PLAN_REQUEST for empty request")
-	}
-	if planErr, ok := AsError(err); !ok || planErr.Code != "INVALID_PLAN_REQUEST" {
-		t.Fatalf("error = %v, want INVALID_PLAN_REQUEST", err)
 	}
 }

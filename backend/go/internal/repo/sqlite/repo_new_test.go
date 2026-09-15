@@ -14,9 +14,6 @@ func TestNewRepository(t *testing.T) {
 			"entries_staging",
 			"scan_sessions",
 			"plans",
-			"plan_items",
-			"error_events",
-			"execute_sessions",
 		}
 
 		for _, table := range tables {

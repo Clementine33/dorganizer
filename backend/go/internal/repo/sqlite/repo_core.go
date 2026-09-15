@@ -47,47 +47,14 @@ type Plan struct {
 	PlanID                string
 	RootPath              string
 	ScanRootPath          string
-	LibraryID             string  // nullable: owning library when known (web-created plans)
-	PlanType              string  // display label: workflow, single_delete, single_convert
-	SlimMode              *string // nullable legacy column; unused for workflow plans
+	LibraryID             string  // nullable: owning library when known
+	PlanType              string  // display label: workflow
+	SlimMode              *string // nullable legacy column; unused
 	SnapshotToken         string
 	Status                string // ready, executed, stale, canceled, failed
-	PlanKind              string // single_action, workflow
-	WorkflowSchemaVersion int    // >0 for workflow plans, 0 for single actions
+	PlanKind              string // workflow
+	WorkflowSchemaVersion int    // >0 for workflow plans
 	CreatedAt             time.Time
-}
-
-// PlanFolderError is a folder-scoped error persisted with a plan so the plan
-// detail can be reconstructed without error_events (which are retention-managed
-// and not plan-scoped).
-type PlanFolderError struct {
-	PlanID     string
-	ErrorIndex int
-	FolderPath string
-	Code       string
-	Message    string
-	Retryable  bool
-}
-
-// PlanSuccessfulFolder records a folder that analyzed cleanly for a plan.
-type PlanSuccessfulFolder struct {
-	PlanID      string
-	FolderIndex int
-	FolderPath  string
-}
-
-// PlanItem represents a single operation in a plan.
-type PlanItem struct {
-	PlanID                 string
-	ItemIndex              int
-	OpType                 string // convert_and_delete, delete
-	SourcePath             string
-	TargetPath             *string // nullable - nil for delete operations
-	ReasonCode             string
-	PreconditionPath       string
-	PreconditionContentRev int
-	PreconditionSize       int64
-	PreconditionMtime      int64
 }
 
 // ScanSession represents a scan operation.
@@ -103,36 +70,10 @@ type ScanSession struct {
 	FinishedAt   time.Time
 }
 
-// ExecuteSession represents an execute operation.
-type ExecuteSession struct {
-	SessionID    string
-	PlanID       string
-	RootPath     string
-	Status       string // running, completed, failed, canceled, interrupted
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	ErrorCode    string
-	ErrorMessage string
-}
-
-// ErrorEvent represents an error during operations.
-type ErrorEvent struct {
-	ID        int64
-	Scope     string // scan, slim, prune, execute
-	RootPath  string
-	Path      *string // nullable - may not have a specific path
-	Code      string
-	Message   string
-	Retryable bool
-	CreatedAt time.Time
-}
-
 // CleanupStats holds counts of rows deleted by each cleanup operation.
 type CleanupStats struct {
-	DeletedErrorEvents  int64
 	DeletedScanSessions int64
 	DeletedGenerations  int64
-	DeletedPlans        int64
 }
 
 // ==================== Repository ====================
@@ -201,7 +142,30 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, err
 	}
 
+	if err := migrateRetireStandalonePlanSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Repository{db: db}, nil
+}
+
+// migrateRetireStandalonePlanSchema drops the tables of the retired standalone
+// plan-execute flow. Fresh databases never create them; legacy databases drop
+// them here so no stale rows or foreign keys survive the retirement.
+func migrateRetireStandalonePlanSchema(db *sql.DB) error {
+	for _, table := range []string{
+		"execute_sessions",
+		"plan_items",
+		"plan_errors",
+		"plan_successful_folders",
+		"error_events",
+	} {
+		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+			return fmt.Errorf("retire standalone plan schema: drop %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 // tableHasColumn reports whether a column exists in a table.
@@ -503,11 +467,10 @@ func migrateWorkflowSchemaInner(db *sql.DB) error {
 		}
 	}()
 
+	// Legacy plan rows are intermediate-state only. Their child tables are
+	// dropped wholesale by migrateRetireStandalonePlanSchema right after this
+	// migration; the plans cascade keeps this purge self-contained either way.
 	purge := []string{
-		"DELETE FROM execute_sessions",
-		"DELETE FROM plan_errors",
-		"DELETE FROM plan_successful_folders",
-		"DELETE FROM plan_items",
 		"DELETE FROM plans",
 	}
 	for _, stmt := range purge {
@@ -517,10 +480,11 @@ func migrateWorkflowSchemaInner(db *sql.DB) error {
 	}
 
 	// Rebuild plans via create + drop + rename (the same pattern the library
-	// migration uses) so the retained child tables (plan_items, execute_sessions)
-	// re-resolve their FK REFERENCES plans to the new table by name. A plain
-	// RENAME TO <legacy> would retarget those FKs at the legacy name and leave
-	// them dangling after the drop.
+	// migration uses) so remaining legacy child tables re-resolve their FK
+	// REFERENCES plans to the new table by name. A plain RENAME TO <legacy>
+	// would retarget those FKs at the legacy name and leave them dangling
+	// after the drop; the child tables themselves are dropped by
+	// migrateRetireStandalonePlanSchema just after.
 	steps := []string{
 		`CREATE TABLE plans_new (
 			plan_id TEXT PRIMARY KEY,
@@ -531,7 +495,7 @@ func migrateWorkflowSchemaInner(db *sql.DB) error {
 			slim_mode TEXT,
 			snapshot_token TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'ready',
-			plan_kind TEXT NOT NULL DEFAULT 'single_action',
+			plan_kind TEXT NOT NULL DEFAULT 'workflow',
 			workflow_schema_version INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -808,12 +772,11 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     finished_at TEXT
 );
 
--- Persisted plans. Legacy schemas without library_id are upgraded by
--- migratePlansLibrarySchema (the FK cannot be added via ALTER TABLE).
--- plan_kind discriminates workflow plans (declare outputs) from the retained
--- independent single-action path; workflow_schema_version is 0 for
--- single-action rows. workset_id is NULL for standalone plans and set for
--- workset-owned revision plans (FK semantics are managed in app logic).
+-- Persisted plans: the standalone plan-execute flow was retired; every row now
+-- belongs to a workset revision. Legacy schemas without library_id are
+-- upgraded by migratePlansLibrarySchema (the FK cannot be added via ALTER
+-- TABLE). workset_id is set for workset-owned revision plans (FK semantics
+-- are managed in app logic).
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
@@ -823,71 +786,10 @@ CREATE TABLE IF NOT EXISTS plans (
     slim_mode TEXT,
     snapshot_token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ready',
-    plan_kind TEXT NOT NULL DEFAULT 'single_action',
+    plan_kind TEXT NOT NULL DEFAULT 'workflow',
     workflow_schema_version INTEGER NOT NULL DEFAULT 0,
     workset_id TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- Plan-scoped folder outcomes, persisted with the plan for durable detail.
-CREATE TABLE IF NOT EXISTS plan_errors (
-    plan_id TEXT NOT NULL,
-    error_index INTEGER NOT NULL,
-    folder_path TEXT NOT NULL DEFAULT '',
-    code TEXT NOT NULL,
-    message TEXT NOT NULL DEFAULT '',
-    retryable INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (plan_id, error_index),
-    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS plan_successful_folders (
-    plan_id TEXT NOT NULL,
-    folder_index INTEGER NOT NULL,
-    folder_path TEXT NOT NULL,
-    PRIMARY KEY (plan_id, folder_index),
-    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-);
-
--- Plan items
-CREATE TABLE IF NOT EXISTS plan_items (
-    plan_id TEXT NOT NULL,
-    item_index INTEGER NOT NULL,
-    op_type TEXT NOT NULL,
-    source_path TEXT NOT NULL,
-    target_path TEXT,
-    reason_code TEXT NOT NULL,
-    precondition_path TEXT NOT NULL,
-    precondition_content_rev INTEGER NOT NULL,
-    precondition_size INTEGER NOT NULL,
-    precondition_mtime INTEGER NOT NULL,
-    PRIMARY KEY (plan_id, item_index),
-    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
-);
-
--- Error events
-CREATE TABLE IF NOT EXISTS error_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    path TEXT,
-    code TEXT NOT NULL,
-    message TEXT NOT NULL,
-    retryable INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- Execute sessions
-CREATE TABLE IF NOT EXISTS execute_sessions (
-    session_id TEXT PRIMARY KEY,
-    plan_id TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'running',
-    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    finished_at TEXT,
-    error_code TEXT,
-    error_message TEXT,
-    FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
 );
 
 -- Three fixed global policy slots. The count is an invariant of the storage
@@ -1153,18 +1055,9 @@ CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 -- idx_plans_library_created is created by migratePlansLibrarySchema after the
 -- library_id column exists on both new and legacy schemas.
-CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_workflow_steps_plan ON plan_workflow_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_components_plan ON plan_components(plan_id);
-
--- Error event indexes
-CREATE INDEX IF NOT EXISTS idx_errors_root ON error_events(root_path);
-CREATE INDEX IF NOT EXISTS idx_errors_scope ON error_events(scope);
-
--- Execute session indexes
-CREATE INDEX IF NOT EXISTS idx_exec_plan ON execute_sessions(plan_id);
-CREATE INDEX IF NOT EXISTS idx_exec_status ON execute_sessions(status);
 `
 
 // initSchema creates the full schema (tables, indexes, seed rows).

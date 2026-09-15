@@ -125,7 +125,7 @@ func TestLibrariesCRUD(t *testing.T) {
 	})
 }
 
-func TestPatchLibraryRootInvalidatesDerivedFoldersAndPlanAssociation(t *testing.T) {
+func TestPatchLibraryRootInvalidatesDerivedFolders(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
@@ -138,15 +138,6 @@ func TestPatchLibraryRootInvalidatesDerivedFoldersAndPlanAssociation(t *testing.
 	}
 	if err := repo.UpdateLibraryScanState(libID, "completed", "", time.Now()); err != nil {
 		t.Fatalf("UpdateLibraryScanState failed: %v", err)
-	}
-	if err := repo.CreatePlan(&sqlite.Plan{
-		PlanID:    "plan-old-root",
-		RootPath:  "/music/album",
-		PlanType:  "single_delete",
-		Status:    "ready",
-		CreatedAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("CreatePlan failed: %v", err)
 	}
 
 	w := doRequest(t, engine, http.MethodPatch, "/api/v1/libraries/"+libID,
@@ -174,19 +165,5 @@ func TestPatchLibraryRootInvalidatesDerivedFoldersAndPlanAssociation(t *testing.
 	}
 	if len(folders.Folders) != 0 {
 		t.Fatalf("root change retained %d stale folders", len(folders.Folders))
-	}
-
-	w = doRequest(t, engine, http.MethodGet, "/api/v1/plans?library_id="+libID, nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("plans status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	var plans struct {
-		Plans []planInfoDTO `json:"plans"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &plans); err != nil {
-		t.Fatalf("decode plans: %v", err)
-	}
-	if len(plans.Plans) != 0 {
-		t.Fatalf("old-root plan remained associated after root change: %+v", plans.Plans)
 	}
 }

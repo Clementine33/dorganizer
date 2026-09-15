@@ -253,7 +253,6 @@ func TestRouterRejectsImplicitHEAD(t *testing.T) {
 	}{
 		{path: "/api/v1/health", allowMethod: http.MethodGet},
 		{path: "/api/v1/libraries", allowMethod: http.MethodGet},
-		{path: "/api/v1/plans", allowMethod: http.MethodPost},
 		{path: "/api/v1/libraries/library/scans", allowMethod: http.MethodPost},
 	} {
 		t.Run(testCase.path, func(t *testing.T) {

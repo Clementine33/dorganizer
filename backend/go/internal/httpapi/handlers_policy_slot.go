@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -110,4 +111,13 @@ func (s *Server) putPolicySlot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toPolicySlotResponse(slot))
+}
+
+// parseInlinePolicy decodes a raw JSON policy into the reconcile shape.
+func parseInlinePolicy(raw json.RawMessage) (reconcile.Policy, error) {
+	var policy reconcile.Policy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return policy, errors.New("inline policy is not valid JSON")
+	}
+	return policy, nil
 }

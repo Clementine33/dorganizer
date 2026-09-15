@@ -94,8 +94,20 @@ func TestMigrateLibraryRootPathKeysDetectsCollision(t *testing.T) {
 	}
 }
 
-// openLegacyPlansDB builds a database with the pre-library_id plans schema
-// plus a libraries table, then reopens it through NewRepository.
+// legacyStandalonePlanTables are the tables of the retired standalone
+// plan-execute flow; a legacy database still carries them and the retirement
+// migration must drop them.
+var legacyStandalonePlanTables = []string{
+	"execute_sessions",
+	"plan_items",
+	"plan_errors",
+	"plan_successful_folders",
+	"error_events",
+}
+
+// openLegacyPlansDB builds a database with the pre-library_id plans schema,
+// its standalone child tables and a libraries table, then reopens it through
+// NewRepository.
 func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "legacy-plans.db")
@@ -127,6 +139,11 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 	)`); err != nil {
 		t.Fatalf("create legacy plans table: %v", err)
 	}
+	for _, table := range []string{"plan_items", "execute_sessions", "error_events", "plan_errors", "plan_successful_folders"} {
+		if _, err := db.Exec("CREATE TABLE " + table + " (plan_id TEXT, session_id TEXT, id INTEGER)"); err != nil {
+			t.Fatalf("create legacy table %s: %v", table, err)
+		}
+	}
 	if _, err := db.Exec(
 		"INSERT INTO libraries (id, name, root_path) VALUES ('lib-1', 'Music', '/music')",
 	); err != nil {
@@ -149,10 +166,11 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 }
 
 // TestWorkflowMigrationPurgesLegacyPlans is the breaking migration contract:
-// opening a pre-workflow database purges every legacy plan row and the
-// per-plan/execute intermediate state, while the workflow schema is created and
-// new workflow plans round-trip. Libraries, entries and scans survive (covered
-// implicitly by NewRepository succeeding and a new workflow plan listing).
+// opening a pre-workflow database purges every legacy plan row, drops the
+// retired standalone plan-execute tables entirely, and the workflow schema is
+// created so new workflow plans round-trip. Libraries, entries and scans
+// survive (covered implicitly by NewRepository succeeding and a new workflow
+// plan listing).
 func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	repo, err := openLegacyPlansDB(t)
 	if err != nil {
@@ -161,18 +179,21 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	defer repo.Close()
 
 	// Legacy plans are intermediate-state only: all purged.
-	plans, err := repo.ListPlans(nil, 100)
-	if err != nil {
-		t.Fatalf("ListPlans failed: %v", err)
+	if _, planErr := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", planErr)
 	}
-	if len(plans) != 0 {
-		t.Fatalf("expected 0 legacy plans after migration, got %d", len(plans))
-	}
-	if _, planErr := repo.GetPlan("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
-		t.Fatalf("GetPlan(plan-1) = %v, want ErrPlanNotFound", planErr)
-	}
-	if _, detailErr := repo.GetWorkflowPlanDetail("plan-1"); !errors.Is(detailErr, ErrPlanNotFound) {
-		t.Fatalf("GetWorkflowPlanDetail(plan-1) = %v, want ErrPlanNotFound", detailErr)
+
+	// The retired standalone plan-execute tables are dropped entirely.
+	for _, table := range legacyStandalonePlanTables {
+		var count int
+		if scanErr := repo.DB().QueryRow(
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table,
+		).Scan(&count); scanErr != nil {
+			t.Fatalf("inspect %s: %v", table, scanErr)
+		}
+		if count != 0 {
+			t.Fatalf("legacy table %s survived retirement", table)
+		}
 	}
 
 	// A new workflow plan round-trips after migration.
@@ -218,11 +239,5 @@ func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
 	}
 	if detail.Plan.PlanKind != "workflow" || detail.Plan.WorkflowSchemaVersion != 1 {
 		t.Fatalf("plan kind=%q schema=%d", detail.Plan.PlanKind, detail.Plan.WorkflowSchemaVersion)
-	}
-
-	// Execute boundary guard sees the workflow plan.
-	kind, schema, err := repo.GetPlanWorkflowSchema("wf-1")
-	if err != nil || kind != "workflow" || schema != 1 {
-		t.Fatalf("GetPlanWorkflowSchema = %q/%d/%v", kind, schema, err)
 	}
 }

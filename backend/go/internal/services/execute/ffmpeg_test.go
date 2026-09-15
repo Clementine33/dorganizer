@@ -59,10 +59,6 @@ func TestFFmpegEncodesFrozenTargets(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertEncodedStream(t, probeStream(t, dst), codec, spec)
-			legacyDst := filepath.Join(t.TempDir(), "legacy"+reconcile.ExtForCodec(codec))
-			if err := execute.NewToolRunner(execute.ToolsConfig{}).Convert(src, legacyDst); err != nil {
-				t.Fatalf("legacy toolrunner: %v", err)
-			}
 			if err := encoder.Encode(t.Context(), src, dst, spec); err == nil {
 				t.Fatal("must not replace an existing target")
 			}

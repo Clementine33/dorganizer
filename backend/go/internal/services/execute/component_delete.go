@@ -110,3 +110,31 @@ func renameWithLockRetry(tk *componentToolkit, oldpath, newpath string) error {
 	}
 	return lastErr
 }
+
+// isPermissionDenied checks if the error is a permission denied error.
+func isPermissionDenied(err error) bool {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
+		return errors.Is(pathErr.Err, os.ErrPermission)
+	}
+	return false
+}
+
+// isLockedOrBusy checks if the error indicates a locked or busy file.
+func isLockedOrBusy(err error) bool {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
+		errStr := pathErr.Err.Error()
+		// Windows locked/busy indicators.
+		if strings.Contains(errStr, "locked") ||
+			strings.Contains(errStr, "being used") ||
+			strings.Contains(errStr, "accessed by another process") ||
+			strings.Contains(errStr, "file is locked") {
+			return true
+		}
+	}
+	// Also check for generic locked error patterns.
+	errStr := err.Error()
+	return strings.Contains(errStr, "locked") ||
+		strings.Contains(errStr, "being used") ||
+		strings.Contains(errStr, "accessed by another process") ||
+		strings.Contains(errStr, "file is locked")
+}

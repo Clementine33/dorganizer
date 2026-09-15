@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/analyze"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
@@ -16,8 +19,7 @@ import (
 type RunOptions struct {
 	// MarkMissingRoots marks planning roots that are absent from the scanned
 	// inventory as root_status=missing with SOURCE_MISSING and counts them into
-	// the step summary as blocked/error. Workset generation enables this; the
-	// standalone /plans path keeps the legacy NO_MATCH behavior (false).
+	// the step summary as blocked/error. Workset generation enables this.
 	MarkMissingRoots bool
 	// Progress is invoked after each root in request order (best effort; nil
 	// skips it). CompletedRoots is 1-based at call time.
@@ -25,7 +27,7 @@ type RunOptions struct {
 	// EffectivePolicies maps a planning root to its member's effective
 	// conversion config (batch draft override else default). Roots absent
 	// from the map plan with the step's default policy. Used by the workset
-	// worker (R5); the standalone path leaves it nil.
+	// worker.
 	EffectivePolicies map[string]reconcile.Policy
 }
 
@@ -35,6 +37,12 @@ type Progress struct {
 	CompletedRoots int
 	TotalRoots     int
 	CurrentRoot    string
+}
+
+// serviceImpl carries the collaborators of the shared workflow runner.
+type serviceImpl struct {
+	repo      *sqlite.Repository
+	configDir string
 }
 
 // WorkflowRunResult is the non-persisting outcome of RunWorkflow: everything a
@@ -51,12 +59,11 @@ type WorkflowRunResult struct {
 	AllComponents []reconcile.ComponentOutcome // request-order for the response payload
 }
 
-// RunWorkflow is the single reconciliation implementation shared by the
-// standalone /plans create path and the workset planning session worker. It
-// validates the schema, resolves the policy/classifier, processes the ordered
-// roots concurrently (results collected in request order), and returns
-// persisted-snapshot records without touching the database. Callers persist
-// via their own transaction boundary.
+// RunWorkflow is the single reconciliation implementation behind the workset
+// planning session worker. It validates the schema, resolves the
+// policy/classifier, processes the ordered roots concurrently (results
+// collected in request order), and returns persisted-snapshot records without
+// touching the database. Callers persist via their own transaction boundary.
 //
 //nolint:gocognit,funlen // step-1 workflow has many outcome branches; split when steps multiply
 func RunWorkflow(
@@ -305,4 +312,98 @@ func joinRoots(roots []string) string {
 	}
 	out += outSb253.String()
 	return out
+}
+
+// stepStatus maps an aggregated step summary onto the persisted step status.
+func stepStatus(summary reconcile.StepSummary) string {
+	if summary.BlockedCount > 0 && summary.OperationCount > 0 {
+		return "partially_blocked"
+	}
+	if summary.BlockedCount > 0 {
+		return "blocked"
+	}
+	return "ok"
+}
+
+// aggregateSummaryReason derives the summary reason from the step facts.
+func aggregateSummaryReason(s reconcile.StepSummary) string {
+	switch {
+	case s.BlockedCount > 0 && s.OperationCount > 0:
+		return reconcile.ReasonPartial
+	case s.BlockedCount > 0:
+		return reconcile.ReasonBlocked
+	case s.OperationCount > 0:
+		return reconcile.ReasonActionable
+	default:
+		return reconcile.ReasonNoMatch
+	}
+}
+
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("plan: failed to marshal snapshot: %v", err)
+		return "{}"
+	}
+	return string(b)
+}
+
+// collectWorkflowEntries loads recognized audio entries under a planning root
+// with the metadata needed for fingerprinting and bitrate enrichment.
+func collectWorkflowEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
+	rootPosix := normalizeScopePath(root)
+	prefix := strings.TrimSuffix(rootPosix, "/")
+	// LIKE patterns containing user-supplied % or _ would widen the scope;
+	// escape them (same convention as collectEntriesByScopes) so a planning
+	// root with such characters cannot leak sibling paths into the plan.
+	likePrefix := escapeLikePattern(prefix)
+	rows, err := repo.DB().Query(`
+		SELECT path, COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(bitrate, 0), COALESCE(format, '')
+		FROM entries WHERE is_dir = 0 AND (path = ? OR path LIKE ? ESCAPE '\')
+	`, rootPosix, likePrefix+"/%")
+	if err != nil {
+		return nil, fmt.Errorf("query workflow entries: %w", err)
+	}
+	defer rows.Close()
+
+	entries := make([]reconcile.AudioEntry, 0)
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var e reconcile.AudioEntry
+		if err := rows.Scan(&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format); err != nil {
+			return nil, fmt.Errorf("scan workflow entry: %w", err)
+		}
+		if _, ok := seen[e.PathPosix]; ok {
+			continue
+		}
+		seen[e.PathPosix] = struct{}{}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].PathPosix < entries[j].PathPosix })
+	return entries, nil
+}
+
+// enrichWorkflowBitrate bridges reconcile entries into the existing analyzer
+// enrichment path and copies probed bitrate facts back.
+func enrichWorkflowBitrate(
+	ctx context.Context,
+	repo *sqlite.Repository,
+	entries []reconcile.AudioEntry,
+	cfg planConfig,
+) ([]reconcile.AudioEntry, error) {
+	analyzer := analyze.NewAnalyzer(repo, cfg.FFprobePath)
+	an := make([]analyze.Entry, 0, len(entries))
+	for _, e := range entries {
+		an = append(an, analyze.Entry{PathPosix: e.PathPosix, FileSize: e.Size, Bitrate: e.Bitrate, Format: e.Format})
+	}
+	if err := analyzer.EnrichScopedEntriesBitrateWithBatchOption(ctx, an, cfg.Bitrate.BatchUpdate); err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		entries[i].Bitrate = an[i].Bitrate
+	}
+	return entries, nil
 }

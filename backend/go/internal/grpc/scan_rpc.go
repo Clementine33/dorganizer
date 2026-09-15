@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -87,4 +88,9 @@ func (s *OnseiServer) RefreshFolders(
 	}
 
 	return &pb.RefreshFoldersResponse{SuccessfulFolders: successfulFolders, Errors: errors}, nil
+}
+
+// generateEventID generates a unique event identifier.
+func generateEventID() string {
+	return "evt-" + uuid.NewString()
 }

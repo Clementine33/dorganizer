@@ -147,6 +147,9 @@ type WorkflowComponentRecord struct {
 	OutcomeJSON    string
 }
 
+// ErrPlanNotFound is returned when a plan cannot be found.
+var ErrPlanNotFound = errors.New("plan not found")
+
 // WorkflowPlanDetail is the full persisted review payload for a workflow plan.
 type WorkflowPlanDetail struct {
 	Plan       Plan
@@ -452,21 +455,4 @@ func (r *Repository) GetWorkflowPlanRoots(planID string) ([]WorkflowRootRecord, 
 		out = append(out, rec)
 	}
 	return out, rows.Err()
-}
-
-// GetPlanWorkflowSchema reports plan_kind and workflow schema version for the
-// Execute boundary guard. PlanKind is "" and err is ErrPlanNotFound when the
-// plan does not exist; other database failures are returned as errors so they
-// are never misrouted as a missing plan.
-func (r *Repository) GetPlanWorkflowSchema(planID string) (planKind string, schemaVersion int, err error) {
-	err = r.db.QueryRow(`
-		SELECT plan_kind, COALESCE(workflow_schema_version, 0) FROM plans WHERE plan_id = ?
-	`, planID).Scan(&planKind, &schemaVersion)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", 0, ErrPlanNotFound
-		}
-		return "", 0, err
-	}
-	return planKind, schemaVersion, nil
 }

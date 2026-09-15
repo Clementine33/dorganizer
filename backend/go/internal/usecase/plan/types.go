@@ -1,29 +1,20 @@
 package plan
 
 import (
-	"context"
 	"errors"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
-// Request is the input to the Plan operation. Exactly one branch must be set:
-// Workflow (declarative reconcile_audio_outputs) or SingleAction (explicit
-// delete/convert of selected source files).
-type Request struct {
-	// LibraryID is the owning library for web-created plans; gRPC/internal
-	// callers may leave it empty, in which case the plan stays unattributed.
-	LibraryID string
-	// PlanningRoots are the resolved folder paths (workflow branch): each is
-	// an independent planning root. HTTP resolves folder IDs to paths.
-	PlanningRoots []string
-	Workflow      *Workflow
-	SingleAction  *SingleAction
-}
+// Workflow/step constants for schema v1.
+const (
+	WorkflowSchemaVersion  = 1
+	StepTypeReconcileAudio = "reconcile_audio_outputs"
+)
 
 // Workflow is a versioned linear workflow of steps. SchemaVersion 1 is the
 // legacy steps-only draft; schema 2 adds member_settings (ADR 0003 batch
-// draft). Only workset drafts use schema 2.
+// draft). Workset drafts use schema 2.
 type Workflow struct {
 	SchemaVersion  int             `json:"schema_version"`
 	Steps          []WorkflowStep  `json:"steps"`
@@ -31,8 +22,7 @@ type Workflow struct {
 }
 
 // WorkflowStep is one linear workflow step. StepID is the stable identity of
-// the step instance within a draft (workset drafts only; never derived from
-// step_type or order). Empty for standalone /plans workflow requests.
+// the step instance within a draft (never derived from step_type or order).
 type WorkflowStep struct {
 	StepID   string       `json:"step_id,omitempty"`
 	StepType string       `json:"step_type"`
@@ -66,14 +56,6 @@ type PolicySource struct {
 // steps above plus member_settings with exclusions and per-step overrides.
 const WorkflowSchemaVersionV2 = 2
 
-// SingleAction is the retained explicit single-file path (independent from
-// reconcile_audio_outputs, which manages whole components).
-type SingleAction struct {
-	Action       string // "delete" | "convert"
-	SourceFiles  []string
-	TargetFormat string // required for convert (e.g. ".mp3")
-}
-
 // Summary summarizes the plan result, owned by the usecase layer.
 type Summary struct {
 	OperationCount  int
@@ -96,38 +78,14 @@ type StepResponse struct {
 	Summary    reconcile.StepSummary
 }
 
-// Response is the output from the Plan operation.
+// Response is the reconstructed review snapshot of one workflow plan.
 type Response struct {
 	PlanID        string
 	SnapshotToken string
 	RootPath      string
 	Summary       Summary
 	Steps         []StepResponse
-	// Single-action branch payloads.
-	Operations        []Operation
-	Errors            []FolderError
-	SuccessfulFolders []string
-	PlanKind          string // "workflow" | "single_action"
-}
-
-// Operation describes a single planned operation (single-action branch).
-type Operation struct {
-	Type                   string
-	SourcePath             string
-	TargetPath             string
-	DeleteTargetPath       string
-	PreconditionPath       string
-	PreconditionContentRev int
-	PreconditionSize       int64
-	PreconditionMtime      int64
-}
-
-// FolderError represents an error scoped to a folder.
-type FolderError struct {
-	FolderPath string
-	Code       string
-	Message    string
-	Retryable  bool
+	PlanKind      string // "workflow"
 }
 
 // Error represents a plan-level error.
@@ -138,16 +96,10 @@ type Error struct {
 	Cause   error
 }
 
-// Service defines the plan usecase contract.
-type Service interface {
-	Plan(ctx context.Context, req Request) (Response, error)
-}
-
-// ErrorKind values for plan.Error.Kind, used to map to gRPC status codes.
+// ErrorKind values for Error.Kind, used to map to gRPC status codes.
 const (
 	ErrKindInvalidArgument = "invalid_argument"
 	ErrKindInternal        = "internal"
-	ErrKindAlreadyExists   = "already_exists"
 )
 
 // NewError creates a plan-level error with a kind that the adapter can map to gRPC.

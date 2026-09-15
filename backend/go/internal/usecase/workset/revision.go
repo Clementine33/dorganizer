@@ -266,17 +266,13 @@ func excludedSet(scope string) map[string]bool {
 }
 
 // toPlanResponse converts a persisted workflow detail into the usecase
-// response shape using the same reconstruction as the plan usecase
-// GetWorkflowPlanDetail.
+// response shape, rebuilt from the persisted workflow snapshots.
 func toPlanResponse(detail *sqlite.WorkflowPlanDetail) planusecase.Response {
 	out := planusecase.Response{
-		PlanID:            detail.Plan.PlanID,
-		SnapshotToken:     detail.Plan.SnapshotToken,
-		RootPath:          detail.Plan.RootPath,
-		PlanKind:          detail.Plan.PlanKind,
-		Operations:        []planusecase.Operation{},
-		Errors:            []planusecase.FolderError{},
-		SuccessfulFolders: []string{},
+		PlanID:        detail.Plan.PlanID,
+		SnapshotToken: detail.Plan.SnapshotToken,
+		RootPath:      detail.Plan.RootPath,
+		PlanKind:      detail.Plan.PlanKind,
 	}
 	for i, st := range detail.Steps {
 		sum := reconcileStepSummary(st.StepSummaryJSON)

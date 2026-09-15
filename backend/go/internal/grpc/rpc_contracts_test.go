@@ -26,15 +26,6 @@ func assertFieldNumber(
 	}
 }
 
-// assertFieldAbsent verifies a field is absent from a message descriptor.
-func assertFieldAbsent(t *testing.T, md protoreflect.MessageDescriptor, fieldName string) {
-	t.Helper()
-	fd := md.Fields().ByName(protoreflect.Name(fieldName))
-	if fd != nil {
-		t.Fatalf("field %q should be absent in message %q", fieldName, md.FullName())
-	}
-}
-
 // =============================================================================
 // JobEvent wire-contract
 // =============================================================================
@@ -60,28 +51,6 @@ func TestContracts_JobEventFieldNumbers(t *testing.T) {
 	assertFieldNumber(t, md, "item_source_path", 11)
 	assertFieldNumber(t, md, "item_target_path", 12)
 	assertFieldNumber(t, md, "correlation_id", 13)
-}
-
-// =============================================================================
-// PlanOperationsResponse wire-contract
-// =============================================================================
-
-// TestContracts_PlanOperationsResponseFieldNumbers asserts exact protobuf field
-// numbers for PlanOperationsResponse. These must never change.
-func TestContracts_PlanOperationsResponseFieldNumbers(t *testing.T) {
-	md := (&pb.PlanOperationsResponse{}).ProtoReflect().Descriptor()
-
-	// Original fields 1-6 (with keep_count reserved/removed)
-	assertFieldNumber(t, md, "plan_id", 1)
-	assertFieldNumber(t, md, "operations", 2)
-	assertFieldNumber(t, md, "total_count", 3)
-	assertFieldNumber(t, md, "actionable_count", 4)
-	assertFieldAbsent(t, md, "keep_count")
-	assertFieldNumber(t, md, "summary_reason", 6)
-
-	// New fields 7-8
-	assertFieldNumber(t, md, "plan_errors", 7)
-	assertFieldNumber(t, md, "successful_folders", 8)
 }
 
 // =============================================================================

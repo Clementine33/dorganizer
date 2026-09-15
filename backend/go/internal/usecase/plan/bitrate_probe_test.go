@@ -82,8 +82,8 @@ func TestRunWorkflowProbesMissingBitrate(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = plan.NewService(repo, dir).Plan(ctx, plan.Request{Workflow: wf, PlanningRoots: []string{dir}})
+	_, err = plan.RunWorkflow(ctx, repo, dir, wf, []string{dir}, plan.RunOptions{})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled Plan: %v", err)
+		t.Fatalf("canceled RunWorkflow: %v", err)
 	}
 }

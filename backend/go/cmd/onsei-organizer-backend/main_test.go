@@ -45,7 +45,7 @@ func TestRunStartupRetentionCleanup_UsesNowMinusSevenDaysUTC(t *testing.T) {
 	expectedCutoff := time.Date(2026, 4, 11, 17, 0, 0, 0, time.UTC)
 
 	stub := &stubRepo{
-		stats: sqlite.CleanupStats{DeletedErrorEvents: 3, DeletedScanSessions: 2, DeletedPlans: 1},
+		stats: sqlite.CleanupStats{DeletedScanSessions: 2, DeletedGenerations: 1},
 	}
 
 	err := runStartupRetentionCleanup(stub, now)

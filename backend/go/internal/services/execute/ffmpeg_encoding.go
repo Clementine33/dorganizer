@@ -2,33 +2,10 @@ package execute
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
-
-// legacyTargetSpec supplies historical defaults for single_action plans,
-// whose items have no per-output quality field. Worksets pass frozen specs.
-func legacyTargetSpec(target string) (reconcile.AudioOutputSpec, error) {
-	spec := reconcile.AudioOutputSpec{}
-	switch strings.ToLower(filepath.Ext(target)) {
-	case ".wav":
-		spec.Codec = reconcile.CodecWav
-	case ".flac":
-		spec.Codec = reconcile.CodecFlac
-	case ".mp3":
-		spec.Codec = reconcile.CodecMp3
-		spec.Quality = &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320}
-	case ".m4a":
-		spec.Codec = reconcile.CodecAac
-		spec.Quality = &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 256}
-	default:
-		return spec, fmt.Errorf("unsupported target extension: %s", filepath.Ext(target))
-	}
-	return spec, nil
-}
 
 // encodedAudio is one ffmpeg invocation: the arguments plus the codec ffprobe
 // must report for the resulting file.

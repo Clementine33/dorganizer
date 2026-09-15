@@ -17,23 +17,21 @@ import (
 	"time"
 )
 
-// TestHTTPLibraryScanPlanLoop boots the real backend binary as a subprocess
+// TestHTTPLibraryScanLoop boots the real backend binary as a subprocess
 // (ONSEI_DATA_DIR=<temp>), parses the ONSEI_BACKEND_READY handshake for both
 // the gRPC and HTTP ports, then drives the HTTP/SSE library workflow end to
-// end: health -> create library -> SSE scan -> list folders -> plan.
-//
-//nolint:funlen // long e2e loop scenario
-func TestHTTPLibraryScanPlanLoop(t *testing.T) {
+// end: health -> create library -> SSE scan -> list folders.
+func TestHTTPLibraryScanLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
 
 	dataDir := t.TempDir()
 	rootPath := filepath.Join(dataDir, "music")
-	// albumA holds lossy+lossless stems so a slim:mode1 plan yields deletes.
+	// albumA holds lossy+lossless stems; albumB is audio-only so the folders
+	// index is non-empty across the root.
 	mustWriteFile(t, filepath.Join(rootPath, "albumA", "test1.mp3"), "dummy audio")
 	mustWriteFile(t, filepath.Join(rootPath, "albumA", "test1.flac"), "dummy audio")
 	mustWriteFile(t, filepath.Join(rootPath, "albumA", "test2.mp3"), "dummy audio")
 	mustWriteFile(t, filepath.Join(rootPath, "albumA", "test2.flac"), "dummy audio")
-	// albumB is audio-only so the folders index is non-empty across the root.
 	mustWriteFile(t, filepath.Join(rootPath, "albumB", "song1.mp3"), "dummy audio")
 	mustWriteFile(t, filepath.Join(rootPath, "albumB", "song2.mp3"), "dummy audio")
 
@@ -122,89 +120,11 @@ func TestHTTPLibraryScanPlanLoop(t *testing.T) {
 		t.Fatal("GET /folders: expected non-empty folder list after scan")
 	}
 
-	// POST /api/v1/plans scoped to albumA (mp3+flac pairs). The folders
-	// response ordering is not part of the contract, so locate albumA by name.
-	var albumFolderID string
-	for _, f := range folders.Folders {
-		if strings.HasSuffix(filepath.ToSlash(f.Path), "/albumA") {
-			albumFolderID = f.ID
-			break
-		}
-	}
-	if albumFolderID == "" {
-		t.Fatalf("folders response missing albumA: %+v", folders.Folders)
-	}
-	// POST /api/v1/plans with the workflow contract: inline literal-tag policy
-	// over the albumA planning root. albumA holds flac+mp3 pairs with unknown
-	// bitrates, so the balanced profile (wav + mp3-320) is actionable (lossless
-	// and encoded lanes rebuild from the observed flac source).
-	planReq := map[string]any{
-		"library_id": lib.ID,
-		"folder_ids": []string{albumFolderID},
-		"workflow": map[string]any{
-			"schema_version": 1,
-			"steps": []any{map[string]any{
-				"step_type": "reconcile_audio_outputs",
-				"policy":    inlineWorkflowPolicy(),
-			}},
-		},
-	}
-	var plan struct {
-		PlanID   string `json:"plan_id"`
-		PlanKind string `json:"plan_kind"`
-		Summary  struct {
-			OperationCount  int    `json:"operation_count"`
-			ErrorCount      int    `json:"error_count"`
-			ActionableCount int    `json:"actionable_count"`
-			SummaryReason   string `json:"summary_reason"`
-		} `json:"summary"`
-		Steps []struct {
-			StepType   string `json:"step_type"`
-			Status     string `json:"status"`
-			Components []struct {
-				ComponentID string `json:"component_id"`
-				Status      string `json:"status"`
-			} `json:"components"`
-		} `json:"steps"`
-	}
-	code = doJSON(t, client, ctx, base, http.MethodPost, "/api/v1/plans", token, planReq, &plan)
-	if code != http.StatusOK {
-		t.Fatalf("POST /api/v1/plans: status %d, want 200", code)
-	}
-	if plan.PlanID == "" {
-		t.Fatal("POST /api/v1/plans: empty plan_id")
-	}
-	if plan.PlanKind != "workflow" {
-		t.Fatalf("plan_kind = %q, want workflow", plan.PlanKind)
-	}
-	if len(plan.Steps) != 1 || plan.Steps[0].StepType != "reconcile_audio_outputs" {
-		t.Fatalf("steps = %+v, want one reconcile_audio_outputs step", plan.Steps)
-	}
-	if plan.Summary.OperationCount == 0 {
-		t.Fatalf("expected actionable operations for flac+mp3 pairs under balanced preset (summary=%+v)", plan.Summary)
-	}
-	if plan.Summary.OperationCount != plan.Summary.ActionableCount {
-		t.Fatalf(
-			"summary.actionable_count %d != operation_count %d",
-			plan.Summary.ActionableCount,
-			plan.Summary.OperationCount,
-		)
-	}
-	if plan.Summary.SummaryReason != "ACTIONABLE" {
-		t.Fatalf("summary_reason = %q, want ACTIONABLE", plan.Summary.SummaryReason)
-	}
-	if len(plan.Steps[0].Components) == 0 {
-		t.Fatal("workflow step has no components")
-	}
-
 	t.Logf(
-		"http e2e workflow complete: library=%s scan_id=%s folders=%d plan=%s ops=%d components=%d",
+		"http e2e scan loop complete: library=%s scan_id=%s folders=%d",
 		lib.ID,
 		completed.ScanID,
 		len(folders.Folders),
-		plan.PlanID,
-		plan.Summary.OperationCount,
-		len(plan.Steps[0].Components),
 	)
 }
 
@@ -235,24 +155,6 @@ type backendProc struct {
 	grpcPort int
 	httpPort int
 	token    string
-}
-
-// inlineWorkflowPolicy is the inline literal-tag policy payload (matched and
-// unmatched both want wav + mp3@320), replacing the removed balanced preset.
-func inlineWorkflowPolicy() map[string]any {
-	profile := map[string]any{
-		"lossless": map[string]any{"codec": "wav"},
-		"encoded":  map[string]any{"codec": "mp3", "quality": map[string]any{"kind": "bitrate", "bitrate": 320}},
-	}
-	return map[string]any{
-		"kind": "inline",
-		"policy": map[string]any{
-			"schema_version":  1,
-			"classifier_tags": []string{"SEなし"},
-			"matched":         profile,
-			"unmatched":       profile,
-		},
-	}
 }
 
 // startBackendBinary launches the backend with ONSEI_DATA_DIR set and a
