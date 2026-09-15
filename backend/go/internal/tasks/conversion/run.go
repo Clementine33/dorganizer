@@ -1,4 +1,4 @@
-package plan
+package conversion
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // Plan runs one conversion planning pass over the frozen input: every root is
@@ -23,8 +23,8 @@ import (
 //nolint:gocognit,funlen // per-root outcome branches; split when more steps appear
 func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Input) (*Snapshot, error) {
 	if len(in.Roots) == 0 {
-		return nil, NewError(
-			ErrKindInvalidArgument,
+		return nil, worksetusecase.NewError(
+			worksetusecase.ErrKindInvalidArgument,
 			"SCOPE_REQUIRED",
 			"planning requires at least one root",
 			nil,
@@ -43,17 +43,22 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 	// classifier here: per-root policies were validated in full when the
 	// session input was frozen.
 	if err := reconcile.ValidatePolicy(in.Policy); err != nil {
-		return nil, NewError(ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
+		return nil, worksetusecase.NewError(worksetusecase.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
 	}
 	classifier, err := reconcile.ResolveClassifier(in.Policy.ClassifierTags)
 	if err != nil {
-		return nil, NewError(ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
+		return nil, worksetusecase.NewError(worksetusecase.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
 	}
 	rootClassifiers := make([]reconcile.Classifier, len(in.Roots))
 	for i, r := range in.Roots {
 		rootClassifier, resolveErr := reconcile.ResolveClassifier(r.Policy.ClassifierTags)
 		if resolveErr != nil {
-			return nil, NewError(ErrKindInvalidArgument, "INVALID_POLICY", resolveErr.Error(), resolveErr)
+			return nil, worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
+				"INVALID_POLICY",
+				resolveErr.Error(),
+				resolveErr,
+			)
 		}
 		rootClassifiers[i] = rootClassifier
 	}
@@ -130,8 +135,8 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 			return nil, ctx.Err()
 		}
 		if o.err != nil {
-			return nil, NewError(
-				ErrKindInternal,
+			return nil, worksetusecase.NewError(
+				worksetusecase.ErrKindInternal,
 				"COLLECT_FAILED",
 				fmt.Sprintf("analyze planning root %s: %v", o.root, o.err),
 				o.err,
@@ -233,44 +238,6 @@ func aggregateSummaryReason(s reconcile.StepSummary) string {
 	default:
 		return reconcile.ReasonNoMatch
 	}
-}
-
-// collectRootEntries loads recognized audio entries under a planning root with
-// the metadata needed for fingerprinting and bitrate enrichment.
-func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
-	rootPosix := normalizeScopePath(root)
-	prefix := strings.TrimSuffix(rootPosix, "/")
-	// LIKE patterns containing user-supplied % or _ would widen the scope;
-	// escape them (same convention as collectEntriesByScopes) so a planning
-	// root with such characters cannot leak sibling paths into the plan.
-	likePrefix := escapeLikePattern(prefix)
-	rows, err := repo.DB().Query(`
-		SELECT path, COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(bitrate, 0), COALESCE(format, '')
-		FROM entries WHERE is_dir = 0 AND (path = ? OR path LIKE ? ESCAPE '\')
-	`, rootPosix, likePrefix+"/%")
-	if err != nil {
-		return nil, fmt.Errorf("query root entries: %w", err)
-	}
-	defer rows.Close()
-
-	entries := make([]reconcile.AudioEntry, 0)
-	seen := map[string]struct{}{}
-	for rows.Next() {
-		var e reconcile.AudioEntry
-		if err := rows.Scan(&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format); err != nil {
-			return nil, fmt.Errorf("scan root entry: %w", err)
-		}
-		if _, ok := seen[e.PathPosix]; ok {
-			continue
-		}
-		seen[e.PathPosix] = struct{}{}
-		entries = append(entries, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].PathPosix < entries[j].PathPosix })
-	return entries, nil
 }
 
 // enrichBitrate probes the missing MP3/AAC bitrates of the entries and

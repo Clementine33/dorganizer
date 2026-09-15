@@ -155,20 +155,18 @@ func toWorkflowPlanResponse(plan worksetusecase.RevisionPlan) workflowPlanRespon
 			SummaryReason:  plan.Summary.SummaryReason,
 		},
 	}
-	components := make([]json.RawMessage, 0, len(plan.Components))
-	for _, c := range plan.Components {
-		components = append(components, rawJSON(c))
-	}
+	components := make([]json.RawMessage, 0, len(plan.Units))
+	components = append(components, plan.Units...)
 	out.Steps = append(out.Steps, workflowStepResponse{
 		StepType:   plan.StepType,
 		StepIndex:  plan.StepIndex,
 		Status:     plan.Status,
-		Policy:     rawJSON(plan.Policy),
+		Policy:     plan.Payload,
 		PolicyHash: plan.PolicyHash,
 		Classifier: rawJSON(struct {
 			Tags []string `json:"tags"`
 			Hash string   `json:"hash"`
-		}{plan.Classifier.Tags, plan.Classifier.Hash}),
+		}{plan.ClassifierTags, plan.ClassifierHash}),
 		Summary:    rawJSON(plan.Summary),
 		Components: components,
 	})

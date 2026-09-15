@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -30,7 +31,9 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	svc := worksetusecase.NewService(repo, tmp, 1)
+	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+		tasksconversion.New(tmp),
+	})
 	handler := NewServer(Dependencies{
 		Repo:           repo,
 		ConfigDir:      tmp,

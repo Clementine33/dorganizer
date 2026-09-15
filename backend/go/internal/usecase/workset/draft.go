@@ -19,24 +19,20 @@ func (s *serviceImpl) GetDraft(ctx context.Context, worksetID, operationType str
 	if err != nil {
 		return nil, err
 	}
-	d, err := s.repo.GetOperationDraft(worksetID, operationType)
+	doc, err := s.repo.GetOperationDraft(worksetID, operationType)
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load draft", err)
 	}
-	if d == nil {
+	if doc == nil {
 		return nil, NewError(ErrKindNotFound, "DRAFT_NOT_FOUND", "operation has no draft", nil)
-	}
-	doc, err := ParseDraft(d.DraftJSON)
-	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "stored draft is invalid", err)
 	}
 	return &Draft{
 		WorksetID:     worksetID,
 		OperationType: operationType,
 		Version:       op.Version,
-		SchemaVersion: d.SchemaVersion,
-		Document:      doc,
-		UpdatedAt:     d.UpdatedAt,
+		SchemaVersion: doc.SchemaVersion,
+		Document:      json.RawMessage(doc.DraftJSON),
+		UpdatedAt:     doc.UpdatedAt,
 	}, nil
 }
 
@@ -53,7 +49,8 @@ func (s *serviceImpl) SaveDraft(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req.Document == nil {
+	docBytes := []byte(req.Document)
+	if len(docBytes) == 0 {
 		return nil, NewError(ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is required", nil)
 	}
 	task, err := s.requireTask(operationType)
@@ -70,11 +67,7 @@ func (s *serviceImpl) SaveDraft(
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load members", err)
 	}
-	raw, err := json.Marshal(req.Document)
-	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to encode draft", err)
-	}
-	if validateErr := task.ValidateDraft(raw, members); validateErr != nil {
+	if validateErr := task.ValidateDraft(docBytes, members); validateErr != nil {
 		return nil, validateErr
 	}
 	// Reject while a generation is queued/running: the session freezes the
@@ -106,7 +99,7 @@ func (s *serviceImpl) SaveDraft(
 			nil,
 		)
 	}
-	canonical, hash, schemaVersion, normErr := task.NormalizeDraft(raw, members)
+	canonical, hash, schemaVersion, normErr := task.NormalizeDraft(docBytes, members)
 	if normErr != nil {
 		return nil, normErr
 	}

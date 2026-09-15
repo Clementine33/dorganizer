@@ -3,17 +3,10 @@ package workset
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
-	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // Execution component statuses reported per component.
@@ -29,10 +22,6 @@ const (
 // component run (precheck/materialize/validate/commit/remove) are reported by
 // that component's own result once it returns.
 const ExecPhaseComponent = "component"
-
-// softDeleteDirName mirrors the soft-delete convention owned by the execute
-// service: removed media is preserved at <member root>/Delete/<relative path>.
-const softDeleteDirName = "Delete"
 
 // cancelPollInterval is how often a running session observes the cooperative
 // cancel flag. Cancellation is honored at the component's safe stage
@@ -68,12 +57,12 @@ type executionRun struct {
 	req      *executionRequest
 	report   []ExecutionComponentView
 	rootPath string
-	outcomes map[int]string
+	outcomes map[int]json.RawMessage
 }
 
-// prepareExecution loads the frozen worklist, the persisted report and the
-// component outcomes. A session whose persisted state cannot be resolved fails
-// closed with a stable code instead of running a guessed worklist.
+// prepareExecution loads the frozen units, the persisted report and the
+// frozen unit payloads. A session whose persisted state cannot be resolved
+// fails closed with a stable code instead of running a guessed worklist.
 func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, bool) {
 	req, err := parseExecutionRequest(ex.RequestJSON)
 	if err != nil {
@@ -81,7 +70,7 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 		return nil, false
 	}
 	report, err := parseExecutionReport(ex.ReportJSON)
-	if err != nil || len(report) != len(req.Components) {
+	if err != nil || len(report) != len(req.Units) {
 		d.finishExecution(
 			ex,
 			sqlite.ExecStatusFailed,
@@ -107,18 +96,30 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 		)
 		return nil, false
 	}
-	outcomes := make(map[int]string, len(plan.Components))
+	outcomes := make(map[int]json.RawMessage, len(plan.Components))
 	for _, c := range plan.Components {
-		outcomes[c.ComponentIndex] = c.OutcomeJSON
+		outcomes[c.ComponentIndex] = json.RawMessage(c.OutcomeJSON)
 	}
 	return &executionRun{req: req, report: report, rootPath: w.RootPath, outcomes: outcomes}, true
 }
 
-// executeRun runs one claimed session: components in frozen order, first
-// failure stops admission, and every component boundary persists its facts.
+// executeRun runs one claimed session: units in frozen order, first failure
+// stops admission, and every unit boundary persists its facts. The business
+// work of one unit belongs to the operation's task.
 func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	run, ok := d.prepareExecution(ex)
 	if !ok {
+		return
+	}
+	task, taskErr := d.svc.requireTask(ex.OperationType)
+	if taskErr != nil {
+		d.finishExecution(
+			ex,
+			sqlite.ExecStatusFailed,
+			"REQUEST_LOAD_FAILED",
+			"operation task is not registered",
+			run.report,
+		)
 		return
 	}
 	req, report := run.req, run.report
@@ -129,19 +130,17 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	go watchExecutionCancel(ctx, cancel, stopWatch, d.svc.repo, ex.ExecutionID)
 	defer close(stopWatch)
 
-	mode := execute.DeleteMode(req.DeleteMode)
-	tools := d.svc.executionTools()
 	completed, doneOps := ex.CompletedComponents, ex.CompletedOperations
 
-	for i := range req.Components {
-		c := req.Components[i]
+	for i := range req.Units {
+		u := req.Units[i]
 		if ctx.Err() != nil {
 			d.finishExecution(ex, sqlite.ExecStatusCanceled, "CANCELED", "execution canceled", report)
 			return
 		}
-		// The report is indexed by the frozen worklist order; a mismatch would
+		// The report is indexed by the frozen unit order; a mismatch would
 		// mislabel facts, so the session fails closed instead.
-		if report[i].ComponentIndex != c.ComponentIndex {
+		if report[i].ComponentIndex != u.Index {
 			d.finishExecution(
 				ex,
 				sqlite.ExecStatusFailed,
@@ -151,7 +150,7 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 			)
 			return
 		}
-		outcome, ok := componentOutcome(run.outcomes, c.ComponentIndex)
+		outcome, ok := run.outcomes[u.Index]
 		if !ok {
 			d.finishExecution(
 				ex,
@@ -162,21 +161,28 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 			)
 			return
 		}
-		d.persistProgress(ex.ExecutionID, completed, doneOps, c, report)
+		d.persistProgress(ex.ExecutionID, completed, doneOps, u, report)
 
-		res, runErr := execute.RunComponent(ctx, execute.ComponentRunRequest{
-			Root:       c.RootPath,
-			Component:  outcome,
-			Specs:      c.Profile,
-			DeleteMode: mode,
-			Tools:      tools,
+		res, runErr := task.RunUnit(ctx, d.svc.repo, UnitRunInput{
+			WorksetRoot: run.rootPath,
+			DeleteMode:  req.DeleteMode,
+			Unit:        u,
+			Outcome:     outcome,
 		})
+		if runErr != nil {
+			code, message := "COMPONENT_FAILED", runErr.Error()
+			if werr, ok := AsError(runErr); ok {
+				code, message = werr.Code, werr.Message
+			}
+			d.finishExecution(ex, sqlite.ExecStatusFailed, code, message, report)
+			return
+		}
 		entry := &report[i]
-		applyComponentResult(entry, res, runErr, ctx)
-		d.syncComponentInventory(run.rootPath, c, res, entry)
+		applyUnitResult(entry, res)
+		d.syncUnitInventory(run.rootPath, res, entry)
 		completed++
 		doneOps += entry.CompletedOps
-		d.persistProgress(ex.ExecutionID, completed, doneOps, c, report)
+		d.persistProgress(ex.ExecutionID, completed, doneOps, u, report)
 
 		switch entry.Status {
 		case ExecComponentCanceled:
@@ -185,66 +191,49 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		case ExecComponentFailed:
 			// First failure stops admission: every later component stays pending
 			// in the report and is never executed.
-			message := fmt.Sprintf("component %s stopped at %s: %s", c.ComponentID, entry.Stage, entry.ErrorMessage)
+			message := fmt.Sprintf("component %s stopped at %s: %s", u.ID, entry.Stage, entry.ErrorMessage)
 			d.finishExecution(ex, sqlite.ExecStatusFailed, entry.ErrorCode, message, report)
 			return
 		}
 	}
-	d.persistProgress(ex.ExecutionID, completed, doneOps, executionComponent{}, report)
+	d.persistProgress(ex.ExecutionID, completed, doneOps, ExecutionUnit{}, report)
 	d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
 }
 
-// applyComponentResult records one component run's observed facts on its
-// report entry: the outcome lists, the completed count and the terminal status.
-func applyComponentResult(
-	entry *ExecutionComponentView,
-	res execute.ComponentRunResult,
-	runErr error,
-	ctx context.Context,
-) {
-	entry.Committed = nonNil(res.Committed)
-	entry.Removed = nonNil(res.Removed)
-	entry.Remaining = nonNil(res.Remaining)
-	entry.Recovery = nonNil(res.Recovery)
+// applyUnitResult records one unit run's observed facts on its report entry:
+// the outcome lists, the completed count and the terminal status.
+func applyUnitResult(entry *ExecutionComponentView, res UnitResult) {
+	entry.Committed = res.Committed
+	entry.Removed = res.Removed
+	entry.Remaining = res.Remaining
+	entry.Recovery = res.Recovery
 	entry.CompletedOps = len(res.Committed) + len(res.Removed)
-	entry.Status = ExecComponentSucceeded
-	if runErr == nil {
-		return
-	}
-	entry.Status = ExecComponentFailed
-	entry.Stage, entry.ErrorCode, entry.ErrorMessage = componentErrorOf(runErr)
-	if ctx.Err() != nil || entry.ErrorCode == execute.ComponentCodeCanceled {
+	entry.Stage = res.Stage
+	entry.ErrorCode = res.ErrorCode
+	entry.ErrorMessage = res.ErrorMessage
+	switch {
+	case res.Canceled:
 		entry.Status = ExecComponentCanceled
-		entry.ErrorMessage = "component run canceled"
+	case res.ErrorCode != "":
+		entry.Status = ExecComponentFailed
+	default:
+		entry.Status = ExecComponentSucceeded
 	}
-}
-
-// componentOutcome decodes the frozen outcome of one component.
-func componentOutcome(outcomes map[int]string, index int) (reconcile.ComponentOutcome, bool) {
-	raw, ok := outcomes[index]
-	if !ok {
-		return reconcile.ComponentOutcome{}, false
-	}
-	var outcome reconcile.ComponentOutcome
-	if err := json.Unmarshal([]byte(raw), &outcome); err != nil {
-		return reconcile.ComponentOutcome{}, false
-	}
-	return outcome, true
 }
 
 // persistProgress records the component-boundary progress plus the full report.
 func (d *dispatcher) persistProgress(
 	executionID string,
 	completed, doneOps int,
-	c executionComponent,
+	u ExecutionUnit,
 	report []ExecutionComponentView,
 ) {
 	_ = d.svc.repo.UpdateExecutionProgress(executionID, sqlite.ExecutionProgress{
 		CompletedComponents:   completed,
 		CompletedOperations:   doneOps,
-		CurrentRoot:           c.RootPath,
-		CurrentComponentID:    c.ComponentID,
-		CurrentComponentIndex: c.ComponentIndex,
+		CurrentRoot:           u.RootPath,
+		CurrentComponentID:    u.ID,
+		CurrentComponentIndex: u.Index,
 		CurrentPhase:          ExecPhaseComponent,
 	}, mustJSON(report))
 }
@@ -289,7 +278,7 @@ func watchExecutionCancel(
 	}
 }
 
-// parseExecutionRequest decodes the frozen worklist.
+// parseExecutionRequest decodes the frozen units.
 func parseExecutionRequest(raw string) (*executionRequest, error) {
 	var req executionRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
@@ -313,88 +302,20 @@ func parseExecutionReport(raw string) ([]ExecutionComponentView, error) {
 	return report, nil
 }
 
-// executionTools resolves the encoder tools from config.json, matching the
-// planner's own resolution; empty paths fall back to PATH.
-func (s *serviceImpl) executionTools() execute.ToolsConfig {
-	tools := execute.ToolsConfig{}
-	data, err := os.ReadFile(filepath.Join(s.configDir, "config.json"))
-	if err != nil {
-		return tools
+// syncUnitInventory applies this unit's observed disk changes to the entries
+// inventory: removed sources lose their row, committed outputs and soft-delete
+// destinations are refreshed from disk. A sync failure (or a task-side stat
+// failure) is disclosed on the unit instead of being reported as "unchanged".
+func (d *dispatcher) syncUnitInventory(worksetRoot string, res UnitResult, entry *ExecutionComponentView) {
+	if res.InventoryError != "" {
+		entry.InventorySynced = false
+		entry.InventorySyncError = res.InventoryError
+		return
 	}
-	cfg := appconfig.DefaultAppConfig()
-	if json.Unmarshal(data, &cfg) != nil {
-		return tools
-	}
-	tools.FFmpegPath = cfg.Tools.FFmpegPath
-	tools.FFprobePath = cfg.Tools.FFprobePath
-	return tools
-}
-
-// componentErrorOf extracts the stable failure facts of a component run.
-func componentErrorOf(err error) (stage, code, message string) {
-	cerr, ok := errors.AsType[*execute.ComponentError](err)
-	if !ok {
-		return "", "COMPONENT_FAILED", err.Error()
-	}
-	msg := cerr.Message
-	if cerr.Path != "" {
-		msg = fmt.Sprintf("%s (%s)", msg, cerr.Path)
-	}
-	return cerr.Stage, cerr.Code, msg
-}
-
-// syncComponentInventory applies this component's observed disk changes to the
-// entries inventory: removed sources lose their row, committed outputs and
-// soft-delete destinations are refreshed from disk. A sync failure is disclosed
-// on the component instead of being reported as "unchanged".
-func (d *dispatcher) syncComponentInventory(
-	rootPath string,
-	c executionComponent,
-	res execute.ComponentRunResult,
-	entry *ExecutionComponentView,
-) {
-	paths := make([]string, 0, len(res.Committed)+len(res.Recovery))
-	paths = append(paths, res.Committed...)
-	for _, p := range res.Recovery {
-		if underRecoveryDir(c.RootPath, p) {
-			paths = append(paths, p)
-		}
-	}
-	facts := make([]sqlite.InventoryFile, 0, len(paths))
-	for _, p := range paths {
-		info, err := os.Stat(filepath.FromSlash(p))
-		if err != nil {
-			entry.InventorySynced = false
-			entry.InventorySyncError = fmt.Sprintf("stat %s: %v", p, err)
-			return
-		}
-		facts = append(facts, sqlite.InventoryFile{Path: p, Size: info.Size(), Mtime: info.ModTime().Unix()})
-	}
-	if err := d.svc.repo.SyncObservedInventory(rootPath, res.Removed, facts); err != nil {
+	if err := d.svc.repo.SyncObservedInventory(worksetRoot, res.InventoryRemoved, res.InventoryRefreshed); err != nil {
 		entry.InventorySynced = false
 		entry.InventorySyncError = err.Error()
 		return
 	}
 	entry.InventorySynced = true
-}
-
-// underRecoveryDir reports whether a persisted path is inside the member root's
-// soft-delete recovery folder: the only recovery entries that are real media in
-// their scanned place. A temp leftover is not an inventory fact.
-func underRecoveryDir(componentRoot, p string) bool {
-	rel, err := filepath.Rel(filepath.FromSlash(componentRoot), filepath.FromSlash(p))
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	return len(parts) > 1 && parts[0] == softDeleteDirName
-}
-
-// nonNil turns a nil path slice into an empty one so the persisted report never
-// marshals a planned-empty list as JSON null.
-func nonNil(paths []string) []string {
-	if paths == nil {
-		return []string{}
-	}
-	return paths
 }

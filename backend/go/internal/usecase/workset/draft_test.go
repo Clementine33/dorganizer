@@ -3,6 +3,7 @@ package workset_test
 import (
 	"testing"
 
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -26,7 +27,7 @@ func TestDraftSaveAdvancesOperationVersion(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: draftDoc(), IfMatchVersion: ws.Operations[0].Version,
+			Document: draftJSON(t, draftDoc()), IfMatchVersion: ws.Operations[0].Version,
 		},
 	); err == nil {
 		t.Fatal("stale If-Match must be refused")
@@ -82,13 +83,13 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 	version := ws.Operations[0].Version
 
 	unknown := draftDoc()
-	unknown.Members = []worksetusecase.DraftMember{{MemberID: "m-not-here"}}
+	unknown.Members = []tasksconversion.DraftMember{{MemberID: "m-not-here"}}
 	if _, err := f.svc.SaveDraft(
 		f.ctx,
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: unknown, IfMatchVersion: version,
+			Document: draftJSON(t, unknown), IfMatchVersion: version,
 		},
 	); err == nil {
 		t.Fatal("unknown member must be refused")
@@ -100,7 +101,7 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 	}
 
 	dup := draftDoc()
-	dup.Members = []worksetusecase.DraftMember{
+	dup.Members = []tasksconversion.DraftMember{
 		{MemberID: ws.Members[0].MemberID},
 		{MemberID: ws.Members[0].MemberID},
 	}
@@ -109,7 +110,7 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: dup, IfMatchVersion: version,
+			Document: draftJSON(t, dup), IfMatchVersion: version,
 		},
 	); err == nil {
 		t.Fatal("duplicate member must be refused")
@@ -140,7 +141,7 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: badMode, IfMatchVersion: version,
+			Document: draftJSON(t, badMode), IfMatchVersion: version,
 		},
 	); err == nil {
 		t.Fatal("unknown mode must be refused")
@@ -153,7 +154,7 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: badCodec, IfMatchVersion: version,
+			Document: draftJSON(t, badCodec), IfMatchVersion: version,
 		},
 	); err == nil {
 		t.Fatal("unknown codec must be refused")
@@ -167,7 +168,7 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: undeclared, IfMatchVersion: version,
+			Document: draftJSON(t, undeclared), IfMatchVersion: version,
 		},
 	); err != nil {
 		t.Fatalf("an incomplete output profile must be saveable: %v", err)
@@ -200,7 +201,7 @@ func TestDraftEditRejectedWhileGenerating(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: draftDoc(), IfMatchVersion: version,
+			Document: draftJSON(t, draftDoc()), IfMatchVersion: version,
 		},
 	); err == nil {
 		t.Fatal("draft edit during an active session must fail")

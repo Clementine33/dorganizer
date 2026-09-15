@@ -2,11 +2,11 @@ package workset
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // OperationTypeConversion is the only publicly available operation type of
@@ -206,20 +206,22 @@ type RenameRequest struct {
 }
 
 // Draft is the persisted sparse operation draft. Version is the operation
-// version (the If-Match authority); there is no separate draft counter.
+// version (the If-Match authority); there is no separate draft counter. The
+// document is the task's opaque payload.
 type Draft struct {
 	WorksetID     string
 	OperationType string
 	Version       int
 	SchemaVersion int
-	Document      *DraftDoc
+	Document      json.RawMessage
 	UpdatedAt     time.Time
 }
 
 // SaveDraftRequest is the PUT operation draft payload (full replacement of the
-// sparse document, never a materialized full-config document).
+// sparse document, never a materialized full-config document). The document is
+// the task's opaque payload.
 type SaveDraftRequest struct {
-	Document       *DraftDoc
+	Document       json.RawMessage
 	IfMatchVersion int
 }
 
@@ -254,35 +256,37 @@ type GenerationView struct {
 	CreatedAt      time.Time
 }
 
-// RevisionMember is one member of a frozen revision: its effective config,
-// where each unit came from, and whether it participated. It is derived from
-// the frozen sparse draft, never from the live one.
+// RevisionMember is one member of a frozen revision: its effective config as
+// the task's opaque payload, where each unit came from, and whether it
+// participated. It is derived from the frozen sparse draft, never from the
+// live one.
 type RevisionMember struct {
 	MemberID   string
 	FolderPath string
 	MemberName string
 	Excluded   bool
-	Policy     reconcile.Policy
+	Payload    json.RawMessage // task payload: the effective config
 	Sources    map[string]string
 }
 
 // RevisionPlan is the reviewable plan snapshot of one revision, rebuilt from
 // the persisted records (never from live policy state). A revision carries
 // exactly one plan; the persisted step, root and component rows flatten into
-// it.
+// it, and the payload decode belongs to the operation's task.
 type RevisionPlan struct {
-	PlanID        string
-	SnapshotToken string
-	RootPath      string
-	PlanKind      string
-	StepType      string
-	StepIndex     int
-	Status        string
-	Policy        reconcile.Policy
-	PolicyHash    string
-	Classifier    reconcile.Classifier
-	Summary       reconcile.StepSummary
-	Components    []reconcile.ComponentOutcome
+	PlanID         string
+	SnapshotToken  string
+	RootPath       string
+	PlanKind       string
+	StepType       string
+	StepIndex      int
+	Status         string
+	PolicyHash     string
+	Summary        PlanSummary
+	Payload        json.RawMessage // task plan payload (policy JSON)
+	ClassifierTags []string
+	ClassifierHash string
+	Units          []json.RawMessage // per-unit payloads in component order
 }
 
 // RevisionView is the nested immutable revision detail.

@@ -1,4 +1,4 @@
-package plan_test
+package conversion_test
 
 import (
 	"context"
@@ -7,7 +7,8 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	"github.com/onsei/organizer/backend/internal/usecase/plan"
+	"github.com/onsei/organizer/backend/internal/tasks/conversion"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // seedRootEntries writes an RJ-like tree into the entries table: two content
@@ -96,9 +97,9 @@ func TestPlanBalancedSatisfied(t *testing.T) {
 	seedRootEntries(t, repo)
 
 	policy := balancedPolicy()
-	res, err := plan.Plan(context.Background(), repo, "", plan.Input{
+	res, err := conversion.Plan(context.Background(), repo, "", conversion.Input{
 		Policy: policy,
-		Roots:  []plan.RootInput{{Path: "/music", Policy: policy}},
+		Roots:  []conversion.RootInput{{Path: "/music", Policy: policy}},
 	})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -147,14 +148,14 @@ func TestPlanInvalidPolicy(t *testing.T) {
 
 	policy := balancedPolicy()
 	policy.SchemaVersion = 99
-	_, err = plan.Plan(context.Background(), repo, "", plan.Input{
+	_, err = conversion.Plan(context.Background(), repo, "", conversion.Input{
 		Policy: policy,
-		Roots:  []plan.RootInput{{Path: "/music", Policy: policy}},
+		Roots:  []conversion.RootInput{{Path: "/music", Policy: policy}},
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported policy schema version")
 	}
-	planErr, ok := plan.AsError(err)
+	planErr, ok := worksetusecase.AsError(err)
 	if !ok || planErr.Code != "INVALID_POLICY" {
 		t.Fatalf("error = %v, want INVALID_POLICY", err)
 	}

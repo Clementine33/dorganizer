@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -62,7 +63,7 @@ type revisionMemberResponse struct {
 	MemberName string            `json:"member_name"`
 	FolderPath string            `json:"folder_path"`
 	Excluded   bool              `json:"excluded"`
-	Effective  reconcile.Policy  `json:"effective"`
+	Effective  json.RawMessage   `json:"effective"`
 	Sources    map[string]string `json:"sources"`
 }
 
@@ -77,54 +78,28 @@ func toDraftResponse(d *worksetusecase.Draft) draftResponse {
 	}
 }
 
-func toDraftDocument(doc *worksetusecase.DraftDoc) draftDocumentRequest {
-	out := draftDocumentRequest{
-		SchemaVersion:  doc.SchemaVersion,
-		Mode:           doc.Mode,
-		ClassifierTags: doc.ClassifierTags,
-		Matched:        doc.Matched,
-		Unmatched:      doc.Unmatched,
-		Members:        []draftMemberRequest{},
-	}
+// toDraftDocument decodes the task's opaque stored draft document into the
+// HTTP shape. The wire shape is the conversion document until the payload
+// envelope moves.
+func toDraftDocument(raw json.RawMessage) draftDocumentRequest {
+	var out draftDocumentRequest
+	_ = json.Unmarshal(raw, &out)
 	if out.ClassifierTags == nil {
 		out.ClassifierTags = []string{}
 	}
-	for _, m := range doc.Members {
-		req := draftMemberRequest{MemberID: m.MemberID, Excluded: m.Excluded}
-		if m.Overrides != nil {
-			req.Overrides = &draftOverridesRequest{
-				Mode:           m.Overrides.Mode,
-				ClassifierTags: m.Overrides.ClassifierTags,
-				Matched:        m.Overrides.Matched,
-				Unmatched:      m.Overrides.Unmatched,
-			}
-		}
-		out.Members = append(out.Members, req)
+	if out.Members == nil {
+		out.Members = []draftMemberRequest{}
 	}
 	return out
 }
 
-func toDraftDoc(req draftDocumentRequest) *worksetusecase.DraftDoc {
-	doc := &worksetusecase.DraftDoc{
-		SchemaVersion:  req.SchemaVersion,
-		Mode:           req.Mode,
-		ClassifierTags: req.ClassifierTags,
-		Matched:        req.Matched,
-		Unmatched:      req.Unmatched,
+// toDraftPayload encodes the HTTP draft body into the task's opaque payload.
+func toDraftPayload(req draftDocumentRequest) json.RawMessage {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return json.RawMessage("{}")
 	}
-	for _, m := range req.Members {
-		rec := worksetusecase.DraftMember{MemberID: m.MemberID, Excluded: m.Excluded}
-		if m.Overrides != nil {
-			rec.Overrides = &worksetusecase.OverrideSet{
-				Mode:           m.Overrides.Mode,
-				ClassifierTags: m.Overrides.ClassifierTags,
-				Matched:        m.Overrides.Matched,
-				Unmatched:      m.Overrides.Unmatched,
-			}
-		}
-		doc.Members = append(doc.Members, rec)
-	}
-	return doc
+	return raw
 }
 
 // ==================== Handlers ====================
@@ -183,7 +158,7 @@ func (s *Server) putOperationDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view, err := svc.SaveDraft(r.Context(), r.PathValue("id"), r.PathValue("type"), worksetusecase.SaveDraftRequest{
-		Document:       toDraftDoc(req),
+		Document:       toDraftPayload(req),
 		IfMatchVersion: version,
 	})
 	if err != nil {
@@ -250,7 +225,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 			MemberName: m.MemberName,
 			FolderPath: m.FolderPath,
 			Excluded:   m.Excluded,
-			Effective:  m.Policy,
+			Effective:  m.Payload,
 			Sources:    m.Sources,
 		})
 	}

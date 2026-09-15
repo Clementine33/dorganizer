@@ -1,9 +1,11 @@
 package workset_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -42,9 +44,13 @@ func (f *fixture) resolvedFrom(ws *worksetusecase.WorksetView, planID string) ma
 	}
 	out := map[string]resolvedMember{}
 	for _, m := range rev.Members {
+		var policy reconcile.Policy
+		if err := json.Unmarshal(m.Payload, &policy); err != nil {
+			f.t.Fatalf("decode member payload: %v", err)
+		}
 		out[rel[m.MemberID]] = resolvedMember{
 			excluded: m.Excluded,
-			policy:   m.Policy,
+			policy:   policy,
 			sources:  m.Sources,
 		}
 	}
@@ -78,27 +84,27 @@ func TestDesignExampleInheritance(t *testing.T) {
 		},
 	}
 	flac := reconcile.DesiredProfile{Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecFlac}}
-	doc.Members = []worksetusecase.DraftMember{
-		{MemberID: yi, Overrides: &worksetusecase.OverrideSet{Matched: &flac}},
-		{MemberID: bing, Overrides: &worksetusecase.OverrideSet{ClassifierTags: &[]string{"A"}}},
+	doc.Members = []tasksconversion.DraftMember{
+		{MemberID: yi, Overrides: &tasksconversion.OverrideSet{Matched: &flac}},
+		{MemberID: bing, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &[]string{"A"}}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	// Step 1: batch-set unmatched=WAV for 甲 and 乙. Only the unmatched unit
 	// gains an override; 乙's matched=FLAC survives untouched.
 	stored := f.draft(ws.WorksetID)
-	storedMembers := map[string]worksetusecase.DraftMember{}
-	for _, m := range stored.Document.Members {
+	storedMembers := map[string]tasksconversion.DraftMember{}
+	for _, m := range mustDraft(t, stored).Members {
 		storedMembers[m.MemberID] = m
 	}
 	wav := reconcile.DesiredProfile{Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav}}
-	next := *stored.Document
+	next := *mustDraft(t, stored)
 	next.Members = nil
 	for _, member := range ws.Members {
 		rec := storedMembers[member.MemberID]
 		rec.MemberID = member.MemberID
 		if member.MemberID == jia || member.MemberID == yi {
-			ov := worksetusecase.OverrideSet{}
+			ov := tasksconversion.OverrideSet{}
 			if rec.Overrides != nil {
 				ov = *rec.Overrides
 			}
@@ -119,20 +125,20 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["jia"].policy.Unmatched; got.Lossless == nil || got.Lossless.Codec != reconcile.CodecWav {
 		t.Fatalf("step 1: 甲 unmatched override missing: %+v", got)
 	}
-	if eff["jia"].sources[worksetusecase.UnitUnmatched] != worksetusecase.SourceMember {
-		t.Fatalf("step 1: 甲 unmatched source = %q", eff["jia"].sources[worksetusecase.UnitUnmatched])
+	if eff["jia"].sources[tasksconversion.UnitUnmatched] != tasksconversion.SourceMember {
+		t.Fatalf("step 1: 甲 unmatched source = %q", eff["jia"].sources[tasksconversion.UnitUnmatched])
 	}
-	if eff["jia"].sources[worksetusecase.UnitMatched] != worksetusecase.SourceCommon {
+	if eff["jia"].sources[tasksconversion.UnitMatched] != tasksconversion.SourceCommon {
 		t.Fatal("step 1: 甲 matched must stay inherited")
 	}
-	if eff["yi"].sources[worksetusecase.UnitMatched] != worksetusecase.SourceMember {
+	if eff["yi"].sources[tasksconversion.UnitMatched] != tasksconversion.SourceMember {
 		t.Fatal("step 1: 乙 matched source must be member")
 	}
 
 	// Step 2: common tags change to B. 甲 and 乙 follow; 丙 keeps A because its
 	// override was explicit even though the values were equal before.
 	before := f.draft(ws.WorksetID)
-	changed := *before.Document
+	changed := *mustDraft(t, before)
 	changed.ClassifierTags = []string{"B"}
 	f.saveDraft(ws.WorksetID, &changed, f.operation(ws.WorksetID).Version)
 
@@ -146,15 +152,15 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["bing"].policy.ClassifierTags; len(got) != 1 || got[0] != "A" {
 		t.Fatalf("step 2: 丙 tags = %v, want [A]", got)
 	}
-	if eff["bing"].sources[worksetusecase.UnitClassifierTags] != worksetusecase.SourceMember {
+	if eff["bing"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
 		t.Fatal("step 2: 丙 tag source must be member")
 	}
 
 	// Step 3: 丙 restores tag inheritance -> adopts B immediately, then C.
 	after := f.draft(ws.WorksetID)
-	restored := *after.Document
+	restored := *mustDraft(t, after)
 	restored.Members = nil
-	for _, m := range after.Document.Members {
+	for _, m := range mustDraft(t, after).Members {
 		if m.MemberID == bing {
 			continue
 		}
@@ -166,12 +172,12 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["bing"].policy.ClassifierTags; len(got) != 1 || got[0] != "B" {
 		t.Fatalf("step 3: 丙 tags = %v, want inherited [B]", got)
 	}
-	if eff["bing"].sources[worksetusecase.UnitClassifierTags] != worksetusecase.SourceCommon {
+	if eff["bing"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceCommon {
 		t.Fatal("step 3: 丙 tag source must be common")
 	}
 
 	third := f.draft(ws.WorksetID)
-	again := *third.Document
+	again := *mustDraft(t, third)
 	again.ClassifierTags = []string{"C"}
 	f.saveDraft(ws.WorksetID, &again, f.operation(ws.WorksetID).Version)
 	eff = f.resolve(ws)
@@ -182,9 +188,9 @@ func TestDesignExampleInheritance(t *testing.T) {
 	// Step 4: excluding 乙 keeps every override; the resolved values are still
 	// available so restoring participation needs no re-editing.
 	cur := f.draft(ws.WorksetID)
-	excluded := *cur.Document
+	excluded := *mustDraft(t, cur)
 	excluded.Members = nil
-	for _, m := range cur.Document.Members {
+	for _, m := range mustDraft(t, cur).Members {
 		rec := m
 		if m.MemberID == yi {
 			rec.Excluded = true
@@ -194,7 +200,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 	f.saveDraft(ws.WorksetID, &excluded, f.operation(ws.WorksetID).Version)
 
 	cur = f.draft(ws.WorksetID)
-	for _, m := range cur.Document.Members {
+	for _, m := range mustDraft(t, cur).Members {
 		if m.MemberID != yi {
 			continue
 		}
@@ -212,7 +218,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if eff["yi"].policy.Matched.Lossless == nil || eff["yi"].policy.Matched.Lossless.Codec != reconcile.CodecFlac {
 		t.Fatal("step 4: excluded member must keep its resolved config")
 	}
-	if eff["yi"].sources[worksetusecase.UnitUnmatched] != worksetusecase.SourceMember {
+	if eff["yi"].sources[tasksconversion.UnitUnmatched] != tasksconversion.SourceMember {
 		t.Fatal("step 4: excluded member must keep its override sources")
 	}
 }
@@ -233,18 +239,18 @@ func TestSparseOverridesSurviveRoundTrip(t *testing.T) {
 	}
 	doc := draftDoc()
 	tags := []string{"only-a"}
-	doc.Members = []worksetusecase.DraftMember{
-		{MemberID: first, Overrides: &worksetusecase.OverrideSet{ClassifierTags: &tags}},
+	doc.Members = []tasksconversion.DraftMember{
+		{MemberID: first, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &tags}},
 		// A participating member with no override is not stored at all.
 		{MemberID: second},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	stored := f.draft(ws.WorksetID)
-	if len(stored.Document.Members) != 1 || stored.Document.Members[0].MemberID != first {
-		t.Fatalf("sparse members = %+v", stored.Document.Members)
+	if len(mustDraft(t, stored).Members) != 1 || mustDraft(t, stored).Members[0].MemberID != first {
+		t.Fatalf("sparse members = %+v", mustDraft(t, stored).Members)
 	}
-	ov := stored.Document.Members[0].Overrides
+	ov := mustDraft(t, stored).Members[0].Overrides
 	if ov == nil || ov.ClassifierTags == nil || ov.Mode != nil || ov.Matched != nil || ov.Unmatched != nil {
 		t.Fatalf("unmodified units were materialized: %+v", ov)
 	}
@@ -263,16 +269,16 @@ func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
 	}
 	empty := []string{}
 	doc := draftDoc()
-	doc.Members = []worksetusecase.DraftMember{
-		{MemberID: byPath["clear"], Overrides: &worksetusecase.OverrideSet{ClassifierTags: &empty}},
+	doc.Members = []tasksconversion.DraftMember{
+		{MemberID: byPath["clear"], Overrides: &tasksconversion.OverrideSet{ClassifierTags: &empty}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	stored := f.draft(ws.WorksetID)
-	if len(stored.Document.Members) != 1 {
-		t.Fatalf("explicit empty tags must be stored, got %+v", stored.Document.Members)
+	if len(mustDraft(t, stored).Members) != 1 {
+		t.Fatalf("explicit empty tags must be stored, got %+v", mustDraft(t, stored).Members)
 	}
-	if got := stored.Document.Members[0].Overrides.ClassifierTags; got == nil || len(*got) != 0 {
+	if got := mustDraft(t, stored).Members[0].Overrides.ClassifierTags; got == nil || len(*got) != 0 {
 		t.Fatalf("explicit empty tags not preserved: %+v", got)
 	}
 }
@@ -290,21 +296,21 @@ func TestEqualValueDifferentSource(t *testing.T) {
 	same := []string{"X"}
 	doc := draftDoc()
 	doc.ClassifierTags = same
-	doc.Members = []worksetusecase.DraftMember{
-		{MemberID: byPath["explicit"], Overrides: &worksetusecase.OverrideSet{ClassifierTags: &same}},
+	doc.Members = []tasksconversion.DraftMember{
+		{MemberID: byPath["explicit"], Overrides: &tasksconversion.OverrideSet{ClassifierTags: &same}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	eff := f.resolve(ws)
-	if eff["inherit"].sources[worksetusecase.UnitClassifierTags] != worksetusecase.SourceCommon {
+	if eff["inherit"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceCommon {
 		t.Fatal("inheriting member must be sourced common")
 	}
-	if eff["explicit"].sources[worksetusecase.UnitClassifierTags] != worksetusecase.SourceMember {
+	if eff["explicit"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
 		t.Fatal("equal explicit value must stay sourced member")
 	}
 
 	stored := f.draft(ws.WorksetID)
-	changed := *stored.Document
+	changed := *mustDraft(t, stored)
 	changed.ClassifierTags = []string{"Y"}
 	f.saveDraft(ws.WorksetID, &changed, f.operation(ws.WorksetID).Version)
 
@@ -324,7 +330,7 @@ func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 	ids := f.standardLibrary("only")
 	ws := f.createWorkset("全排除", ids...)
 	doc := draftDoc()
-	doc.Members = []worksetusecase.DraftMember{{MemberID: ws.Members[0].MemberID, Excluded: true}}
+	doc.Members = []tasksconversion.DraftMember{{MemberID: ws.Members[0].MemberID, Excluded: true}}
 	view := f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	_, err := f.svc.StartGeneration(
@@ -354,8 +360,8 @@ func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	tags := []string{"old"}
 	doc := draftDoc()
 	doc.ClassifierTags = []string{"common-old"}
-	doc.Members = []worksetusecase.DraftMember{
-		{MemberID: byPath, Overrides: &worksetusecase.OverrideSet{ClassifierTags: &tags}},
+	doc.Members = []tasksconversion.DraftMember{
+		{MemberID: byPath, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &tags}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
@@ -365,7 +371,7 @@ func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	}
 
 	stored := f.draft(ws.WorksetID)
-	changed := *stored.Document
+	changed := *mustDraft(t, stored)
 	changed.ClassifierTags = []string{"common-new"}
 	changed.Members = nil
 	f.saveDraft(ws.WorksetID, &changed, f.operation(ws.WorksetID).Version)
@@ -374,7 +380,7 @@ func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	if got := frozen["a"].policy.ClassifierTags; len(got) != 1 || got[0] != "old" {
 		t.Fatalf("frozen revision tags = %v, want [old]", got)
 	}
-	if frozen["a"].sources[worksetusecase.UnitClassifierTags] != worksetusecase.SourceMember {
+	if frozen["a"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
 		t.Fatal("frozen revision must keep the override source")
 	}
 }

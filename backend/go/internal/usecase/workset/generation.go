@@ -6,32 +6,29 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 // generationInput is the frozen enqueue-time input of one session.
 type generationInput struct {
 	operation *sqlite.Operation
-	draft     *DraftDoc
+	rawDraft  []byte
 	members   []*sqlite.WorksetMember
 	draftHash string
 	request   generationRequest
 }
 
 // generationRequest is the frozen session payload persisted on the row: the
-// canonical hashes plus the exact draft the session will plan with. Freezing
-// the draft here means a session never reads a later draft, whatever happens to
-// the operation while it waits in the queue.
+// canonical hashes plus the exact draft document the session will plan with.
+// Freezing the draft here means a session never reads a later draft, whatever
+// happens to the operation while it waits in the queue.
 type generationRequest struct {
-	DraftHash  string    `json:"draft_hash"`
-	MemberHash string    `json:"member_hash"`
-	Roots      int       `json:"roots"`
-	Draft      *DraftDoc `json:"draft"`
+	DraftHash  string          `json:"draft_hash"`
+	MemberHash string          `json:"member_hash"`
+	Roots      int             `json:"roots"`
+	Draft      json.RawMessage `json:"draft"`
 }
 
 // StartGeneration enqueues one planning session for an operation. The operation
@@ -95,9 +92,9 @@ func (s *serviceImpl) prepareGeneration(
 	if err != nil || draft == nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load draft", err)
 	}
-	doc, err := ParseDraft(draft.DraftJSON)
+	task, err := s.requireTask(operationType)
 	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "stored draft is invalid", err)
+		return nil, err
 	}
 	members, err := s.repo.ListWorksetMembers(worksetID)
 	if err != nil {
@@ -108,17 +105,8 @@ func (s *serviceImpl) prepareGeneration(
 	}
 	// Executable validation runs synchronously so an incomplete draft is
 	// rejected here instead of failing the queued session (ADR 0004 §3, C13).
-	effective, execErr := ResolveExecutable(doc, members)
-	if execErr != nil {
+	if execErr := task.ValidateSessionInput([]byte(draft.DraftJSON), members); execErr != nil {
 		return nil, execErr
-	}
-	if len(ParticipatingPolicyMap(effective)) == 0 {
-		return nil, NewError(
-			ErrKindConflict,
-			"NO_ACTIVE_MEMBERS",
-			"every member is excluded; restore at least one member to generate",
-			nil,
-		)
 	}
 	w, err := s.repo.GetWorkset(worksetID)
 	if err != nil {
@@ -152,14 +140,14 @@ func (s *serviceImpl) prepareGeneration(
 	}
 	return &generationInput{
 		operation: op,
-		draft:     doc,
+		rawDraft:  []byte(draft.DraftJSON),
 		members:   members,
 		draftHash: draft.DraftHash,
 		request: generationRequest{
 			DraftHash:  draft.DraftHash,
 			MemberHash: hashMembers(members),
 			Roots:      len(members),
-			Draft:      doc,
+			Draft:      json.RawMessage(draft.DraftJSON),
 		},
 	}, nil
 }
@@ -185,7 +173,7 @@ func (s *serviceImpl) rejectActiveSession(op *sqlite.Operation) (*StartGeneratio
 
 // replayCurrentRevision answers a new enqueue with the existing current
 // revision when nothing semantic changed: same operation, same draft, same
-// members, same live input fingerprints (ADR 0004 §4, P03).
+// members, same live input facts (ADR 0004 §4, P03).
 func (s *serviceImpl) replayCurrentRevision(
 	ctx context.Context,
 	input *generationInput,
@@ -194,13 +182,16 @@ func (s *serviceImpl) replayCurrentRevision(
 	if op.CurrentRevisionID == "" {
 		return nil, false, nil
 	}
-	fingerprints, err := s.rootFingerprints(ctx, participatingMembers(input))
-	if err != nil {
-		return nil, false, err
-	}
 	rev, err := s.repo.GetOperationRevision(op.WorksetID, op.OperationType, op.CurrentRevisionID)
-	if err != nil || rev.DraftHash != input.draftHash || rev.MemberHash != input.request.MemberHash ||
-		!rootsMatch(op.CurrentRevisionID, fingerprints, s.repo) {
+	if err != nil || rev.DraftHash != input.draftHash || rev.MemberHash != input.request.MemberHash {
+		return nil, false, nil
+	}
+	detail, detailErr := s.repo.GetWorkflowPlanDetail(op.CurrentRevisionID)
+	if detailErr != nil {
+		return nil, false, nil
+	}
+	health, healthErr := s.revisionHealth(op.OperationType, detail)
+	if healthErr != nil || health.InputMoved {
 		return nil, false, nil
 	}
 	summary, _, err := s.loadCurrentRevision(op)
@@ -210,16 +201,36 @@ func (s *serviceImpl) replayCurrentRevision(
 	return &StartGenerationResult{Revision: summary, Created: false}, true, nil
 }
 
-// participatingMembers filters the member list to those taking part.
-func participatingMembers(input *generationInput) []*sqlite.WorksetMember {
-	effective, err := ResolveEffective(input.draft, input.members)
+// revisionHealth asks the operation's task for the business health of one
+// frozen revision.
+func (s *serviceImpl) revisionHealth(
+	operationType string, detail *sqlite.WorkflowPlanDetail,
+) (RevisionHealth, error) {
+	task, err := s.requireTask(operationType)
+	if err != nil {
+		return RevisionHealth{}, err
+	}
+	return task.EvaluateRevision(s.repo, RevisionFacts{Detail: detail})
+}
+
+// participatingMembers filters the member list to those taking part, resolved
+// through the operation's task from the frozen draft.
+func (s *serviceImpl) participatingMembers(input *generationInput) []*sqlite.WorksetMember {
+	task, err := s.requireTask(input.operation.OperationType)
+	if err != nil {
+		return nil
+	}
+	facts, err := task.RevisionMembers(RevisionFacts{
+		DraftSnapshot: input.rawDraft,
+		Members:       input.members,
+	})
 	if err != nil {
 		return nil
 	}
 	participating := map[string]bool{}
-	for _, e := range effective {
-		if !e.Excluded {
-			participating[e.MemberID] = true
+	for _, f := range facts {
+		if !f.Excluded {
+			participating[f.MemberID] = true
 		}
 	}
 	out := make([]*sqlite.WorksetMember, 0, len(participating))
@@ -271,7 +282,7 @@ func (s *serviceImpl) persistGeneration(
 		RequestHash:          requestHash,
 		ExpectedDraftVersion: op.Version,
 		RequestJSON:          mustJSON(input.request),
-		TotalRoots:           len(participatingMembers(input)),
+		TotalRoots:           len(s.participatingMembers(input)),
 		CreatedAt:            now,
 	}
 	if err := s.repo.CreateGeneration(gen); err != nil {
@@ -354,69 +365,6 @@ func (s *serviceImpl) CancelGeneration(
 	return s.GetGeneration(ctx, worksetID, operationType, generationID)
 }
 
-// rootFingerprints recomputes the LIVE per-root inventory fingerprints for the
-// given member folder paths (same entry collection and fingerprint function as
-// the planner). This is the dedup/stale authority: after a scan, the values
-// reflect the current entries table.
-func (s *serviceImpl) rootFingerprints(
-	ctx context.Context,
-	members []*sqlite.WorksetMember,
-) (map[string]reconcile.ReconcileResult, error) {
-	out := make(map[string]reconcile.ReconcileResult, len(members))
-	for _, m := range members {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		entries, err := collectRootEntries(s.repo, m.FolderPath)
-		if err != nil {
-			return nil, NewError(
-				ErrKindInternal,
-				"INTERNAL",
-				fmt.Sprintf("failed to fingerprint %s: %v", m.FolderPath, err),
-				err,
-			)
-		}
-		audio := reconcile.AudioEntries(entries)
-		digest, count := reconcile.InventoryFingerprint(audio)
-		out[m.FolderPath] = reconcile.ReconcileResult{Digest: digest, Count: count}
-	}
-	return out, nil
-}
-
-// rootsMatch compares the live fingerprints against a plan's persisted
-// fingerprints by root path.
-func rootsMatch(planID string, current map[string]reconcile.ReconcileResult, repo *sqlite.Repository) bool {
-	if planID == "" {
-		return false
-	}
-	persisted, err := repo.GetWorkflowPlanRoots(planID)
-	if err != nil {
-		return false
-	}
-	if len(persisted) != len(current) {
-		return false
-	}
-	for _, r := range persisted {
-		live, ok := current[r.RootPath]
-		if !ok {
-			return false
-		}
-		if live.Digest != r.InventoryFingerprint || live.Count != r.EntryCount {
-			return false
-		}
-	}
-	return true
-}
-
-func hashMembers(members []*sqlite.WorksetMember) string {
-	h := sha256.New()
-	for _, m := range members {
-		h.Write([]byte(m.RelPath))
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
 // hashJSON hashes a request-scope string pair.
 func hashJSON(b []byte) string {
 	sum := sha256.Sum256(b)
@@ -443,33 +391,32 @@ func parseGenerationRequest(raw string) (*generationRequest, error) {
 	return &req, nil
 }
 
-// runGeneration executes the frozen session input. It is the single place the
-// generation worker turns a session row into a revision snapshot.
+// runGeneration executes the frozen session input through the operation's
+// task. It is the single place the generation worker turns a session row into
+// a revision snapshot.
 func (s *serviceImpl) runGeneration(
 	ctx context.Context,
+	operationType string,
 	req *generationRequest,
 	members []*sqlite.WorksetMember,
-	progress func(planusecase.Progress),
-) (*planusecase.Snapshot, []MemberEffective, error) {
-	effective, err := ResolveExecutable(req.Draft, members)
+	progress func(PlanProgress),
+) (*PlanSnapshot, error) {
+	task, err := s.requireTask(operationType)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	policies := ParticipatingPolicyMap(effective)
-	roots := make([]planusecase.RootInput, 0, len(policies))
-	for _, m := range members {
-		if policy, ok := policies[m.FolderPath]; ok {
-			roots = append(roots, planusecase.RootInput{Path: m.FolderPath, Policy: policy})
-		}
-	}
-	snap, err := planusecase.Plan(ctx, s.repo, s.configDir, planusecase.Input{
-		Policy:           CommonPolicy(req.Draft),
-		Roots:            roots,
-		MarkMissingRoots: true,
-		Progress:         progress,
+	return task.PlanSession(ctx, s.repo, PlanSessionInput{
+		RawDraft: req.Draft,
+		Members:  members,
+		Progress: progress,
 	})
-	if err != nil {
-		return nil, nil, err
+}
+
+func hashMembers(members []*sqlite.WorksetMember) string {
+	h := sha256.New()
+	for _, m := range members {
+		h.Write([]byte(m.RelPath))
+		h.Write([]byte{0})
 	}
-	return snap, effective, nil
+	return hex.EncodeToString(h.Sum(nil))
 }

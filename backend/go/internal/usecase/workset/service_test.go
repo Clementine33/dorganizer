@@ -41,14 +41,14 @@ func TestCreateEstablishesConversionOperation(t *testing.T) {
 
 	// The seeded draft is generatable without any edit (mode + tags + outputs).
 	stored := f.draft(ws.WorksetID)
-	if stored.Document.Mode != "available_sources" {
-		t.Fatalf("seeded mode = %q", stored.Document.Mode)
+	if mustDraft(t, stored).Mode != "available_sources" {
+		t.Fatalf("seeded mode = %q", mustDraft(t, stored).Mode)
 	}
-	if len(stored.Document.ClassifierTags) == 0 {
+	if len(mustDraft(t, stored).ClassifierTags) == 0 {
 		t.Fatal("seeded tags must come from config.json")
 	}
-	if len(stored.Document.Members) != 0 {
-		t.Fatalf("seeded draft must be sparse: %+v", stored.Document.Members)
+	if len(mustDraft(t, stored).Members) != 0 {
+		t.Fatalf("seeded draft must be sparse: %+v", mustDraft(t, stored).Members)
 	}
 
 	// A replay returns the same workset rather than a second one.
@@ -183,7 +183,7 @@ func TestOrphanedWorksetIsReadOnly(t *testing.T) {
 		ws.WorksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document: draftDoc(), IfMatchVersion: op.Version,
+			Document: draftJSON(t, draftDoc()), IfMatchVersion: op.Version,
 		},
 	); err == nil {
 		t.Fatal("draft save on orphaned workset should fail")

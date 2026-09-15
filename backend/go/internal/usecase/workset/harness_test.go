@@ -2,6 +2,7 @@ package workset_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -42,8 +44,10 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{
 		t:    t,
 		repo: repo,
-		svc:  worksetusecase.NewService(repo, tmp, 1),
-		ctx:  context.Background(),
+		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+			tasksconversion.New(tmp),
+		}),
+		ctx: context.Background(),
 	}
 }
 
@@ -116,6 +120,26 @@ func (f *fixture) createWorkset(title string, folderIDs ...string) *worksetuseca
 	return res.Workset
 }
 
+// mustDraft parses the task's opaque draft payload for assertions.
+func mustDraft(t *testing.T, d *worksetusecase.Draft) *tasksconversion.DraftDoc {
+	t.Helper()
+	doc, err := tasksconversion.ParseDraft(string(d.Document))
+	if err != nil {
+		t.Fatalf("parse draft: %v", err)
+	}
+	return doc
+}
+
+// draftJSON encodes a draft document as the task's opaque payload.
+func draftJSON(t *testing.T, doc *tasksconversion.DraftDoc) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	return raw
+}
+
 func (f *fixture) operation(worksetID string) *worksetusecase.OperationView {
 	f.t.Helper()
 	view, err := f.svc.GetOperation(f.ctx, worksetID, worksetusecase.OperationTypeConversion)
@@ -134,14 +158,22 @@ func (f *fixture) draft(worksetID string) *worksetusecase.Draft {
 	return d
 }
 
-func (f *fixture) saveDraft(worksetID string, doc *worksetusecase.DraftDoc, ifMatch int) *worksetusecase.OperationView {
+func (f *fixture) saveDraft(
+	worksetID string,
+	doc *tasksconversion.DraftDoc,
+	ifMatch int,
+) *worksetusecase.OperationView {
 	f.t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		f.t.Fatalf("marshal draft: %v", err)
+	}
 	view, err := f.svc.SaveDraft(
 		f.ctx,
 		worksetID,
 		worksetusecase.OperationTypeConversion,
 		worksetusecase.SaveDraftRequest{
-			Document:       doc,
+			Document:       raw,
 			IfMatchVersion: ifMatch,
 		},
 	)
@@ -210,9 +242,9 @@ func profile() reconcile.DesiredProfile {
 }
 
 // draftDoc is a complete, generatable common configuration.
-func draftDoc() *worksetusecase.DraftDoc {
-	return &worksetusecase.DraftDoc{
-		SchemaVersion:  worksetusecase.DraftSchemaVersion,
+func draftDoc() *tasksconversion.DraftDoc {
+	return &tasksconversion.DraftDoc{
+		SchemaVersion:  tasksconversion.DraftSchemaVersion,
 		Mode:           reconcile.ModeAvailableSources,
 		ClassifierTags: []string{"SEなし"},
 		Matched:        profile(),

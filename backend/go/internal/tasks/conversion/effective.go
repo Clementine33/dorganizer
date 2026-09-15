@@ -1,7 +1,9 @@
-package workset
+package conversion
 
 import (
 	"fmt"
+
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -145,8 +147,8 @@ func ResolveExecutable(
 		}
 		participating++
 		if err := reconcile.ValidatePolicy(e.Policy); err != nil {
-			return nil, NewError(
-				ErrKindInvalidArgument,
+			return nil, worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
 				"INVALID_POLICY",
 				fmt.Sprintf("effective settings for member %s: %s", e.MemberID, err.Error()),
 				nil,
@@ -154,8 +156,8 @@ func ResolveExecutable(
 		}
 	}
 	if participating == 0 {
-		return nil, NewError(
-			ErrKindConflict,
+		return nil, worksetusecase.NewError(
+			worksetusecase.ErrKindConflict,
 			"NO_ACTIVE_MEMBERS",
 			"every member is excluded; restore at least one member to generate",
 			nil,

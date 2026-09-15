@@ -26,6 +26,7 @@ import (
 	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -184,7 +185,11 @@ func runServer(
 			generationConcurrency = appCfg.Workset.GenerationConcurrency
 		}
 	}
-	worksetSvc := worksetusecase.NewService(repo, configDir, generationConcurrency)
+	// Task registration: every kind a workset operation can carry. Creation
+	// materializes one operation and seed draft per entry, in this order.
+	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, []worksetusecase.Task{
+		tasksconversion.New(configDir),
+	})
 
 	// Startup recovery: any session left queued/running by a previous process
 	// is marked interrupted before the dispatcher starts from an empty queue.

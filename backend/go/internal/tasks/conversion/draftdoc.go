@@ -1,8 +1,10 @@
-package workset
+package conversion
 
 import (
 	"encoding/json"
 	"strings"
+
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -150,8 +152,8 @@ func normalizeDraft(doc *DraftDoc, members []*sqlite.WorksetMember) *DraftDoc {
 // is rejected only when it must produce a plan.
 func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 	if doc.SchemaVersion != DraftSchemaVersion {
-		return NewError(
-			ErrKindInvalidArgument,
+		return worksetusecase.NewError(
+			worksetusecase.ErrKindInvalidArgument,
 			"INVALID_DRAFT_SCHEMA",
 			"unsupported operation draft schema version",
 			nil,
@@ -173,14 +175,29 @@ func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 	seen := map[string]bool{}
 	for _, m := range doc.Members {
 		if m.MemberID == "" {
-			return NewError(ErrKindInvalidArgument, "INVALID_DRAFT_SCHEMA", "member records require a member_id", nil)
+			return worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
+				"INVALID_DRAFT_SCHEMA",
+				"member records require a member_id",
+				nil,
+			)
 		}
 		if seen[m.MemberID] {
-			return NewError(ErrKindInvalidArgument, "DUPLICATE_MEMBER", "duplicate member_id "+m.MemberID, nil)
+			return worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
+				"DUPLICATE_MEMBER",
+				"duplicate member_id "+m.MemberID,
+				nil,
+			)
 		}
 		seen[m.MemberID] = true
 		if !known[m.MemberID] {
-			return NewError(ErrKindInvalidArgument, "UNKNOWN_MEMBER", "unknown member_id "+m.MemberID, nil)
+			return worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
+				"UNKNOWN_MEMBER",
+				"unknown member_id "+m.MemberID,
+				nil,
+			)
 		}
 		if err := validateOverrides(m.Overrides); err != nil {
 			return err
@@ -194,7 +211,12 @@ func validateMode(mode string) error {
 	case "", reconcile.ModeStrict, reconcile.ModeAvailableSources:
 		return nil
 	}
-	return NewError(ErrKindInvalidArgument, "INVALID_DRAFT", "unsupported conversion mode "+mode, nil)
+	return worksetusecase.NewError(
+		worksetusecase.ErrKindInvalidArgument,
+		"INVALID_DRAFT",
+		"unsupported conversion mode "+mode,
+		nil,
+	)
 }
 
 func validateOverrides(o *OverrideSet) error {
@@ -233,8 +255,8 @@ func validateOutput(name string, spec *reconcile.AudioOutputSpec) error {
 	switch spec.Codec {
 	case reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac:
 	default:
-		return NewError(
-			ErrKindInvalidArgument,
+		return worksetusecase.NewError(
+			worksetusecase.ErrKindInvalidArgument,
 			"INVALID_DRAFT",
 			name+": unsupported output codec "+string(spec.Codec),
 			nil,
@@ -242,8 +264,8 @@ func validateOutput(name string, spec *reconcile.AudioOutputSpec) error {
 	}
 	if spec.Quality != nil {
 		if spec.Quality.Kind != "" && spec.Quality.Kind != reconcile.QualityBitrate {
-			return NewError(
-				ErrKindInvalidArgument,
+			return worksetusecase.NewError(
+				worksetusecase.ErrKindInvalidArgument,
 				"INVALID_DRAFT",
 				name+": unsupported quality kind "+string(spec.Quality.Kind),
 				nil,

@@ -1,8 +1,6 @@
-package plan
+package conversion
 
 import (
-	"errors"
-
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
@@ -60,7 +58,7 @@ type PlannedComponent struct {
 
 // Snapshot is the frozen outcome of one planning run: the resolved policy
 // facts, the per-root input facts and the per-component outcomes. It names no
-// storage types; callers persist it through their own adapter.
+// storage types; the task maps it onto the seam's PlanSnapshot.
 type Snapshot struct {
 	RootPath       string // display scope (roots joined with " + ")
 	Policy         reconcile.Policy
@@ -72,42 +70,4 @@ type Snapshot struct {
 	Status         string // ok | partially_blocked | blocked
 	Roots          []RootFacts
 	Components     []PlannedComponent
-}
-
-// Error represents a plan-level error.
-type Error struct {
-	Kind    string
-	Code    string
-	Message string
-	Cause   error
-}
-
-// ErrorKind values for Error.Kind, used to map to gRPC status codes.
-const (
-	ErrKindInvalidArgument = "invalid_argument"
-	ErrKindInternal        = "internal"
-)
-
-// NewError creates a plan-level error with a kind that the adapter can map to gRPC.
-func NewError(kind, code, message string, cause error) *Error {
-	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
-}
-
-func (e *Error) Error() string {
-	if e.Cause != nil {
-		return e.Kind + ": " + e.Message + ": " + e.Cause.Error()
-	}
-	return e.Kind + ": " + e.Message
-}
-
-func (e *Error) Unwrap() error {
-	return e.Cause
-}
-
-// AsError extracts a *plan.Error from an error chain. Returns nil, false if not a plan.Error.
-func AsError(err error) (*Error, bool) {
-	if e, ok := errors.AsType[*Error](err); ok {
-		return e, true
-	}
-	return nil, false
 }

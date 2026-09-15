@@ -1,4 +1,4 @@
-package plan_test
+package conversion_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	"github.com/onsei/organizer/backend/internal/usecase/plan"
+	"github.com/onsei/organizer/backend/internal/tasks/conversion"
 )
 
 func TestPlanProbesMissingBitrate(t *testing.T) {
@@ -48,7 +48,7 @@ func TestPlanProbesMissingBitrate(t *testing.T) {
 	policy := reconcile.Policy{
 		SchemaVersion: 1, ClassifierTags: []string{"SEなし"}, Matched: profile, Unmatched: profile,
 	}
-	in := plan.Input{Policy: policy, Roots: []plan.RootInput{{Path: dir, Policy: policy}}}
+	in := conversion.Input{Policy: policy, Roots: []conversion.RootInput{{Path: dir, Policy: policy}}}
 	for _, batch := range []bool{true, false} {
 		cfg, marshalErr := json.Marshal(map[string]any{
 			"tools": map[string]string{"ffprobe_path": probe},
@@ -63,7 +63,7 @@ func TestPlanProbesMissingBitrate(t *testing.T) {
 		if _, resetErr := repo.DB().Exec("UPDATE entries SET bitrate = 0"); resetErr != nil {
 			t.Fatal(resetErr)
 		}
-		res, runErr := plan.Plan(t.Context(), repo, dir, in)
+		res, runErr := conversion.Plan(t.Context(), repo, dir, in)
 		if runErr != nil {
 			t.Fatal(runErr)
 		}
@@ -80,7 +80,7 @@ func TestPlanProbesMissingBitrate(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = plan.Plan(ctx, repo, dir, in)
+	_, err = conversion.Plan(ctx, repo, dir, in)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Plan: %v", err)
 	}

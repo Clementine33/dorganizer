@@ -3,14 +3,11 @@ package workset
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 // dispatcher is a singleton global FIFO scheduler plus a fixed worker pool. It
@@ -128,14 +125,14 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 
 	// Progress callback updates the session row with root counts and observes
 	// the cooperative cancel flag at root boundaries.
-	progress := func(p planusecase.Progress) {
+	progress := func(p PlanProgress) {
 		_ = d.svc.repo.UpdateGenerationProgress(gen.GenerationID, p.CompletedRoots, 0, p.CurrentRoot)
 		if c, _ := d.svc.repo.GetGeneration(gen.GenerationID); c != nil && c.CancelRequested {
 			cancel()
 		}
 	}
 
-	snap, effective, runErr := d.svc.runGeneration(ctx, req, members, progress)
+	snap, runErr := d.svc.runGeneration(ctx, gen.OperationType, req, members, progress)
 	if runErr != nil {
 		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 			_ = d.svc.repo.CompleteGenerationCanceled(gen.GenerationID)
@@ -164,8 +161,8 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 			DraftHash:        req.DraftHash,
 			MemberHash:       req.MemberHash,
 			OperationVersion: gen.ExpectedDraftVersion,
-			ExcludedScope:    strings.Join(ExcludedMemberIDs(effective), "\x00"),
-			DraftSnapshot:    mustJSON(req.Draft),
+			ExcludedScope:    snap.ExcludedScope,
+			DraftSnapshot:    string(req.Draft),
 			Steps:            steps,
 			Roots:            roots,
 			Components:       components,
@@ -180,9 +177,9 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 // conversion revision. The step vocabulary retires with the snapshot tables.
 const reconcileAudioStepType = "reconcile_audio_outputs"
 
-// toRevisionRecords freezes a planner snapshot into the repository's revision
-// records (the storage adapter's shape).
-func toRevisionRecords(snap *planusecase.Snapshot) (
+// toRevisionRecords freezes a task plan snapshot into the repository's
+// revision records (the storage adapter's shape).
+func toRevisionRecords(snap *PlanSnapshot) (
 	steps []sqlite.WorkflowStepRecord,
 	roots []sqlite.WorkflowRootRecord,
 	components []sqlite.WorkflowComponentRecord,
@@ -191,12 +188,12 @@ func toRevisionRecords(snap *planusecase.Snapshot) (
 		StepIndex:           0,
 		StepType:            reconcileAudioStepType,
 		Status:              snap.Status,
-		PolicySchemaVersion: snap.Policy.SchemaVersion,
-		PolicyJSON:          snap.PolicyJSON,
-		PolicyHash:          snap.PolicyHash,
-		ClassifierTags:      snap.ClassifierTags,
-		ClassifierHash:      snap.Classifier.Hash,
-		StepSummaryJSON:     mustJSON(snap.Summary),
+		PolicySchemaVersion: snap.PayloadSchemaVersion,
+		PolicyJSON:          string(snap.Payload),
+		PolicyHash:          snap.PayloadHash,
+		ClassifierTags:      snap.Tags,
+		ClassifierHash:      snap.TagsHash,
+		StepSummaryJSON:     string(snap.Summary),
 	}}
 	roots = make([]sqlite.WorkflowRootRecord, 0, len(snap.Roots))
 	for _, r := range snap.Roots {
@@ -211,17 +208,17 @@ func toRevisionRecords(snap *planusecase.Snapshot) (
 			RootErrorMessage:     r.ErrorMessage,
 		})
 	}
-	components = make([]sqlite.WorkflowComponentRecord, 0, len(snap.Components))
-	for _, c := range snap.Components {
+	components = make([]sqlite.WorkflowComponentRecord, 0, len(snap.Units))
+	for _, u := range snap.Units {
 		components = append(components, sqlite.WorkflowComponentRecord{
 			StepIndex:      0,
-			ComponentIndex: c.Index,
-			ComponentID:    c.Outcome.ComponentID,
-			RootIndex:      c.RootIndex,
-			Partition:      string(c.Outcome.Partition),
-			Status:         c.Outcome.Status,
-			ReasonCode:     c.Outcome.ReasonCode,
-			OutcomeJSON:    mustJSON(c.Outcome),
+			ComponentIndex: u.Index,
+			ComponentID:    u.ID,
+			RootIndex:      u.RootIndex,
+			Partition:      u.Partition,
+			Status:         u.Status,
+			ReasonCode:     u.ReasonCode,
+			OutcomeJSON:    string(u.Payload),
 		})
 	}
 	return steps, roots, components
@@ -236,49 +233,4 @@ func (d *dispatcher) fail(gen *sqlite.PlanGeneration, code, message string) {
 // token), keeping plan snapshots collision-free.
 func genIDNano(id string) string {
 	return strings.TrimPrefix(id, "gen-")
-}
-
-// collectRootEntries mirrors plan.collectRootEntries: it loads recognized
-// audio entries under a root with the metadata needed for fingerprinting, in
-// normalized sorted order. It is duplicated here because the workset package
-// needs a stale-check helper with identical semantics and the plan package
-// keeps its version unexported.
-func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
-	rootPosix := strings.ReplaceAll(root, "\\", "/")
-	prefix := strings.TrimSuffix(rootPosix, "/")
-	likePrefix := escapeLikeAll(prefix)
-	rows, err := repo.DB().Query(`
-		SELECT path, COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(bitrate, 0), COALESCE(format, '')
-		FROM entries WHERE is_dir = 0 AND (path = ? OR path LIKE ? ESCAPE '\')
-	`, rootPosix, likePrefix+"/%")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	entries := make([]reconcile.AudioEntry, 0)
-	seen := map[string]struct{}{}
-	for rows.Next() {
-		var e reconcile.AudioEntry
-		if err := rows.Scan(&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format); err != nil {
-			return nil, err
-		}
-		if _, ok := seen[e.PathPosix]; ok {
-			continue
-		}
-		seen[e.PathPosix] = struct{}{}
-		entries = append(entries, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].PathPosix < entries[j].PathPosix })
-	return entries, nil
-}
-
-func escapeLikeAll(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "%", "\\%")
-	s = strings.ReplaceAll(s, "_", "\\_")
-	return s
 }

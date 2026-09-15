@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // Execution delete modes. The session freezes one at creation; soft deletion is
@@ -127,25 +126,12 @@ type ExecutionProgress struct {
 	CurrentPhase        string `json:"current_phase"`
 }
 
-// executionComponent is one frozen worklist entry persisted with the session.
-// The component outcome itself stays in the immutable revision snapshot; this
-// list pins the order and the effective target profile each component runs
-// with, so the worker never re-resolves policy or re-reconciles.
-type executionComponent struct {
-	ComponentIndex int                      `json:"component_index"`
-	ComponentID    string                   `json:"component_id"`
-	RootIndex      int                      `json:"root_index"`
-	RootPath       string                   `json:"root_path"`
-	Partition      string                   `json:"partition"`
-	Operations     int                      `json:"operations"`
-	Profile        reconcile.DesiredProfile `json:"profile"`
-}
-
-// executionRequest is the frozen session input persisted on the row.
+// executionRequest is the frozen session input persisted on the row: the
+// frozen option and the ordered execution units (generic identity plus the
+// task's opaque payload).
 type executionRequest struct {
-	PlanID     string               `json:"plan_id"`
-	DeleteMode string               `json:"delete_mode"`
-	Components []executionComponent `json:"components"`
+	DeleteMode string          `json:"delete_mode"`
+	Units      []ExecutionUnit `json:"units"`
 }
 
 // StartExecution enqueues one execution of the operation's current, confirmed
@@ -193,7 +179,7 @@ func (s *serviceImpl) StartExecution(
 		replayed {
 		return result, replayErr
 	}
-	reasons, input, gateErr := s.executionEligibility(op, planID, req.IfMatchVersion)
+	reasons, frozen, gateErr := s.executionEligibility(op, planID, req.IfMatchVersion, deleteMode)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -204,7 +190,7 @@ func (s *serviceImpl) StartExecution(
 	if revErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", revErr)
 	}
-	return s.persistExecution(op, planID, deleteMode, req.IdempotencyKey, requestHash, rev.DraftHash, input)
+	return s.persistExecution(op, planID, deleteMode, req.IdempotencyKey, requestHash, rev.DraftHash, frozen)
 }
 
 // replayExecution answers an idempotent retry with the session the key already
@@ -235,31 +221,31 @@ func (s *serviceImpl) replayExecution(
 }
 
 // executionEligibility checks every gate of the execution authorization in
-// order and returns the fail-forward reasons plus the frozen worklist. Reasons
-// are accumulated so one response names all the disqualifiers.
+// order and returns the fail-forward reasons plus the frozen execution units.
+// Reasons are accumulated so one response names all the disqualifiers.
 func (s *serviceImpl) executionEligibility(
-	op *sqlite.Operation, planID string, ifMatchVersion int,
-) ([]string, []executionComponent, error) {
+	op *sqlite.Operation, planID string, ifMatchVersion int, deleteMode string,
+) ([]string, FrozenExecution, error) {
 	if op.CurrentRevisionID == "" || op.CurrentRevisionID != planID {
-		return []string{ExecBlockedNotCurrent}, nil, nil
+		return []string{ExecBlockedNotCurrent}, FrozenExecution{}, nil
 	}
 	if ifMatchVersion != op.Version {
-		return nil, nil, NewError(ErrKindConflict, "VERSION_CONFLICT", "operation version conflict", nil)
+		return nil, FrozenExecution{}, NewError(ErrKindConflict, "VERSION_CONFLICT", "operation version conflict", nil)
 	}
 	rev, err := s.repo.GetOperationRevision(op.WorksetID, op.OperationType, planID)
 	if err != nil {
 		if errors.Is(err, sqlite.ErrRevisionNotFound) {
-			return nil, nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
+			return nil, FrozenExecution{}, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 		}
-		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", err)
+		return nil, FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", err)
 	}
 	// An active session wins the answer: it already holds the revision.
 	active, err := s.repo.GetActiveExecutionForOperation(op.WorksetID, op.OperationType)
 	if err != nil {
-		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active execution", err)
+		return nil, FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to check active execution", err)
 	}
 	if active != nil {
-		return nil, nil, NewError(
+		return nil, FrozenExecution{}, NewError(
 			ErrKindConflict,
 			"EXECUTION_IN_PROGRESS",
 			"an execution is already queued or running for this operation",
@@ -268,32 +254,32 @@ func (s *serviceImpl) executionEligibility(
 	}
 	detail, reasons, err := s.executionBlockReasons(op, planID, rev)
 	if err != nil {
-		return nil, nil, err
+		return nil, FrozenExecution{}, err
 	}
 	if len(reasons) > 0 {
-		return reasons, nil, nil
+		return reasons, FrozenExecution{}, nil
 	}
-	worklist, workErr := s.executionWorklist(op.WorksetID, detail, rev)
-	if workErr != nil {
-		return nil, nil, workErr
+	frozen, freezeErr := s.freezeExecution(op, detail, rev, deleteMode)
+	if freezeErr != nil {
+		return nil, FrozenExecution{}, freezeErr
 	}
 	w, err := s.repo.GetWorkset(op.WorksetID)
 	if err != nil {
-		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
+		return nil, FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
 	}
 	scanning, err := s.repo.HasActiveScanForRoot(w.RootPath)
 	if err != nil {
-		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to check library scan", err)
+		return nil, FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to check library scan", err)
 	}
 	if scanning {
-		return nil, nil, NewError(
+		return nil, FrozenExecution{}, NewError(
 			ErrKindConflict,
 			"SCAN_IN_PROGRESS",
 			"wait for the library scan to finish before executing",
 			nil,
 		)
 	}
-	return nil, worklist, nil
+	return nil, frozen, nil
 }
 
 // executionBlockReasons collects every disqualifier of a confirmed revision:
@@ -335,100 +321,57 @@ func (s *serviceImpl) executionBlockReasons(
 	if err != nil {
 		return nil, nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 	}
-	for _, c := range detail.Components {
-		if c.Status == "blocked" {
-			reasons = append(reasons, ExecBlockedComponents)
-			break
-		}
+	health, healthErr := s.revisionHealth(op.OperationType, detail)
+	if healthErr != nil {
+		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to evaluate revision health", healthErr)
 	}
-	for _, r := range detail.Roots {
-		// A missing root and a stale fingerprint are both "the disk no longer
-		// matches what was confirmed"; the real per-file disk precheck runs again
-		// at execution time.
-		if r.RootStatus == "missing" || rootIsStale(s.repo, r) {
-			reasons = append(reasons, ExecBlockedInput)
-			break
-		}
+	if health.UnitsBlocked {
+		reasons = append(reasons, ExecBlockedComponents)
+	}
+	if health.InputMoved {
+		reasons = append(reasons, ExecBlockedInput)
 	}
 	return detail, reasons, nil
 }
 
-// executionWorklist freezes the ordered component work: the persisted component
-// order, each component's root path and the effective target profile its
-// partition resolves to in the revision's own draft snapshot.
-func (s *serviceImpl) executionWorklist(
-	worksetID string,
+// freezeExecution asks the operation's task to validate that the revision can
+// run and to freeze its ordered execution units. Business block reasons are
+// fail-forward values, not errors.
+func (s *serviceImpl) freezeExecution(
+	op *sqlite.Operation,
 	detail *sqlite.WorkflowPlanDetail,
 	rev *sqlite.OperationRevision,
-) ([]executionComponent, error) {
-	doc, err := ParseDraft(rev.DraftSnapshot)
+	deleteMode string,
+) (FrozenExecution, error) {
+	task, err := s.requireTask(op.OperationType)
 	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "stored revision snapshot is invalid", err)
+		return FrozenExecution{}, err
 	}
-	members, err := s.repo.ListWorksetMembers(worksetID)
+	members, err := s.repo.ListWorksetMembers(op.WorksetID)
 	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load members", err)
+		return FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to load members", err)
 	}
-	effective, err := ResolveEffective(doc, members)
+	frozen, reasons, err := task.FreezeExecution(s.repo, RevisionFacts{
+		DraftSnapshot: []byte(rev.DraftSnapshot),
+		Members:       members,
+		Detail:        detail,
+	}, deleteMode)
 	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "stored revision snapshot does not resolve", err)
+		return FrozenExecution{}, err
 	}
-	policyByRoot := map[string]reconcile.Policy{}
-	for _, e := range effective {
-		if !e.Excluded {
-			policyByRoot[e.FolderPath] = e.Policy
-		}
+	if len(reasons) > 0 {
+		return FrozenExecution{}, notExecutable(reasons)
 	}
-	rootByIndex := map[int]sqlite.WorkflowRootRecord{}
-	for _, r := range detail.Roots {
-		rootByIndex[r.RootIndex] = r
-	}
-	worklist := make([]executionComponent, 0, len(detail.Components))
-	for _, c := range detail.Components {
-		root, ok := rootByIndex[c.RootIndex]
-		if !ok {
-			return nil, notExecutable([]string{ExecBlockedInput})
-		}
-		policy, ok := policyByRoot[root.RootPath]
-		if !ok {
-			return nil, notExecutable([]string{ExecBlockedInput})
-		}
-		profile := reconcile.ProfileFor(policy, reconcile.Partition(c.Partition))
-		worklist = append(worklist, executionComponent{
-			ComponentIndex: c.ComponentIndex,
-			ComponentID:    c.ComponentID,
-			RootIndex:      c.RootIndex,
-			RootPath:       root.RootPath,
-			Partition:      c.Partition,
-			Operations:     componentOperationCount(c.OutcomeJSON),
-			Profile:        profile,
-		})
-	}
-	return worklist, nil
-}
-
-// componentOperationCount counts the frozen executable operations of one
-// persisted component outcome. An unreadable snapshot counts zero: the worker
-// still runs the component and fails closed on it.
-func componentOperationCount(outcomeJSON string) int {
-	var outcome reconcile.ComponentOutcome
-	if err := json.Unmarshal([]byte(outcomeJSON), &outcome); err != nil {
-		return 0
-	}
-	return len(outcome.Operations)
+	return frozen, nil
 }
 
 // persistExecution writes the queued session and pokes the worker.
 func (s *serviceImpl) persistExecution(
 	op *sqlite.Operation,
 	planID, deleteMode, key, requestHash, revisionDraftHash string,
-	worklist []executionComponent,
+	frozen FrozenExecution,
 ) (*StartExecutionResult, error) {
-	report := initialComponentReport(worklist)
-	total := 0
-	for _, c := range worklist {
-		total += c.Operations
-	}
+	report := initialComponentReport(frozen.Units)
 	exec := &sqlite.PlanExecution{
 		ExecutionID:              "exec-" + newToken(),
 		WorksetID:                op.WorksetID,
@@ -440,12 +383,11 @@ func (s *serviceImpl) persistExecution(
 		RequestHash:              requestHash,
 		ExpectedOperationVersion: op.Version,
 		RequestJSON: mustJSON(executionRequest{
-			PlanID:     planID,
 			DeleteMode: deleteMode,
-			Components: worklist,
+			Units:      frozen.Units,
 		}),
-		TotalComponents: len(worklist),
-		TotalOperations: total,
+		TotalComponents: len(frozen.Units),
+		TotalOperations: frozen.TotalOperations,
 		ReportJSON:      mustJSON(report),
 		CreatedAt:       time.Now(),
 	}
@@ -516,16 +458,16 @@ func (s *serviceImpl) persistExecution(
 // initialComponentReport builds the full report skeleton: every frozen
 // component exists as pending from the moment the session does, so an
 // interrupted session still names what it never executed.
-func initialComponentReport(worklist []executionComponent) []ExecutionComponentView {
-	report := make([]ExecutionComponentView, 0, len(worklist))
-	for _, c := range worklist {
+func initialComponentReport(units []ExecutionUnit) []ExecutionComponentView {
+	report := make([]ExecutionComponentView, 0, len(units))
+	for _, u := range units {
 		report = append(report, ExecutionComponentView{
-			ComponentIndex: c.ComponentIndex,
-			ComponentID:    c.ComponentID,
-			RootPath:       c.RootPath,
-			Partition:      c.Partition,
+			ComponentIndex: u.Index,
+			ComponentID:    u.ID,
+			RootPath:       u.RootPath,
+			Partition:      u.Partition,
 			Status:         ExecComponentPending,
-			Operations:     c.Operations,
+			Operations:     u.Operations,
 			Committed:      []string{},
 			Removed:        []string{},
 			Remaining:      []string{},

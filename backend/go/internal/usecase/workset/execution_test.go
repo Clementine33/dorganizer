@@ -15,6 +15,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -47,9 +48,11 @@ func newExecFixture(t *testing.T) *execFixture {
 	}
 	root := filepath.Join(tmp, "music")
 	f := &execFixture{
-		t:         t,
-		repo:      repo,
-		svc:       worksetusecase.NewService(repo, tmp, 1),
+		t:    t,
+		repo: repo,
+		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+			tasksconversion.New(tmp),
+		}),
 		root:      root,
 		libraryID: "lib-1",
 		members:   map[string]worksetusecase.MemberView{},
@@ -90,7 +93,11 @@ func newExecFixture(t *testing.T) *execFixture {
 		f.members[m.FolderName] = m
 	}
 	draft := f.draft()
-	raw, hash, err := worksetusecase.MarshalDraft(draft.Document)
+	doc, err := tasksconversion.ParseDraft(string(draft.Document))
+	if err != nil {
+		t.Fatalf("parse draft: %v", err)
+	}
+	raw, hash, err := tasksconversion.MarshalDraft(doc)
 	if err != nil {
 		t.Fatalf("marshal draft: %v", err)
 	}
@@ -400,11 +407,11 @@ func TestStartExecutionGates(t *testing.T) {
 	t.Run("draft_changed", func(t *testing.T) {
 		f := newExecFixture(t)
 		f.seedRevision("plan-dc", true)
-		doc := f.draft().Document
+		doc := mustDraft(t, f.draft())
 		doc.Mode = reconcile.ModeStrict
 		if _, err := f.svc.SaveDraft(
 			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion,
-			worksetusecase.SaveDraftRequest{Document: doc, IfMatchVersion: f.operation().Version},
+			worksetusecase.SaveDraftRequest{Document: draftJSON(t, doc), IfMatchVersion: f.operation().Version},
 		); err != nil {
 			t.Fatalf("SaveDraft: %v", err)
 		}

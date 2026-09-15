@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -26,7 +27,11 @@ func seedConfirmedRevision(
 	if err != nil {
 		t.Fatalf("GetDraft: %v", err)
 	}
-	raw, hash, err := worksetusecase.MarshalDraft(draft.Document)
+	doc, err := tasksconversion.ParseDraft(string(draft.Document))
+	if err != nil {
+		t.Fatalf("parse draft: %v", err)
+	}
+	raw, hash, err := tasksconversion.MarshalDraft(doc)
 	if err != nil {
 		t.Fatalf("MarshalDraft: %v", err)
 	}
@@ -90,7 +95,9 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 		t.Fatalf("decode workset: %v", err)
 	}
 	wsID := created.Workset.WorksetID
-	svc := worksetusecase.NewService(repo, t.TempDir(), 1)
+	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+		tasksconversion.New(t.TempDir()),
+	})
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
 

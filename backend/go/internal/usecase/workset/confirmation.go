@@ -86,25 +86,21 @@ func (s *serviceImpl) ConfirmRevision(
 		reasons = append(reasons, ConfirmBlockedGeneration)
 	}
 
-	// (5) Input freshness: recompute each persisted root's fingerprint and
-	// compare with live entries (same authority as revision validation).
+	// (5) Input freshness and (6) unresolved blocked units, answered by the
+	// operation's task over the frozen revision.
 	detail, err := s.repo.GetWorkflowPlanDetail(planID)
 	if err != nil {
 		return nil, NewError(ErrKindNotFound, "REVISION_NOT_FOUND", "revision not found", nil)
 	}
-	for _, r := range detail.Roots {
-		if r.RootStatus == "missing" || rootIsStale(s.repo, r) {
-			reasons = append(reasons, ConfirmBlockedInput)
-			break
-		}
+	health, healthErr := s.revisionHealth(operationType, detail)
+	if healthErr != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to evaluate revision health", healthErr)
 	}
-
-	// (6) Unresolved blocked components in the frozen plan snapshot.
-	for _, c := range detail.Components {
-		if c.Status == "blocked" {
-			reasons = append(reasons, ConfirmBlockedComponents)
-			break
-		}
+	if health.InputMoved {
+		reasons = append(reasons, ConfirmBlockedInput)
+	}
+	if health.UnitsBlocked {
+		reasons = append(reasons, ConfirmBlockedComponents)
 	}
 	if len(reasons) > 0 {
 		return nil, NewError(ErrKindConflict, "PLAN_NOT_CONFIRMABLE", "revision cannot be confirmed", nil).

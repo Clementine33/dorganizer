@@ -7,8 +7,28 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
+
+// validateRevision computes the revision-level validation state from the
+// operation's task health:
+//   - orphaned worksets: (nil, "unavailable") — there is no live library to
+//     validate against;
+//   - any root's live input facts moved: (true, "stale");
+//   - otherwise: (false, "valid").
+func (s *serviceImpl) validateRevision(
+	operationType string, orphaned bool, detail *sqlite.WorkflowPlanDetail,
+) (*bool, string) {
+	if orphaned {
+		return nil, ValidationUnavailable
+	}
+	health, err := s.revisionHealth(operationType, detail)
+	if err != nil || len(health.StaleRoots) > 0 {
+		t := true
+		return &t, ValidationStale
+	}
+	f := false
+	return &f, ValidationValid
+}
 
 // loadCurrentRevision builds the compact immutable conclusion of an operation's
 // current revision and returns the already-loaded roots for coverage.
@@ -27,43 +47,63 @@ func (s *serviceImpl) loadCurrentRevision(
 	if err != nil {
 		return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
 	}
-	stale, validation := s.validateRevision(w.LibraryID == "", detail)
+	stale, validation := s.validateRevision(op.OperationType, w.LibraryID == "", detail)
+	review, reviewErr := s.revisionReview(op.OperationType, detail)
+	if reviewErr != nil {
+		return nil, nil, reviewErr
+	}
 	return &RevisionSummary{
 		PlanID:          detail.Plan.PlanID,
 		RevisionIndex:   rev.RevisionIndex,
 		CreatedAt:       detail.Plan.CreatedAt,
 		Status:          detail.Plan.Status,
 		SummaryReason:   revisionSummaryReason(detail),
-		Counts:          revisionCounts(detail),
+		Counts:          revisionCounts(detail, review),
 		ValidationState: validation,
 		Stale:           stale,
 	}, detail.Roots, nil
 }
 
-func revisionSummaryReason(detail *sqlite.WorkflowPlanDetail) string {
-	if len(detail.Steps) == 0 {
-		return ""
+// revisionReview asks the operation's task for the reviewable view of one
+// persisted revision.
+func (s *serviceImpl) revisionReview(
+	operationType string, detail *sqlite.WorkflowPlanDetail,
+) (PlanReview, error) {
+	task, err := s.requireTask(operationType)
+	if err != nil {
+		return PlanReview{}, err
 	}
-	return reconcileStepSummary(detail.Steps[0].StepSummaryJSON).SummaryReason
+	return task.ReviewRevision(RevisionFacts{Detail: detail})
+}
+
+// planSummaryOf parses the generic plan-summary facts out of a persisted
+// revision.
+func planSummaryOf(detail *sqlite.WorkflowPlanDetail) PlanSummary {
+	if len(detail.Steps) == 0 {
+		return PlanSummary{}
+	}
+	var summary PlanSummary
+	_ = json.Unmarshal([]byte(detail.Steps[0].StepSummaryJSON), &summary)
+	return summary
+}
+
+func revisionSummaryReason(detail *sqlite.WorkflowPlanDetail) string {
+	return planSummaryOf(detail).SummaryReason
 }
 
 // revisionCounts derives the four independent plan facts from the frozen
 // snapshot. Changed, unmet, blocked and unchanged are separate facts that may
 // overlap; no exclusive status label is used to derive them (ADR 0004 §4).
-func revisionCounts(detail *sqlite.WorkflowPlanDetail) RevisionCounts {
-	summary := reconcile.StepSummary{}
-	if len(detail.Steps) > 0 {
-		summary = reconcileStepSummary(detail.Steps[0].StepSummaryJSON)
-	}
+func revisionCounts(detail *sqlite.WorkflowPlanDetail, review PlanReview) RevisionCounts {
+	summary := planSummaryOf(detail)
 	withOperations := map[string]bool{}
 	blockedComponents := 0
-	for _, c := range detail.Components {
+	for i, c := range detail.Components {
 		if c.Status == "blocked" {
 			blockedComponents++
 			continue
 		}
-		var outcome reconcile.ComponentOutcome
-		if err := json.Unmarshal([]byte(c.OutcomeJSON), &outcome); err == nil && len(outcome.Operations) > 0 {
+		if i < len(review.Units) && review.Units[i].Operations > 0 {
 			withOperations[c.ComponentID] = true
 		}
 	}
@@ -121,14 +161,18 @@ func (s *serviceImpl) ListRevisions(
 		if derr != nil {
 			continue // detached plan rows are skipped rather than failing the page
 		}
-		stale, validation := s.validateRevision(w.LibraryID == "", detail)
+		stale, validation := s.validateRevision(operationType, w.LibraryID == "", detail)
+		review, reviewErr := s.revisionReview(operationType, detail)
+		if reviewErr != nil {
+			continue
+		}
 		out = append(out, &RevisionSummary{
 			PlanID:          r.PlanID,
 			RevisionIndex:   r.RevisionIndex,
 			CreatedAt:       r.CreatedAt,
 			Status:          detail.Plan.Status,
 			SummaryReason:   revisionSummaryReason(detail),
-			Counts:          revisionCounts(detail),
+			Counts:          revisionCounts(detail, review),
 			ValidationState: validation,
 			Stale:           stale,
 		})
@@ -170,33 +214,44 @@ func (s *serviceImpl) GetRevision(
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
 	}
-	stale, _ := s.validateRevision(w.LibraryID == "", detail)
+	staleRoots := map[int]bool{}
+	if w.LibraryID != "" {
+		if health, healthErr := s.revisionHealth(operationType, detail); healthErr == nil {
+			for _, idx := range health.StaleRoots {
+				staleRoots[idx] = true
+			}
+		}
+	}
 
+	review, reviewErr := s.revisionReview(operationType, detail)
+	if reviewErr != nil {
+		return nil, reviewErr
+	}
 	out := &RevisionView{
 		PlanID:        planID,
 		RevisionIndex: rev.RevisionIndex,
 		CreatedAt:     rev.CreatedAt,
-		Counts:        revisionCounts(detail),
+		Counts:        revisionCounts(detail, review),
 	}
 	members, mErr := s.repo.ListWorksetMembers(worksetID)
 	if mErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load members", mErr)
 	}
-	out.Members = revisionMembers(rev, members)
+	memberFacts, mfErr := s.revisionMemberFacts(operationType, rev.DraftSnapshot, members)
+	if mfErr != nil {
+		memberFacts = nil
+	}
+	out.Members = revisionMembers(memberFacts, members, rev.ExcludedScope)
 
 	roots := make([]RootValidation, 0, len(detail.Roots))
 	for _, r := range detail.Roots {
-		rootStale := false
-		if stale != nil && *stale {
-			rootStale = rootIsStale(s.repo, r)
-		}
 		roots = append(roots, RootValidation{
 			RootIndex:            r.RootIndex,
 			RootPath:             r.RootPath,
 			RootStatus:           r.RootStatus,
 			RootErrorCode:        r.RootErrorCode,
 			RootErrorMessage:     r.RootErrorMessage,
-			Stale:                rootStale,
+			Stale:                staleRoots[r.RootIndex],
 			InventoryFingerprint: r.InventoryFingerprint,
 			EntryCount:           r.EntryCount,
 		})
@@ -210,7 +265,7 @@ func (s *serviceImpl) GetRevision(
 			RootIndex:      c.RootIndex,
 		})
 	}
-	out.Plan = toPlanResponse(detail)
+	out.Plan = s.planView(operationType, detail)
 	executed, execErr := s.repo.GetExecutionForRevision(planID)
 	if execErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision execution", execErr)
@@ -221,38 +276,44 @@ func (s *serviceImpl) GetRevision(
 	return out, nil
 }
 
-// revisionMembers resolves the frozen draft snapshot into per-member effective
-// configs with inheritance sources. An unreadable snapshot yields no members
-// rather than failing the whole historical revision read.
-func revisionMembers(rev *sqlite.OperationRevision, members []*sqlite.WorksetMember) []RevisionMember {
-	if rev.DraftSnapshot == "" {
-		return nil
-	}
-	doc, err := ParseDraft(rev.DraftSnapshot)
+// revisionMemberFacts asks the operation's task to resolve the frozen draft
+// snapshot into per-member effective configs.
+func (s *serviceImpl) revisionMemberFacts(
+	operationType string, draftSnapshot string, members []*sqlite.WorksetMember,
+) ([]RevisionMemberFacts, error) {
+	task, err := s.requireTask(operationType)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	effective, err := ResolveEffective(doc, members)
-	if err != nil {
+	return task.RevisionMembers(RevisionFacts{DraftSnapshot: []byte(draftSnapshot), Members: members})
+}
+
+// revisionMembers joins the task's resolved member configs with the workset's
+// member names and the revision's frozen exclusion scope. An unreadable
+// snapshot yields no members rather than failing the whole historical revision
+// read.
+func revisionMembers(
+	facts []RevisionMemberFacts, members []*sqlite.WorksetMember, excludedScope string,
+) []RevisionMember {
+	if len(facts) == 0 {
 		return nil
 	}
 	names := map[string]string{}
 	for _, m := range members {
 		names[m.MemberID] = m.FolderName
 	}
-	out := make([]RevisionMember, 0, len(effective))
-	excluded := excludedSet(rev.ExcludedScope)
-	for _, e := range effective {
+	excluded := excludedSet(excludedScope)
+	out := make([]RevisionMember, 0, len(facts))
+	for _, f := range facts {
 		// Exclusion is authoritative in the frozen scope; the snapshot's own
 		// flags are the same fact recorded twice.
-		e.Excluded = e.Excluded || excluded[e.MemberID]
 		out = append(out, RevisionMember{
-			MemberID:   e.MemberID,
-			FolderPath: e.FolderPath,
-			MemberName: names[e.MemberID],
-			Excluded:   e.Excluded,
-			Policy:     e.Policy,
-			Sources:    e.Sources,
+			MemberID:   f.MemberID,
+			FolderPath: f.FolderPath,
+			MemberName: names[f.MemberID],
+			Excluded:   f.Excluded || excluded[f.MemberID],
+			Payload:    f.Payload,
+			Sources:    f.Sources,
 		})
 	}
 	return out
@@ -271,15 +332,17 @@ func excludedSet(scope string) map[string]bool {
 	return out
 }
 
-// toPlanResponse rebuilds one revision's reviewable plan from its persisted
-// records — never from live policy/classifier state. A revision carries
-// exactly one plan, so the persisted single step flattens into it.
-func toPlanResponse(detail *sqlite.WorkflowPlanDetail) RevisionPlan {
+// planView rebuilds one revision's reviewable plan from its persisted records
+// — never from live policy/classifier state. A revision carries exactly one
+// plan, so the persisted single step flattens into it; the payload decode
+// belongs to the operation's task.
+func (s *serviceImpl) planView(operationType string, detail *sqlite.WorkflowPlanDetail) RevisionPlan {
 	out := RevisionPlan{
 		PlanID:        detail.Plan.PlanID,
 		SnapshotToken: detail.Plan.SnapshotToken,
 		RootPath:      detail.Plan.RootPath,
 		PlanKind:      detail.Plan.PlanKind,
+		Summary:       planSummaryOf(detail),
 	}
 	if len(detail.Steps) > 0 {
 		st := detail.Steps[0]
@@ -287,24 +350,14 @@ func toPlanResponse(detail *sqlite.WorkflowPlanDetail) RevisionPlan {
 		out.StepIndex = st.StepIndex
 		out.Status = st.Status
 		out.PolicyHash = st.PolicyHash
-		out.Summary = reconcileStepSummary(st.StepSummaryJSON)
-		_ = json.Unmarshal([]byte(st.PolicyJSON), &out.Policy)
-		out.Classifier.Tags = strings.Split(st.ClassifierTags, "\x00")
-		if out.Classifier.Tags[0] == "" && len(out.Classifier.Tags) == 1 {
-			out.Classifier.Tags = []string{}
-		}
-		out.Classifier.Hash = st.ClassifierHash
 	}
-	for _, c := range detail.Components {
-		var comp reconcile.ComponentOutcome
-		_ = json.Unmarshal([]byte(c.OutcomeJSON), &comp)
-		out.Components = append(out.Components, comp)
+	if review, err := s.revisionReview(operationType, detail); err == nil {
+		out.Payload = review.Payload
+		out.ClassifierTags = review.Tags
+		out.ClassifierHash = review.TagHash
+		for _, u := range review.Units {
+			out.Units = append(out.Units, u.Payload)
+		}
 	}
 	return out
-}
-
-func reconcileStepSummary(jsonStr string) reconcile.StepSummary {
-	var sum reconcile.StepSummary
-	_ = json.Unmarshal([]byte(jsonStr), &sum)
-	return sum
 }
