@@ -1,4 +1,4 @@
-package analyze
+package plan
 
 import (
 	"context"
@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 const bitrateUpdateBatchSize = 100
@@ -22,28 +25,34 @@ const bitratePersistRetryLimit = 3
 // bitratePersistRetryBase is the base delay for retry backoff.
 const bitratePersistRetryBase = 50 * time.Millisecond
 
-func (a *Analyzer) probeBitrate(ctx context.Context, pathPosix string) (int64, error) {
-	//nolint:gosec // Tool path comes from local config; arguments are passed directly without a shell.
-	data, err := exec.CommandContext(ctx, a.ffprobePath, "-v", "error", "-select_streams", "a:0",
-		"-show_entries", "stream=bit_rate", "-of", "json", "-i", filepath.FromSlash(pathPosix)).Output()
-	if err != nil {
-		return 0, err
-	}
-	var result struct {
-		Streams []struct {
-			Bitrate string `json:"bit_rate"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return 0, err
-	}
-	if len(result.Streams) != 1 {
-		return 0, nil
-	}
-	return strconv.ParseInt(result.Streams[0].Bitrate, 10, 64)
+// bitrateAnalyzer probes the missing MP3/AAC bitrates of a planning root with
+// ffprobe and persists them on the scanned entries. It is part of planning:
+// the reconcile compares observed bitrates against the desired output specs,
+// so the facts it reads must be as exact as the inventory can make them.
+type bitrateAnalyzer struct {
+	repo        *sqlite.Repository
+	ffprobePath string
 }
 
-func (a *Analyzer) enrichMissingBitrate(ctx context.Context, entries []Entry, batchUpdate bool) error {
+func newBitrateAnalyzer(repo *sqlite.Repository, ffprobePath string) *bitrateAnalyzer {
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
+	}
+	return &bitrateAnalyzer{repo: repo, ffprobePath: ffprobePath}
+}
+
+func isSQLiteBusyLockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "sqlite_locked")
+}
+
+// enrichMissing probes the entries whose bitrate is unknown and persists the
+// probed values on the entries table.
+func (a *bitrateAnalyzer) enrichMissing(ctx context.Context, entries []reconcile.AudioEntry, batchUpdate bool) error {
 	idx := selectScopedProbeCandidates(entries)
 	if len(idx) == 0 {
 		return nil
@@ -95,12 +104,33 @@ func (a *Analyzer) enrichMissingBitrate(ctx context.Context, entries []Entry, ba
 	return nil
 }
 
+func (a *bitrateAnalyzer) probeBitrate(ctx context.Context, pathPosix string) (int64, error) {
+	//nolint:gosec // Tool path comes from local config; arguments are passed directly without a shell.
+	data, err := exec.CommandContext(ctx, a.ffprobePath, "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=bit_rate", "-of", "json", "-i", filepath.FromSlash(pathPosix)).Output()
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Streams []struct {
+			Bitrate string `json:"bit_rate"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, err
+	}
+	if len(result.Streams) != 1 {
+		return 0, nil
+	}
+	return strconv.ParseInt(result.Streams[0].Bitrate, 10, 64)
+}
+
 type bitrateUpdate struct {
 	pathPosix string
 	bitrate   int64
 }
 
-func selectScopedProbeCandidates(entries []Entry) []int {
+func selectScopedProbeCandidates(entries []reconcile.AudioEntry) []int {
 	idx := make([]int, 0, len(entries))
 	for i := range entries {
 		if entries[i].Bitrate > 0 {
@@ -128,14 +158,14 @@ func chunkBitrateUpdates(updates []bitrateUpdate, chunkSize int) [][]bitrateUpda
 	return chunks
 }
 
-func (a *Analyzer) persistBitrateUpdates(updates []bitrateUpdate, batchUpdate bool) error {
+func (a *bitrateAnalyzer) persistBitrateUpdates(updates []bitrateUpdate, batchUpdate bool) error {
 	if len(updates) == 0 {
 		return nil
 	}
 
-	// Serialize DB writes across concurrent Analyzer goroutines sharing the
-	// same Repository. This prevents SQLITE_BUSY when multiple folder-plan
-	// goroutines persist bitrate updates concurrently.
+	// Serialize DB writes across concurrent planner goroutines sharing the
+	// same Repository. This prevents SQLITE_BUSY when multiple root goroutines
+	// persist bitrate updates concurrently.
 	a.repo.BitrateWriteMu.Lock()
 	defer a.repo.BitrateWriteMu.Unlock()
 
@@ -160,7 +190,7 @@ func (a *Analyzer) persistBitrateUpdates(updates []bitrateUpdate, batchUpdate bo
 	return lastErr
 }
 
-func (a *Analyzer) persistBitrateUpdatesOnce(updates []bitrateUpdate, batchUpdate bool) error {
+func (a *bitrateAnalyzer) persistBitrateUpdatesOnce(updates []bitrateUpdate, batchUpdate bool) error {
 	if !batchUpdate {
 		for _, update := range updates {
 			if _, err := a.repo.DB().

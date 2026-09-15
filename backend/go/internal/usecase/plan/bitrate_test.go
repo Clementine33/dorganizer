@@ -1,4 +1,4 @@
-package analyze //nolint:testpackage // white-box tests exercise unexported internals
+package plan //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 var mp3Fixture = sync.OnceValues(func() ([]byte, error) {
@@ -33,7 +34,7 @@ func writeTestMP3Frame(t *testing.T, path string) {
 }
 
 func TestSelectScopedProbeCandidates_OnlyScopedMissingMP3AndAAC(t *testing.T) {
-	entries := []Entry{
+	entries := []reconcile.AudioEntry{
 		{PathPosix: "/scope/a.mp3", Bitrate: 0},
 		{PathPosix: "/scope/b.mp3", Bitrate: 128000},
 		{PathPosix: "/scope/c.flac", Bitrate: 0},
@@ -67,7 +68,7 @@ func TestChunkBitrateUpdates_ChunksAt100(t *testing.T) {
 	}
 }
 
-func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
+func TestEnrichMissing_OnlyPersistsScopedEntries(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-test-analyze-bitrate-scope-*")
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +82,7 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 	defer repo.Close()
 
 	const scopedTotal = 120
-	scopedEntries := make([]Entry, 0, scopedTotal)
+	scopedEntries := make([]reconcile.AudioEntry, 0, scopedTotal)
 
 	for i := range scopedTotal {
 		p := filepath.Join(tmpDir, fmt.Sprintf("in-scope-%03d.mp3", i))
@@ -94,7 +95,7 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert scoped entry: %v", err)
 		}
-		scopedEntries = append(scopedEntries, Entry{PathPosix: pPosix, Bitrate: 0, Format: "audio/mpeg"})
+		scopedEntries = append(scopedEntries, reconcile.AudioEntry{PathPosix: pPosix, Bitrate: 0, Format: "audio/mpeg"})
 	}
 
 	outOfScopePath := filepath.Join(tmpDir, "out-of-scope.mp3")
@@ -107,8 +108,8 @@ func TestEnrichScopedEntriesBitrate_OnlyPersistsScopedEntries(t *testing.T) {
 		t.Fatalf("failed to insert out-of-scope entry: %v", err)
 	}
 
-	a := NewAnalyzer(repo, "")
-	if err := a.EnrichScopedEntriesBitrate(context.Background(), scopedEntries); err != nil {
+	a := newBitrateAnalyzer(repo, "")
+	if err := a.enrichMissing(context.Background(), scopedEntries, true); err != nil {
 		t.Fatalf("expected enrich scoped entries bitrate success, got %v", err)
 	}
 
@@ -144,7 +145,7 @@ func TestPersistBitrateUpdates_ReturnsBeginError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	a := NewAnalyzer(repo, "")
+	a := newBitrateAnalyzer(repo, "")
 
 	repo.Close()
 
@@ -171,7 +172,7 @@ func TestPersistBitrateUpdates_ReturnsExecError(t *testing.T) {
 		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
-	a := NewAnalyzer(repo, "")
+	a := newBitrateAnalyzer(repo, "")
 	err = a.persistBitrateUpdates([]bitrateUpdate{{pathPosix: "/scope/a.mp3", bitrate: 128000}}, true)
 	if err == nil {
 		t.Fatal("expected exec error, got nil")
@@ -222,7 +223,7 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 		t.Fatalf("failed to create failure trigger: %v", triggerErr)
 	}
 
-	a := NewAnalyzer(repo, "")
+	a := newBitrateAnalyzer(repo, "")
 	err = a.persistBitrateUpdates(updates, true)
 	if err == nil {
 		t.Fatal("expected persist error, got nil")
@@ -252,7 +253,7 @@ func TestPersistBitrateUpdates_RollsBackEarlierChunksOnLaterChunkFailure(t *test
 	}
 }
 
-func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
+func TestEnrichMissing_ReturnsPersistError(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "onsei-test-analyze-bitrate-enrich-error-*")
 	if err != nil {
 		t.Fatal(err)
@@ -272,9 +273,9 @@ func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
 		t.Fatalf("failed to drop entries table: %v", dropErr)
 	}
 
-	a := NewAnalyzer(repo, "")
-	err = a.EnrichScopedEntriesBitrate(context.Background(),
-		[]Entry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}},
+	a := newBitrateAnalyzer(repo, "")
+	err = a.enrichMissing(context.Background(),
+		[]reconcile.AudioEntry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}}, true,
 	)
 	if err == nil {
 		t.Fatal("expected enrich error, got nil")
@@ -284,7 +285,7 @@ func TestEnrichScopedEntriesBitrate_ReturnsPersistError(t *testing.T) {
 	}
 }
 
-func TestEnrichScopedEntriesBitrateWithBatchOption_DoesNotEmitGlobalLogMetrics(t *testing.T) {
+func TestEnrichMissingWithBatchOption_DoesNotEmitGlobalLogMetrics(t *testing.T) {
 	var buf bytes.Buffer
 	oldOut := log.Writer()
 	oldFlags := log.Flags()
@@ -298,9 +299,9 @@ func TestEnrichScopedEntriesBitrateWithBatchOption_DoesNotEmitGlobalLogMetrics(t
 		log.SetPrefix(oldPrefix)
 	}()
 
-	a := &Analyzer{}
-	err := a.EnrichScopedEntriesBitrateWithBatchOption(context.Background(),
-		[]Entry{{PathPosix: "/scope/a.flac", Bitrate: 0, Format: "audio/flac"}},
+	a := &bitrateAnalyzer{}
+	err := a.enrichMissing(context.Background(),
+		[]reconcile.AudioEntry{{PathPosix: "/scope/a.flac", Bitrate: 0, Format: "audio/flac"}},
 		true,
 	)
 	if err != nil {
@@ -430,7 +431,7 @@ func TestPersistBitrateUpdates_ConcurrentSerialization(t *testing.T) {
 			defer wg.Done()
 			start := goroutineIdx * perGoroutine
 			end := min(start+perGoroutine, len(updates))
-			a := NewAnalyzer(repo, "")
+			a := newBitrateAnalyzer(repo, "")
 			if err := a.persistBitrateUpdates(updates[start:end], true); err != nil {
 				errCh <- err
 			}

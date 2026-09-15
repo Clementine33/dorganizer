@@ -5,7 +5,6 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 // MemberEffective is one member's resolved conversion config plus where each
@@ -127,17 +126,17 @@ func ExcludedMemberIDs(effective []MemberEffective) []string {
 	return out
 }
 
-// ExecutableWorkflow validates that a draft can actually produce a plan:
-// structural validity plus full business validation of every participating
-// member's effective config. This is the generation boundary check; draft save
-// deliberately does not apply it.
-func ExecutableWorkflow(
+// ResolveExecutable resolves every member's effective config and validates
+// that the draft can actually produce a plan: structural validity plus full
+// business validation of every participating member's effective config. This
+// is the generation boundary check; draft save deliberately does not apply it.
+func ResolveExecutable(
 	doc *DraftDoc,
 	members []*sqlite.WorksetMember,
-) (*planusecase.Workflow, []MemberEffective, error) {
+) ([]MemberEffective, error) {
 	effective, err := ResolveEffective(doc, members)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	participating := 0
 	for _, e := range effective {
@@ -146,7 +145,7 @@ func ExecutableWorkflow(
 		}
 		participating++
 		if err := reconcile.ValidatePolicy(e.Policy); err != nil {
-			return nil, nil, NewError(
+			return nil, NewError(
 				ErrKindInvalidArgument,
 				"INVALID_POLICY",
 				fmt.Sprintf("effective settings for member %s: %s", e.MemberID, err.Error()),
@@ -155,20 +154,12 @@ func ExecutableWorkflow(
 		}
 	}
 	if participating == 0 {
-		return nil, nil, NewError(
+		return nil, NewError(
 			ErrKindConflict,
 			"NO_ACTIVE_MEMBERS",
 			"every member is excluded; restore at least one member to generate",
 			nil,
 		)
 	}
-	common := CommonPolicy(doc)
-	return &planusecase.Workflow{
-		SchemaVersion: planusecase.WorkflowSchemaVersionV2,
-		Steps: []planusecase.WorkflowStep{{
-			StepID:   "step-conversion",
-			StepType: planusecase.StepTypeReconcileAudio,
-			Policy:   planusecase.PolicySource{Kind: "inline", InlinePolicy: &common},
-		}},
-	}, effective, nil
+	return effective, nil
 }

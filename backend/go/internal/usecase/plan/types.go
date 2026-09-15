@@ -6,86 +6,72 @@ import (
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
-// Workflow/step constants for schema v1.
-const (
-	WorkflowSchemaVersion  = 1
-	StepTypeReconcileAudio = "reconcile_audio_outputs"
-)
-
-// Workflow is a versioned linear workflow of steps. SchemaVersion 1 is the
-// legacy steps-only draft; schema 2 adds member_settings (ADR 0003 batch
-// draft). Workset drafts use schema 2.
-type Workflow struct {
-	SchemaVersion  int             `json:"schema_version"`
-	Steps          []WorkflowStep  `json:"steps"`
-	MemberSettings []MemberSetting `json:"member_settings,omitempty"`
+// RootInput is one planning root with the effective conversion policy it is
+// planned with. The policy travels with its root — there is no side channel.
+type RootInput struct {
+	Path   string
+	Policy reconcile.Policy
 }
 
-// WorkflowStep is one linear workflow step. StepID is the stable identity of
-// the step instance within a draft (never derived from step_type or order).
-type WorkflowStep struct {
-	StepID   string       `json:"step_id,omitempty"`
-	StepType string       `json:"step_type"`
-	Policy   PolicySource `json:"policy"`
+// Input is the frozen input of one planning run, in request order.
+type Input struct {
+	// Policy is the run's baseline policy (the draft's common conversion
+	// config). It is persisted with the revision; every root still plans with
+	// its own effective policy.
+	Policy reconcile.Policy
+	// Roots are the planning roots in request order; at least one is required.
+	Roots []RootInput
+	// MarkMissingRoots marks a root absent from the scanned inventory as
+	// root_status=missing with SOURCE_MISSING and counts it into the summary
+	// as blocked/error. Workset generation enables this.
+	MarkMissingRoots bool
+	// Progress is invoked after each root in request order (best effort; nil
+	// skips it). CompletedRoots is 1-based at call time.
+	Progress func(Progress)
 }
 
-// MemberSetting is one member's batch-draft record: exclusion flag plus
-// full-replacement per-step config overrides. Members without a record
-// participate and inherit every step default.
-type MemberSetting struct {
-	MemberID      string         `json:"member_id"`
-	Excluded      bool           `json:"excluded"`
-	StepOverrides []StepOverride `json:"step_overrides,omitempty"`
+// Progress is a root-level progress report for async generation. It carries
+// root counts only — a fake percentage is never derived here.
+type Progress struct {
+	CompletedRoots int
+	TotalRoots     int
+	CurrentRoot    string
 }
 
-// StepOverride fully replaces one step's default config for one member.
-// Config uses the same shape as the step's inline policy (reconcile.Policy).
-type StepOverride struct {
-	StepID string           `json:"step_id"`
-	Config reconcile.Policy `json:"config"`
+// RootFacts is one root's frozen input facts: what the plan was made from.
+type RootFacts struct {
+	Index                int
+	Path                 string
+	Identity             string
+	InventoryFingerprint string
+	Count                int
+	Status               string // ok | missing
+	ErrorCode            string
+	ErrorMessage         string
 }
 
-// PolicySource is the workflow step's policy payload. Only the inline form is
-// valid: policies are complete snapshots, never references to global state.
-type PolicySource struct {
-	Kind         string            `json:"kind"` // "inline"
-	InlinePolicy *reconcile.Policy `json:"policy,omitempty"`
+// PlannedComponent is one planned component: its revision-wide index, the
+// owning root's index, and the reconcile outcome.
+type PlannedComponent struct {
+	Index     int
+	RootIndex int
+	Outcome   reconcile.ComponentOutcome
 }
 
-// WorkflowSchemaVersionV2 is the extended batch-draft schema (ADR 0003): the
-// steps above plus member_settings with exclusions and per-step overrides.
-const WorkflowSchemaVersionV2 = 2
-
-// Summary summarizes the plan result, owned by the usecase layer.
-type Summary struct {
-	OperationCount  int
-	ErrorCount      int
-	TotalCount      int
-	ActionableCount int
-	SummaryReason   string
-}
-
-// StepResponse is the reviewable outcome of one workflow step, reconstructed
-// from persisted snapshots (never from live preset/classifier state).
-type StepResponse struct {
-	StepType   string
-	StepIndex  int
-	Status     string // ok | partially_blocked | blocked
-	Policy     reconcile.Policy
-	PolicyHash string
-	Classifier reconcile.Classifier
-	Components []reconcile.ComponentOutcome
-	Summary    reconcile.StepSummary
-}
-
-// Response is the reconstructed review snapshot of one workflow plan.
-type Response struct {
-	PlanID        string
-	SnapshotToken string
-	RootPath      string
-	Summary       Summary
-	Steps         []StepResponse
-	PlanKind      string // "workflow"
+// Snapshot is the frozen outcome of one planning run: the resolved policy
+// facts, the per-root input facts and the per-component outcomes. It names no
+// storage types; callers persist it through their own adapter.
+type Snapshot struct {
+	RootPath       string // display scope (roots joined with " + ")
+	Policy         reconcile.Policy
+	PolicyJSON     string
+	PolicyHash     string
+	ClassifierTags string // normalized NUL-joined tag snapshot
+	Classifier     reconcile.Classifier
+	Summary        reconcile.StepSummary
+	Status         string // ok | partially_blocked | blocked
+	Roots          []RootFacts
+	Components     []PlannedComponent
 }
 
 // Error represents a plan-level error.

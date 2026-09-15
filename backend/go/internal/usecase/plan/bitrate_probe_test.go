@@ -14,7 +14,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
-func TestRunWorkflowProbesMissingBitrate(t *testing.T) {
+func TestPlanProbesMissingBitrate(t *testing.T) {
 	dir := t.TempDir()
 	track := filepath.Join(dir, "track.mp3")
 	output, err := exec.CommandContext(t.Context(), "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
@@ -45,12 +45,10 @@ func TestRunWorkflowProbesMissingBitrate(t *testing.T) {
 	profile := reconcile.DesiredProfile{Encoded: &reconcile.AudioOutputSpec{
 		Codec: reconcile.CodecMp3, Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
 	}}
-	wf := &plan.Workflow{SchemaVersion: 1, Steps: []plan.WorkflowStep{{
-		StepType: plan.StepTypeReconcileAudio,
-		Policy: plan.PolicySource{Kind: "inline", InlinePolicy: &reconcile.Policy{
-			SchemaVersion: 1, ClassifierTags: []string{"SEなし"}, Matched: profile, Unmatched: profile,
-		}},
-	}}}
+	policy := reconcile.Policy{
+		SchemaVersion: 1, ClassifierTags: []string{"SEなし"}, Matched: profile, Unmatched: profile,
+	}
+	in := plan.Input{Policy: policy, Roots: []plan.RootInput{{Path: dir, Policy: policy}}}
 	for _, batch := range []bool{true, false} {
 		cfg, marshalErr := json.Marshal(map[string]any{
 			"tools": map[string]string{"ffprobe_path": probe},
@@ -65,7 +63,7 @@ func TestRunWorkflowProbesMissingBitrate(t *testing.T) {
 		if _, resetErr := repo.DB().Exec("UPDATE entries SET bitrate = 0"); resetErr != nil {
 			t.Fatal(resetErr)
 		}
-		res, runErr := plan.RunWorkflow(t.Context(), repo, dir, wf, []string{dir}, plan.RunOptions{})
+		res, runErr := plan.Plan(t.Context(), repo, dir, in)
 		if runErr != nil {
 			t.Fatal(runErr)
 		}
@@ -82,8 +80,8 @@ func TestRunWorkflowProbesMissingBitrate(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = plan.RunWorkflow(ctx, repo, dir, wf, []string{dir}, plan.RunOptions{})
+	_, err = plan.Plan(ctx, repo, dir, in)
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled RunWorkflow: %v", err)
+		t.Fatalf("canceled Plan: %v", err)
 	}
 }

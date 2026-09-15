@@ -35,7 +35,7 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.WorkflowRootRecord) bool {
 	if r.RootPath == "" {
 		return false
 	}
-	entries, err := collectWorkflowEntries(repo, r.RootPath)
+	entries, err := collectRootEntries(repo, r.RootPath)
 	if err != nil {
 		return true
 	}

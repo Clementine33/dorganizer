@@ -7,7 +7,6 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 // OperationTypeConversion is the only publicly available operation type of
@@ -267,12 +266,31 @@ type RevisionMember struct {
 	Sources    map[string]string
 }
 
+// RevisionPlan is the reviewable plan snapshot of one revision, rebuilt from
+// the persisted records (never from live policy state). A revision carries
+// exactly one plan; the persisted step, root and component rows flatten into
+// it.
+type RevisionPlan struct {
+	PlanID        string
+	SnapshotToken string
+	RootPath      string
+	PlanKind      string
+	StepType      string
+	StepIndex     int
+	Status        string
+	Policy        reconcile.Policy
+	PolicyHash    string
+	Classifier    reconcile.Classifier
+	Summary       reconcile.StepSummary
+	Components    []reconcile.ComponentOutcome
+}
+
 // RevisionView is the nested immutable revision detail.
 type RevisionView struct {
 	PlanID        string
 	RevisionIndex int
 	CreatedAt     time.Time
-	Workflow      planusecase.Response
+	Plan          RevisionPlan
 	Roots         []RootValidation
 	// ComponentRoots maps each persisted component to its planning root. The
 	// reconcile ComponentOutcome JSON intentionally carries no root identity,

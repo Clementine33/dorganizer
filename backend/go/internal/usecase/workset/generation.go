@@ -108,7 +108,7 @@ func (s *serviceImpl) prepareGeneration(
 	}
 	// Executable validation runs synchronously so an incomplete draft is
 	// rejected here instead of failing the queued session (ADR 0004 §3, C13).
-	_, effective, execErr := ExecutableWorkflow(doc, members)
+	effective, execErr := ResolveExecutable(doc, members)
 	if execErr != nil {
 		return nil, execErr
 	}
@@ -356,8 +356,8 @@ func (s *serviceImpl) CancelGeneration(
 
 // rootFingerprints recomputes the LIVE per-root inventory fingerprints for the
 // given member folder paths (same entry collection and fingerprint function as
-// the workflow runner). This is the dedup/stale authority: after a scan, the
-// values reflect the current entries table.
+// the planner). This is the dedup/stale authority: after a scan, the values
+// reflect the current entries table.
 func (s *serviceImpl) rootFingerprints(
 	ctx context.Context,
 	members []*sqlite.WorksetMember,
@@ -367,7 +367,7 @@ func (s *serviceImpl) rootFingerprints(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		entries, err := collectWorkflowEntries(s.repo, m.FolderPath)
+		entries, err := collectRootEntries(s.repo, m.FolderPath)
 		if err != nil {
 			return nil, NewError(
 				ErrKindInternal,
@@ -443,32 +443,33 @@ func parseGenerationRequest(raw string) (*generationRequest, error) {
 	return &req, nil
 }
 
-// runWorkflow executes the frozen session input. It is the single place the
-// generation worker turns a session row into a plan.
-func (s *serviceImpl) runWorkflow(
+// runGeneration executes the frozen session input. It is the single place the
+// generation worker turns a session row into a revision snapshot.
+func (s *serviceImpl) runGeneration(
 	ctx context.Context,
 	req *generationRequest,
 	members []*sqlite.WorksetMember,
 	progress func(planusecase.Progress),
-) (*planusecase.WorkflowRunResult, []MemberEffective, error) {
-	wf, effective, err := ExecutableWorkflow(req.Draft, members)
+) (*planusecase.Snapshot, []MemberEffective, error) {
+	effective, err := ResolveExecutable(req.Draft, members)
 	if err != nil {
 		return nil, nil, err
 	}
 	policies := ParticipatingPolicyMap(effective)
-	roots := make([]string, 0, len(policies))
+	roots := make([]planusecase.RootInput, 0, len(policies))
 	for _, m := range members {
-		if _, ok := policies[m.FolderPath]; ok {
-			roots = append(roots, m.FolderPath)
+		if policy, ok := policies[m.FolderPath]; ok {
+			roots = append(roots, planusecase.RootInput{Path: m.FolderPath, Policy: policy})
 		}
 	}
-	result, err := planusecase.RunWorkflow(ctx, s.repo, s.configDir, wf, roots, planusecase.RunOptions{
-		MarkMissingRoots:  true,
-		Progress:          progress,
-		EffectivePolicies: policies,
+	snap, err := planusecase.Plan(ctx, s.repo, s.configDir, planusecase.Input{
+		Policy:           CommonPolicy(req.Draft),
+		Roots:            roots,
+		MarkMissingRoots: true,
+		Progress:         progress,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return result, effective, nil
+	return snap, effective, nil
 }

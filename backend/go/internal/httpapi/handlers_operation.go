@@ -280,7 +280,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		Roots:          toRoots(rv.Roots),
 		ComponentRoots: componentRoots,
 		Confirmation:   *confirmation,
-		Workflow:       toWorkflowPlanResponse(rv.Workflow),
+		Workflow:       toWorkflowPlanResponse(rv.Plan),
 		Execution:      rv.Execution,
 	})
 }

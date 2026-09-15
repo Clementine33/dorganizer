@@ -8,7 +8,6 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
 // loadCurrentRevision builds the compact immutable conclusion of an operation's
@@ -211,7 +210,7 @@ func (s *serviceImpl) GetRevision(
 			RootIndex:      c.RootIndex,
 		})
 	}
-	out.Workflow = toPlanResponse(detail)
+	out.Plan = toPlanResponse(detail)
 	executed, execErr := s.repo.GetExecutionForRevision(planID)
 	if execErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision execution", execErr)
@@ -272,44 +271,34 @@ func excludedSet(scope string) map[string]bool {
 	return out
 }
 
-// toPlanResponse converts a persisted workflow detail into the usecase
-// response shape, rebuilt from the persisted workflow snapshots.
-func toPlanResponse(detail *sqlite.WorkflowPlanDetail) planusecase.Response {
-	out := planusecase.Response{
+// toPlanResponse rebuilds one revision's reviewable plan from its persisted
+// records — never from live policy/classifier state. A revision carries
+// exactly one plan, so the persisted single step flattens into it.
+func toPlanResponse(detail *sqlite.WorkflowPlanDetail) RevisionPlan {
+	out := RevisionPlan{
 		PlanID:        detail.Plan.PlanID,
 		SnapshotToken: detail.Plan.SnapshotToken,
 		RootPath:      detail.Plan.RootPath,
 		PlanKind:      detail.Plan.PlanKind,
 	}
-	for i, st := range detail.Steps {
-		sum := reconcileStepSummary(st.StepSummaryJSON)
-		if i == 0 {
-			out.Summary.SummaryReason = sum.SummaryReason
+	if len(detail.Steps) > 0 {
+		st := detail.Steps[0]
+		out.StepType = st.StepType
+		out.StepIndex = st.StepIndex
+		out.Status = st.Status
+		out.PolicyHash = st.PolicyHash
+		out.Summary = reconcileStepSummary(st.StepSummaryJSON)
+		_ = json.Unmarshal([]byte(st.PolicyJSON), &out.Policy)
+		out.Classifier.Tags = strings.Split(st.ClassifierTags, "\x00")
+		if out.Classifier.Tags[0] == "" && len(out.Classifier.Tags) == 1 {
+			out.Classifier.Tags = []string{}
 		}
-		out.Summary.OperationCount += sum.OperationCount
-		out.Summary.ErrorCount += sum.ErrorCount
-		step := planusecase.StepResponse{
-			StepType:   st.StepType,
-			StepIndex:  st.StepIndex,
-			Status:     st.Status,
-			PolicyHash: st.PolicyHash,
-			Summary:    sum,
-		}
-		_ = json.Unmarshal([]byte(st.PolicyJSON), &step.Policy)
-		step.Classifier.Tags = strings.Split(st.ClassifierTags, "\x00")
-		if step.Classifier.Tags[0] == "" && len(step.Classifier.Tags) == 1 {
-			step.Classifier.Tags = []string{}
-		}
-		step.Classifier.Hash = st.ClassifierHash
-		for _, c := range detail.Components {
-			if c.StepIndex != st.StepIndex {
-				continue
-			}
-			var comp reconcile.ComponentOutcome
-			_ = json.Unmarshal([]byte(c.OutcomeJSON), &comp)
-			step.Components = append(step.Components, comp)
-		}
-		out.Steps = append(out.Steps, step)
+		out.Classifier.Hash = st.ClassifierHash
+	}
+	for _, c := range detail.Components {
+		var comp reconcile.ComponentOutcome
+		_ = json.Unmarshal([]byte(c.OutcomeJSON), &comp)
+		out.Components = append(out.Components, comp)
 	}
 	return out
 }

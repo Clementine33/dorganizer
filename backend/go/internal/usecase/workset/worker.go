@@ -135,7 +135,7 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		}
 	}
 
-	result, effective, runErr := d.svc.runWorkflow(ctx, req, members, progress)
+	snap, effective, runErr := d.svc.runGeneration(ctx, req, members, progress)
 	if runErr != nil {
 		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 			_ = d.svc.repo.CompleteGenerationCanceled(gen.GenerationID)
@@ -149,6 +149,7 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		return
 	}
 
+	steps, roots, components := toRevisionRecords(snap)
 	now := time.Now()
 	if persistErr := d.svc.repo.PersistOperationRevision(
 		gen.GenerationID,
@@ -157,7 +158,7 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		now,
 		sqlite.OperationRevisionPersist{
 			PlanID:           "plan-" + genIDNano(gen.GenerationID),
-			RootPath:         result.RootPath,
+			RootPath:         snap.RootPath,
 			SnapshotToken:    "snapshot-" + genIDNano(gen.GenerationID),
 			LibraryID:        w.LibraryID,
 			DraftHash:        req.DraftHash,
@@ -165,14 +166,65 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 			OperationVersion: gen.ExpectedDraftVersion,
 			ExcludedScope:    strings.Join(ExcludedMemberIDs(effective), "\x00"),
 			DraftSnapshot:    mustJSON(req.Draft),
-			Steps:            result.StepRecords,
-			Roots:            result.Roots,
-			Components:       result.Components,
+			Steps:            steps,
+			Roots:            roots,
+			Components:       components,
 		},
 	); persistErr != nil {
 		d.fail(gen, "PERSIST_FAILED", "failed to persist revision")
 		return
 	}
+}
+
+// reconcileAudioStepType is the frozen step_type value persisted on every
+// conversion revision. The step vocabulary retires with the snapshot tables.
+const reconcileAudioStepType = "reconcile_audio_outputs"
+
+// toRevisionRecords freezes a planner snapshot into the repository's revision
+// records (the storage adapter's shape).
+func toRevisionRecords(snap *planusecase.Snapshot) (
+	steps []sqlite.WorkflowStepRecord,
+	roots []sqlite.WorkflowRootRecord,
+	components []sqlite.WorkflowComponentRecord,
+) {
+	steps = []sqlite.WorkflowStepRecord{{
+		StepIndex:           0,
+		StepType:            reconcileAudioStepType,
+		Status:              snap.Status,
+		PolicySchemaVersion: snap.Policy.SchemaVersion,
+		PolicyJSON:          snap.PolicyJSON,
+		PolicyHash:          snap.PolicyHash,
+		ClassifierTags:      snap.ClassifierTags,
+		ClassifierHash:      snap.Classifier.Hash,
+		StepSummaryJSON:     mustJSON(snap.Summary),
+	}}
+	roots = make([]sqlite.WorkflowRootRecord, 0, len(snap.Roots))
+	for _, r := range snap.Roots {
+		roots = append(roots, sqlite.WorkflowRootRecord{
+			RootIndex:            r.Index,
+			RootPath:             r.Path,
+			RootIdentity:         r.Identity,
+			InventoryFingerprint: r.InventoryFingerprint,
+			EntryCount:           r.Count,
+			RootStatus:           r.Status,
+			RootErrorCode:        r.ErrorCode,
+			RootErrorMessage:     r.ErrorMessage,
+		})
+	}
+	components = make([]sqlite.WorkflowComponentRecord, 0, len(snap.Components))
+	for _, c := range snap.Components {
+		components = append(components, sqlite.WorkflowComponentRecord{
+			StepIndex:      0,
+			ComponentIndex: c.Index,
+			ComponentID:    c.Outcome.ComponentID,
+			RootIndex:      c.RootIndex,
+			Partition:      string(c.Outcome.Partition),
+			Status:         c.Outcome.Status,
+			ReasonCode:     c.Outcome.ReasonCode,
+			OutcomeJSON:    mustJSON(c.Outcome),
+		})
+	}
+	return steps, roots, components
 }
 
 // fail records a stable system failure on the session row.
@@ -186,12 +238,12 @@ func genIDNano(id string) string {
 	return strings.TrimPrefix(id, "gen-")
 }
 
-// collectWorkflowEntries mirrors plan.usecase.collectWorkflowEntries: it loads
-// recognized audio entries under a root with the metadata needed for
-// fingerprinting, in normalized sorted order. It is duplicated here because
-// the workset package needs a stale-check helper with identical semantics and
-// the plan package keeps its version unexported.
-func collectWorkflowEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
+// collectRootEntries mirrors plan.collectRootEntries: it loads recognized
+// audio entries under a root with the metadata needed for fingerprinting, in
+// normalized sorted order. It is duplicated here because the workset package
+// needs a stale-check helper with identical semantics and the plan package
+// keeps its version unexported.
+func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
 	rootPosix := strings.ReplaceAll(root, "\\", "/")
 	prefix := strings.TrimSuffix(rootPosix, "/")
 	likePrefix := escapeLikeAll(prefix)

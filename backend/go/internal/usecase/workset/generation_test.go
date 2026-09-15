@@ -21,6 +21,23 @@ func TestGenerationPublishesRevisionAndReplays(t *testing.T) {
 	if gen.Status != "completed" || gen.RevisionID == "" {
 		t.Fatalf("generation = %+v", gen)
 	}
+
+	// The persisted snapshot round-trips: one plan with its single step, the
+	// root's live inventory facts, and the component outcome.
+	detail, detailErr := f.repo.GetWorkflowPlanDetail(gen.RevisionID)
+	if detailErr != nil {
+		t.Fatalf("GetWorkflowPlanDetail: %v", detailErr)
+	}
+	if len(detail.Steps) != 1 || len(detail.Roots) != 1 || len(detail.Components) != 1 {
+		t.Fatalf("detail steps=%d roots=%d components=%d", len(detail.Steps), len(detail.Roots), len(detail.Components))
+	}
+	if detail.Roots[0].EntryCount != 1 || detail.Roots[0].InventoryFingerprint == "" {
+		t.Fatalf("persisted root facts = %+v", detail.Roots[0])
+	}
+	if detail.Steps[0].ClassifierTags == "" {
+		t.Fatal("classifier tag snapshot must be persisted")
+	}
+
 	op := f.operation(ws.WorksetID)
 	if op.CurrentRevision == nil || op.CurrentRevision.PlanID != gen.RevisionID {
 		t.Fatalf("current revision = %+v", op.CurrentRevision)

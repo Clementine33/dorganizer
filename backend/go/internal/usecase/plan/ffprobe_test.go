@@ -1,4 +1,4 @@
-package analyze_test
+package plan //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/analyze"
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 func TestEnrichBitrateProbesAACContainers(t *testing.T) {
@@ -36,9 +36,9 @@ func TestEnrichBitrateProbesAACContainers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			entries := []analyze.Entry{{PathPosix: track}}
-			a := analyze.NewAnalyzer(repo, "")
-			if err := a.EnrichScopedEntriesBitrate(t.Context(), entries); err != nil {
+			entries := []reconcile.AudioEntry{{PathPosix: track}}
+			a := newBitrateAnalyzer(repo, "")
+			if err := a.enrichMissing(t.Context(), entries, true); err != nil {
 				t.Fatal(err)
 			}
 			var bitrate int64
@@ -52,7 +52,7 @@ func TestEnrichBitrateProbesAACContainers(t *testing.T) {
 			if err := os.Remove(filepath.FromSlash(track)); err != nil {
 				t.Fatal(err)
 			}
-			if err := a.EnrichScopedEntriesBitrate(t.Context(), entries); err != nil {
+			if err := a.enrichMissing(t.Context(), entries, true); err != nil {
 				t.Fatal(err)
 			}
 			if entries[0].Bitrate != bitrate {
@@ -73,13 +73,13 @@ func TestEnrichBitrateKeepsUnknownAndCachedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range []string{probe, filepath.Join(dir, "missing-ffprobe")} {
-		entries := []analyze.Entry{
+		entries := []reconcile.AudioEntry{
 			{PathPosix: filepath.ToSlash(invalid)},
 			{PathPosix: filepath.ToSlash(filepath.Join(dir, "missing.mp3"))},
 			{PathPosix: filepath.ToSlash(invalid), Bitrate: 192000},
 		}
-		a := analyze.NewAnalyzer(nil, tool)
-		if enrichErr := a.EnrichScopedEntriesBitrate(t.Context(), entries); enrichErr != nil {
+		a := newBitrateAnalyzer(nil, tool)
+		if enrichErr := a.enrichMissing(t.Context(), entries, true); enrichErr != nil {
 			t.Fatal(enrichErr)
 		}
 		if entries[0].Bitrate != 0 || entries[1].Bitrate != 0 || entries[2].Bitrate != 192000 {
@@ -88,8 +88,8 @@ func TestEnrichBitrateKeepsUnknownAndCachedValues(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err = analyze.NewAnalyzer(nil, probe).EnrichScopedEntriesBitrate(ctx,
-		[]analyze.Entry{{PathPosix: filepath.ToSlash(invalid)}})
+	err = newBitrateAnalyzer(nil, probe).enrichMissing(ctx,
+		[]reconcile.AudioEntry{{PathPosix: filepath.ToSlash(invalid)}}, true)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled enrichment: %v", err)
 	}

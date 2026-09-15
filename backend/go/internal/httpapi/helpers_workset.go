@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	planusecase "github.com/onsei/organizer/backend/internal/usecase/plan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -139,41 +138,39 @@ func rawJSON(v any) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-// toWorkflowPlanResponse maps a plan usecase response to the HTTP review
-// shape, keeping component outcomes as raw JSON snapshots so the payload
-// agrees byte-for-byte with the persisted outcome.
-func toWorkflowPlanResponse(resp planusecase.Response) workflowPlanResponse {
+// toWorkflowPlanResponse maps one revision's plan to the HTTP review shape,
+// keeping component outcomes as raw JSON snapshots so the payload agrees
+// byte-for-byte with the persisted outcome. The nested step array is the
+// frozen wire shape of the retired multi-step plans; one conversion plan is
+// always exactly one step.
+func toWorkflowPlanResponse(plan worksetusecase.RevisionPlan) workflowPlanResponse {
 	out := workflowPlanResponse{
-		PlanID:        resp.PlanID,
-		SnapshotToken: resp.SnapshotToken,
-		RootPath:      resp.RootPath,
-		PlanKind:      resp.PlanKind,
+		PlanID:        plan.PlanID,
+		SnapshotToken: plan.SnapshotToken,
+		RootPath:      plan.RootPath,
+		PlanKind:      plan.PlanKind,
 		Summary: planSummaryResponse{
-			OperationCount:  resp.Summary.OperationCount,
-			ErrorCount:      resp.Summary.ErrorCount,
-			TotalCount:      resp.Summary.TotalCount,
-			ActionableCount: resp.Summary.ActionableCount,
-			SummaryReason:   resp.Summary.SummaryReason,
+			OperationCount: plan.Summary.OperationCount,
+			ErrorCount:     plan.Summary.ErrorCount,
+			SummaryReason:  plan.Summary.SummaryReason,
 		},
 	}
-	for _, step := range resp.Steps {
-		components := make([]json.RawMessage, 0, len(step.Components))
-		for _, c := range step.Components {
-			components = append(components, rawJSON(c))
-		}
-		out.Steps = append(out.Steps, workflowStepResponse{
-			StepType:   step.StepType,
-			StepIndex:  step.StepIndex,
-			Status:     step.Status,
-			Policy:     rawJSON(step.Policy),
-			PolicyHash: step.PolicyHash,
-			Classifier: rawJSON(struct {
-				Tags []string `json:"tags"`
-				Hash string   `json:"hash"`
-			}{step.Classifier.Tags, step.Classifier.Hash}),
-			Summary:    rawJSON(step.Summary),
-			Components: components,
-		})
+	components := make([]json.RawMessage, 0, len(plan.Components))
+	for _, c := range plan.Components {
+		components = append(components, rawJSON(c))
 	}
+	out.Steps = append(out.Steps, workflowStepResponse{
+		StepType:   plan.StepType,
+		StepIndex:  plan.StepIndex,
+		Status:     plan.Status,
+		Policy:     rawJSON(plan.Policy),
+		PolicyHash: plan.PolicyHash,
+		Classifier: rawJSON(struct {
+			Tags []string `json:"tags"`
+			Hash string   `json:"hash"`
+		}{plan.Classifier.Tags, plan.Classifier.Hash}),
+		Summary:    rawJSON(plan.Summary),
+		Components: components,
+	})
 	return out
 }

@@ -1,4 +1,4 @@
-package plan //nolint:testpackage // white-box tests exercise unexported internals
+package plan_test
 
 import (
 	"context"
@@ -7,13 +7,14 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/usecase/plan"
 )
 
-// seedWorkflowEntries writes an RJ-like tree into the entries table: two
-// content partitions (SEあり unmatched / SEなし matched) each with wav+mp3 codec
-// lanes, 2 tracks each, all mp3 at 320 kbps so the balanced preset is fully
+// seedRootEntries writes an RJ-like tree into the entries table: two content
+// partitions (SEあり unmatched / SEなし matched) each with wav+mp3 codec
+// lanes, 2 tracks each, all mp3 at 320 kbps so the balanced policy is fully
 // satisfied (no disk reads; bitrate enrichment is skipped for non-zero rates).
-func seedWorkflowEntries(t *testing.T, repo *sqlite.Repository) {
+func seedRootEntries(t *testing.T, repo *sqlite.Repository) {
 	t.Helper()
 	type row struct {
 		path, parent, name, format string
@@ -68,19 +69,9 @@ func seedWorkflowEntries(t *testing.T, repo *sqlite.Repository) {
 	}
 }
 
-func balancedWorkflow() *Workflow {
-	return &Workflow{
-		SchemaVersion: 1,
-		Steps: []WorkflowStep{{
-			StepType: StepTypeReconcileAudio,
-			Policy:   PolicySource{Kind: "inline", InlinePolicy: inlinePolicyPtr("SEなし")},
-		}},
-	}
-}
-
-// inlinePolicyPtr builds a complete inline policy with the given classifier
-// tags and the balanced output shape (wav + mp3@320 both partitions).
-func inlinePolicyPtr(tags ...string) *reconcile.Policy {
+// balancedPolicy is the balanced output shape (wav + mp3@320 in both
+// partitions) with the given classifier tags.
+func balancedPolicy() reconcile.Policy {
 	profile := reconcile.DesiredProfile{
 		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
 		Encoded: &reconcile.AudioOutputSpec{
@@ -88,89 +79,83 @@ func inlinePolicyPtr(tags ...string) *reconcile.Policy {
 			Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
 		},
 	}
-	return &reconcile.Policy{
+	return reconcile.Policy{
 		SchemaVersion:  1,
-		ClassifierTags: tags,
+		ClassifierTags: []string{"SEなし"},
 		Matched:        profile,
 		Unmatched:      profile,
 	}
 }
 
-func TestRunWorkflowBalancedSatisfied(t *testing.T) {
+func TestPlanBalancedSatisfied(t *testing.T) {
 	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("new repo: %v", err)
 	}
 	defer repo.Close()
-	seedWorkflowEntries(t, repo)
+	seedRootEntries(t, repo)
 
-	res, err := RunWorkflow(context.Background(), repo, "", balancedWorkflow(), []string{"/music"}, RunOptions{})
+	policy := balancedPolicy()
+	res, err := plan.Plan(context.Background(), repo, "", plan.Input{
+		Policy: policy,
+		Roots:  []plan.RootInput{{Path: "/music", Policy: policy}},
+	})
 	if err != nil {
-		t.Fatalf("RunWorkflow: %v", err)
+		t.Fatalf("Plan: %v", err)
 	}
 	if res.Summary.SummaryReason != "NO_MATCH" {
 		t.Fatalf("summary = %q, want NO_MATCH (balanced satisfied)", res.Summary.SummaryReason)
 	}
-	if len(res.AllComponents) != 2 {
-		t.Fatalf("components = %d, want 2 partitions", len(res.AllComponents))
+	if res.Status != "ok" {
+		t.Fatalf("status = %q, want ok", res.Status)
 	}
-	for _, c := range res.AllComponents {
-		if c.Status != "ok" {
-			t.Fatalf("component %s status = %s: %s", c.ComponentID, c.Status, c.Message)
+	if len(res.Components) != 2 {
+		t.Fatalf("components = %d, want 2 partitions", len(res.Components))
+	}
+	for _, c := range res.Components {
+		if c.Outcome.Status != "ok" {
+			t.Fatalf("component %s status = %s: %s", c.Outcome.ComponentID, c.Outcome.Status, c.Outcome.Message)
 		}
-		if len(c.Operations) != 0 {
-			t.Fatalf("component %s should have no operations", c.ComponentID)
+		if len(c.Outcome.Operations) != 0 {
+			t.Fatalf("component %s should have no operations", c.Outcome.ComponentID)
 		}
 	}
 
-	// Persisted round-trip: steps/roots/components + fingerprint survive.
-	if persistErr := sqlite.CreateWorkflowPlanTx(
-		repo.DB(),
-		"plan-balanced",
-		"workflow",
-		res.RootPath,
-		"snap-balanced",
-		"",
-		res.StepRecords,
-		res.Roots,
-		res.Components,
-	); persistErr != nil {
-		t.Fatalf("CreateWorkflowPlanTx: %v", persistErr)
+	// The frozen input facts a revision persists: one root with its live
+	// inventory fingerprint and count, plus the classifier tag snapshot.
+	if len(res.Roots) != 1 {
+		t.Fatalf("roots = %d, want 1", len(res.Roots))
 	}
-	detail, err := repo.GetWorkflowPlanDetail("plan-balanced")
-	if err != nil {
-		t.Fatalf("GetWorkflowPlanDetail: %v", err)
+	if res.Roots[0].Count != 8 {
+		t.Fatalf("entry count = %d, want 8 audio entries", res.Roots[0].Count)
 	}
-	if len(detail.Steps) != 1 || len(detail.Components) != 2 || len(detail.Roots) != 1 {
-		t.Fatalf("detail steps=%d roots=%d components=%d", len(detail.Steps), len(detail.Roots), len(detail.Components))
+	if res.Roots[0].InventoryFingerprint == "" {
+		t.Fatal("inventory fingerprint must be part of the snapshot")
 	}
-	if detail.Roots[0].EntryCount != 8 {
-		t.Fatalf("entry_count = %d, want 8 audio entries", detail.Roots[0].EntryCount)
-	}
-	if detail.Roots[0].InventoryFingerprint == "" {
-		t.Fatal("inventory fingerprint must be persisted")
-	}
-	if detail.Steps[0].ClassifierTags == "" {
-		t.Fatal("classifier tag snapshot must be persisted")
+	if res.ClassifierTags == "" {
+		t.Fatal("classifier tag snapshot must be part of the snapshot")
 	}
 }
 
-func TestRunWorkflowInvalidSchema(t *testing.T) {
+func TestPlanInvalidPolicy(t *testing.T) {
 	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("new repo: %v", err)
 	}
 	defer repo.Close()
-	seedWorkflowEntries(t, repo)
+	seedRootEntries(t, repo)
 
-	wf := balancedWorkflow()
-	wf.SchemaVersion = 99
-	_, err = RunWorkflow(context.Background(), repo, "", wf, []string{"/music"}, RunOptions{})
+	policy := balancedPolicy()
+	policy.SchemaVersion = 99
+	_, err = plan.Plan(context.Background(), repo, "", plan.Input{
+		Policy: policy,
+		Roots:  []plan.RootInput{{Path: "/music", Policy: policy}},
+	})
 	if err == nil {
-		t.Fatal("expected error for unsupported schema version")
+		t.Fatal("expected error for unsupported policy schema version")
 	}
-	planErr, ok := AsError(err)
-	if !ok || planErr.Code != "INVALID_WORKFLOW_SCHEMA" {
-		t.Fatalf("error = %v, want INVALID_WORKFLOW_SCHEMA", err)
+	planErr, ok := plan.AsError(err)
+	if !ok || planErr.Code != "INVALID_POLICY" {
+		t.Fatalf("error = %v, want INVALID_POLICY", err)
 	}
 }
