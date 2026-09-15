@@ -1,12 +1,19 @@
 package reconcile //nolint:testpackage // reuses white-box fixtures from reconcile_test.go
 
 import (
+	"fmt"
+	"path"
+	"slices"
 	"testing"
 )
 
 // lenientPolicy is the wav+mp3@320 profile with the available_sources mode.
 func lenientPolicy() Policy {
-	p := wavMp3Profile()
+	return lenientPolicyFrom(wavMp3Profile())
+}
+
+// lenientPolicyFrom returns the policy with the available_sources mode set.
+func lenientPolicyFrom(p Policy) Policy {
 	p.Mode = ModeAvailableSources
 	return p
 }
@@ -40,6 +47,53 @@ func opCount(cs ComponentOutcome, kind string) int {
 		}
 	}
 	return n
+}
+
+// firstOpDiff reports the first difference between two operation lists, or ""
+// when they are identical.
+func firstOpDiff(a, b []Operation) string {
+	if len(a) != len(b) {
+		return fmt.Sprintf("op count %d != %d", len(a), len(b))
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x.Kind != y.Kind || x.Phase != y.Phase || x.ComponentID != y.ComponentID ||
+			x.VariantStem != y.VariantStem || x.SourcePath != y.SourcePath ||
+			x.TargetPath != y.TargetPath || !slices.Equal(x.DependsOn, y.DependsOn) {
+			return fmt.Sprintf("op[%d] %+v != %+v", i, x, y)
+		}
+	}
+	return ""
+}
+
+// componentIDs lists component ids in result order.
+func componentIDs(res ReconcileResult) []string {
+	ids := make([]string, 0, len(res.Components))
+	for _, c := range res.Components {
+		ids = append(ids, c.ComponentID)
+	}
+	return ids
+}
+
+// assertEncodeTarget asserts the partition's component plans exactly one
+// encode operation targeting wantBase — the observable effect of the
+// partition's resolved profile.
+func assertEncodeTarget(t *testing.T, res ReconcileResult, part Partition, wantBase string) {
+	t.Helper()
+	var targets []string
+	for _, c := range res.Components {
+		if c.Partition != part {
+			continue
+		}
+		for _, op := range c.Operations {
+			if op.Kind == OpKindEncode {
+				targets = append(targets, op.TargetPath)
+			}
+		}
+	}
+	if len(targets) != 1 || path.Base(targets[0]) != wantBase {
+		t.Fatalf("partition %s encode targets = %v, want exactly one ending %s", part, targets, wantBase)
+	}
 }
 
 // TestLenientDesignMatrix walks design spec 4.2's input matrix. Each case
@@ -279,4 +333,94 @@ func TestLenientModeValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("unknown mode must be rejected")
 	}
+}
+
+// TestModeSkeletonParity pins the skeleton both modes share: the same input is
+// classified, partitioned, component-built, profiled and ordered identically,
+// and the mode changes only the per-component decision table. Fixtures are
+// chosen so the two tables agree, which makes their outputs directly
+// comparable.
+func TestModeSkeletonParity(t *testing.T) {
+	t.Run("completable stem plans the same operations", func(t *testing.T) {
+		entries := []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 1, 0),
+			rjEntry("SEなし/aac/00.m4a", 1, 256000),
+		}
+		strictRes := reconcileRJ(t, entries, wavMp3Profile())
+		lenientRes := reconcileRJ(t, entries, lenientPolicy())
+
+		strictComp := singleComponent(t, strictRes, 1)
+		lenientComp := singleComponent(t, lenientRes, 1)
+		if strictComp.ComponentID != lenientComp.ComponentID || strictComp.Partition != lenientComp.Partition {
+			t.Fatalf(
+				"component identity: strict %s/%s, lenient %s/%s",
+				strictComp.ComponentID, strictComp.Partition, lenientComp.ComponentID, lenientComp.Partition,
+			)
+		}
+		if diff := firstOpDiff(strictComp.Operations, lenientComp.Operations); diff != "" {
+			t.Fatalf("operations differ: %s", diff)
+		}
+		wav := rjRoot + "/SEなし/wav/00.wav"
+		m4a := rjRoot + "/SEなし/aac/00.m4a"
+		for _, c := range []ComponentOutcome{strictComp, lenientComp} {
+			if d, ok := findDecision(
+				c,
+				wav,
+			); !ok || d.Resolution != ResolutionKeep ||
+				d.ReasonCode != ReasonKeepLosslessTarget {
+				t.Fatalf("wav decision: %+v ok=%v", d, ok)
+			}
+			if d, ok := findDecision(
+				c,
+				m4a,
+			); !ok || d.Resolution != ResolutionDelete ||
+				d.ReasonCode != ReasonObsoleteEncoded {
+				t.Fatalf("m4a decision: %+v ok=%v", d, ok)
+			}
+		}
+	})
+
+	t.Run("partition resolves the same profile in both modes", func(t *testing.T) {
+		policy := wavMp3Profile()
+		policy.Unmatched = DesiredProfile{
+			Lossless: &AudioOutputSpec{Codec: CodecWav},
+			Encoded:  &AudioOutputSpec{Codec: CodecAac, Quality: &Quality{Kind: QualityBitrate, Bitrate: 256}},
+		}
+		entries := []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 1, 0), // classifier match
+			rjEntry("SEあり/wav/00.wav", 1, 0), // complement
+		}
+		strictRes := reconcileRJ(t, entries, policy)
+		lenientRes := reconcileRJ(t, entries, lenientPolicyFrom(policy))
+
+		if ids, idsL := componentIDs(strictRes), componentIDs(lenientRes); !slices.Equal(idsL, ids) {
+			t.Fatalf("component ids: strict %v, lenient %v", ids, idsL)
+		}
+		for _, res := range []ReconcileResult{strictRes, lenientRes} {
+			if len(res.Components) != 2 ||
+				res.Components[0].Partition != PartitionMatched ||
+				res.Components[1].Partition != PartitionUnmatched {
+				t.Fatalf("component order: %v", componentIDs(res))
+			}
+			assertEncodeTarget(t, res, PartitionMatched, "00.mp3")
+			assertEncodeTarget(t, res, PartitionUnmatched, "00.m4a")
+		}
+	})
+
+	t.Run("fail-closed block is shared", func(t *testing.T) {
+		entries := []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 1, 0),
+			rjEntry("SEなし/wav/00.WAV", 1, 0), // same normalized stem: no unique source
+		}
+		for _, policy := range []Policy{wavMp3Profile(), lenientPolicy()} {
+			res := reconcileRJ(t, entries, policy)
+			c := singleComponent(t, res, 1)
+			if c.Status != StatusBlocked || c.ReasonCode != ReasonSourceAmbiguous {
+				t.Fatalf("mode %q: %+v", policy.Mode, c)
+			}
+			if len(c.Operations) != 0 {
+				t.Fatalf("mode %q: blocked component emitted operations: %+v", policy.Mode, c.Operations)
+			}
+		}
+	})
 }

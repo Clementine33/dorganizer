@@ -148,6 +148,16 @@ type Policy struct {
 	Unmatched      DesiredProfile `json:"unmatched"`
 }
 
+// ProfileFor resolves the desired profile of one partition. It is the single
+// source of the partition -> profile mapping: the planning skeleton, both
+// decision tables and the execution freeze side all call it.
+func ProfileFor(policy Policy, part Partition) DesiredProfile {
+	if part == PartitionUnmatched {
+		return policy.Unmatched
+	}
+	return policy.Matched
+}
+
 // Component states.
 const (
 	StatusOK      = "ok"

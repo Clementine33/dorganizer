@@ -50,13 +50,11 @@ func sameStemPath(sourcePosix, targetExt string) string {
 }
 
 // Reconcile plans the audio step for one planning root: classify -> partition
-// -> components -> variant groups -> desired-state reconciliation. The policy
-// mode selects the decision rule: "" / strict keep the historical behavior;
-// available_sources applies the relaxed per-group rule (mode.go).
+// -> components -> variant groups -> desired-state reconciliation. Both modes
+// share this skeleton, its ordering and its summary; the policy mode selects
+// only the per-component decision table: reconcileComponent for "" / strict
+// (historical behavior), lenientComponent in mode.go for available_sources.
 func Reconcile(in ReconcileInput) (ReconcileResult, error) {
-	if in.Policy.Mode == ModeAvailableSources {
-		return ReconcileLenient(in)
-	}
 	if err := ValidatePolicy(in.Policy); err != nil {
 		return ReconcileResult{}, err
 	}
@@ -88,14 +86,14 @@ func Reconcile(in ReconcileInput) (ReconcileResult, error) {
 		partitioned[partition] = append(partitioned[partition], e)
 	}
 
+	planComponent := reconcileComponent
+	if in.Policy.Mode == ModeAvailableSources {
+		planComponent = lenientComponent
+	}
 	for _, part := range []Partition{PartitionMatched, PartitionUnmatched} {
-		profile := in.Policy.Matched
-		if part == PartitionUnmatched {
-			profile = in.Policy.Unmatched
-		}
+		profile := ProfileFor(in.Policy, part)
 		for _, comp := range BuildComponents(partitioned[part]) {
-			outcome := reconcileComponent(root, part, profile, comp, occupied)
-			res.Components = append(res.Components, outcome)
+			res.Components = append(res.Components, planComponent(root, part, profile, comp, occupied))
 		}
 	}
 
@@ -113,12 +111,17 @@ func Reconcile(in ReconcileInput) (ReconcileResult, error) {
 			summary.BlockedCount++
 			summary.ErrorCount++
 		}
+		// UNMET_TARGET decisions are emitted by the available_sources table
+		// only, so the strict path always adds zero here.
+		summary.UnmetTargets += countUnmetTargets(c)
 	}
 	switch {
 	case summary.BlockedCount > 0 && summary.OperationCount > 0:
 		summary.SummaryReason = ReasonPartial
 	case summary.BlockedCount > 0:
 		summary.SummaryReason = ReasonBlocked
+	case summary.UnmetTargets > 0:
+		summary.SummaryReason = ReasonUnmetTargets
 	case summary.OperationCount > 0:
 		summary.SummaryReason = ReasonActionable
 	default:
@@ -126,6 +129,22 @@ func Reconcile(in ReconcileInput) (ReconcileResult, error) {
 	}
 	res.Summary = summary
 	return res, nil
+}
+
+// newComponentOutcome opens the shared per-component skeleton both decision
+// tables build on: identity, partition, status, and the observed files as
+// sorted tuples.
+func newComponentOutcome(root string, partition Partition, comp Component) ComponentOutcome {
+	out := ComponentOutcome{
+		ComponentID: ComponentID(root, partition, comp),
+		Partition:   partition,
+		Status:      StatusOK,
+	}
+	for _, f := range comp.Files {
+		out.Files = append(out.Files, FileTuple{Path: f.PathPosix, Size: f.Size, Mtime: f.Mtime})
+	}
+	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
+	return out
 }
 
 type groupPlan struct {
@@ -156,15 +175,7 @@ func reconcileComponent(
 	comp Component,
 	occupied map[string]struct{},
 ) ComponentOutcome {
-	out := ComponentOutcome{
-		ComponentID: ComponentID(root, partition, comp),
-		Partition:   partition,
-		Status:      StatusOK,
-	}
-	for _, f := range comp.Files {
-		out.Files = append(out.Files, FileTuple{Path: f.PathPosix, Size: f.Size, Mtime: f.Mtime})
-	}
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
+	out := newComponentOutcome(root, partition, comp)
 
 	groups := comp.StemGroups()
 	owner := make(map[string]string, len(comp.Files))

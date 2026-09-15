@@ -393,10 +393,7 @@ func (s *serviceImpl) executionWorklist(
 		if !ok {
 			return nil, notExecutable([]string{ExecBlockedInput})
 		}
-		profile := policy.Matched
-		if c.Partition == string(reconcile.PartitionUnmatched) {
-			profile = policy.Unmatched
-		}
+		profile := reconcile.ProfileFor(policy, reconcile.Partition(c.Partition))
 		worklist = append(worklist, executionComponent{
 			ComponentIndex: c.ComponentIndex,
 			ComponentID:    c.ComponentID,

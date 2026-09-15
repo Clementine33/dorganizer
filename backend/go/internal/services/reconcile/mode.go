@@ -1,10 +1,6 @@
 package reconcile
 
-import (
-	"fmt"
-	"sort"
-	"strings"
-)
+import "fmt"
 
 // Reason codes exclusive to the available_sources (relaxed) mode. They mark
 // acceptable outcomes that strict planning can never produce: existing files
@@ -51,8 +47,22 @@ func (d *stemDecision) encode(source, target, reason string) {
 	d.targets = appendUnique(d.targets, map[string]bool{}, target)
 }
 
-// ReconcileLenient plans one root with the available_sources rule (design
-// 4.2), evaluated per Variant Group:
+// countUnmetTargets counts stems in one component kept with an unmet target.
+func countUnmetTargets(c ComponentOutcome) int {
+	n := 0
+	for _, v := range c.Variants {
+		for _, d := range v.Decisions {
+			if d.ReasonCode == ReasonUnmetTarget {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// lenientComponent plans one component with the available_sources (relaxed)
+// decision table (design 4.2), evaluated per Variant Group:
 //
 //  1. Satisfied outputs are kept, never rebuilt because another stem lacks a
 //     source (per-group decisions, no component-wide REBUILD_ALL).
@@ -68,93 +78,9 @@ func (d *stemDecision) encode(source, target, reason string) {
 //     component; relaxed mode never weakens these safety checks.
 //  7. A partition with no files produces no component (unchanged) — that is
 //     "no applicable files", not a source-missing block.
-func ReconcileLenient(in ReconcileInput) (ReconcileResult, error) {
-	if err := ValidatePolicy(in.Policy); err != nil {
-		return ReconcileResult{}, err
-	}
-	if in.Classifier.Matcher == nil {
-		return ReconcileResult{}, fmt.Errorf("classifier is not resolved")
-	}
-	root := strings.TrimSuffix(in.RootPath, "/")
-	if root == "" || root == "." {
-		return ReconcileResult{}, fmt.Errorf("planning root is required")
-	}
-
-	audio := AudioEntries(in.Entries)
-	digest, count := InventoryFingerprint(audio)
-	res := ReconcileResult{Digest: digest, Count: count}
-
-	occupied := make(map[string]struct{}, len(in.Entries))
-	for _, e := range in.Entries {
-		occupied[e.PathPosix] = struct{}{}
-	}
-
-	partitioned := map[Partition][]AudioEntry{PartitionMatched: {}, PartitionUnmatched: {}}
-	for _, e := range audio {
-		if !strings.HasPrefix(e.PathPosix, root+"/") {
-			continue
-		}
-		partition := in.Classifier.Classify(strings.TrimPrefix(e.PathPosix, root+"/"))
-		partitioned[partition] = append(partitioned[partition], e)
-	}
-
-	for _, part := range []Partition{PartitionMatched, PartitionUnmatched} {
-		profile := in.Policy.Matched
-		if part == PartitionUnmatched {
-			profile = in.Policy.Unmatched
-		}
-		for _, comp := range BuildComponents(partitioned[part]) {
-			res.Components = append(res.Components, lenientComponent(root, part, profile, comp, occupied))
-		}
-	}
-
-	sort.Slice(res.Components, func(i, j int) bool {
-		if res.Components[i].Partition != res.Components[j].Partition {
-			return res.Components[i].Partition < res.Components[j].Partition
-		}
-		return res.Components[i].ComponentID < res.Components[j].ComponentID
-	})
-
-	summary := StepSummary{ComponentCount: len(res.Components)}
-	for _, c := range res.Components {
-		summary.OperationCount += len(c.Operations)
-		if c.Status == StatusBlocked {
-			summary.BlockedCount++
-			summary.ErrorCount++
-		}
-		summary.UnmetTargets += countUnmetTargets(c)
-	}
-	switch {
-	case summary.BlockedCount > 0 && summary.OperationCount > 0:
-		summary.SummaryReason = ReasonPartial
-	case summary.BlockedCount > 0:
-		summary.SummaryReason = ReasonBlocked
-	case summary.UnmetTargets > 0:
-		summary.SummaryReason = ReasonUnmetTargets
-	case summary.OperationCount > 0:
-		summary.SummaryReason = ReasonActionable
-	default:
-		summary.SummaryReason = ReasonNoMatch
-	}
-	res.Summary = summary
-	return res, nil
-}
-
-// countUnmetTargets counts stems in one component kept with an unmet target.
-func countUnmetTargets(c ComponentOutcome) int {
-	n := 0
-	for _, v := range c.Variants {
-		for _, d := range v.Decisions {
-			if d.ReasonCode == ReasonUnmetTarget {
-				n++
-				break
-			}
-		}
-	}
-	return n
-}
-
-// lenientComponent plans one component with the relaxed per-stem rule.
+//
+// The surrounding skeleton (validation, partitioning, component building,
+// ordering, summary) lives in Reconcile.
 func lenientComponent(
 	root string,
 	partition Partition,
@@ -162,15 +88,7 @@ func lenientComponent(
 	comp Component,
 	occupied map[string]struct{},
 ) ComponentOutcome {
-	out := ComponentOutcome{
-		ComponentID: ComponentID(root, partition, comp),
-		Partition:   partition,
-		Status:      StatusOK,
-	}
-	for _, f := range comp.Files {
-		out.Files = append(out.Files, FileTuple{Path: f.PathPosix, Size: f.Size, Mtime: f.Mtime})
-	}
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
+	out := newComponentOutcome(root, partition, comp)
 
 	var materializeTargets []string
 	seenTargets := map[string]bool{}
