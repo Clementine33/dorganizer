@@ -264,6 +264,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
 		Confirmation   worksetusecase.ConfirmationView   `json:"confirmation"`
 		Workflow       workflowPlanResponse              `json:"workflow"`
+		Execution      *worksetusecase.ExecutionRef      `json:"execution"`
 	}{
 		PlanID:        rv.PlanID,
 		RevisionIndex: rv.RevisionIndex,
@@ -280,6 +281,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		ComponentRoots: componentRoots,
 		Confirmation:   *confirmation,
 		Workflow:       toWorkflowPlanResponse(rv.Workflow),
+		Execution:      rv.Execution,
 	})
 }
 

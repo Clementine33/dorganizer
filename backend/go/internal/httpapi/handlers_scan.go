@@ -11,6 +11,28 @@ import (
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
+// allowScanDuringExecution enforces the scan/execution mutual exclusion: a
+// scan rewrites the inventory a running execution validates against, so it
+// waits for the session to end. It answers the request and returns false when
+// the scan must not start.
+func (s *Server) allowScanDuringExecution(w http.ResponseWriter, rootPath string) bool {
+	executing, err := s.deps.Repo.HasActiveExecutionForRoot(rootPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to check active executions")
+		return false
+	}
+	if executing {
+		writeError(
+			w,
+			http.StatusConflict,
+			"EXECUTION_IN_PROGRESS",
+			"cancel or wait for the active execution before scanning",
+		)
+		return false
+	}
+	return true
+}
+
 // scanRequest is the POST /api/v1/libraries/:id/scans payload. root_path is
 // optional; when absent the library's own root path is scanned.
 type scanRequest struct {
@@ -69,6 +91,10 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ScanService == nil {
 		_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "failed", "scan service not configured", time.Now())
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "scan service not configured")
+		return
+	}
+
+	if !s.allowScanDuringExecution(w, lib.RootPath) {
 		return
 	}
 

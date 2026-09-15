@@ -187,11 +187,8 @@ func runServer(
 	worksetSvc := worksetusecase.NewService(repo, configDir, generationConcurrency)
 
 	// Startup recovery: any session left queued/running by a previous process
-	// is marked interrupted (releasing its idempotency key) before the
-	// dispatcher starts from an empty queue.
-	if err := repo.InterruptStaleGenerations(); err != nil {
-		log.Printf("interrupt stale generations failed: %v", err)
-	}
+	// is marked interrupted before the dispatcher starts from an empty queue.
+	interruptStaleSessions(repo)
 	worksetSvc.DispatcherHandle().Start()
 	defer worksetSvc.DispatcherHandle().Stop()
 
@@ -261,6 +258,24 @@ func runServer(
 			return
 		}
 		log.Fatalf("serve: %v", err)
+	}
+}
+
+// interruptStaleSessions marks leftover queued/running sessions of a previous
+// process as interrupted (releasing generation idempotency keys). Execution
+// sessions keep their partial report; nothing is resumed, re-encoded or
+// re-deleted.
+func interruptStaleSessions(repo *sqlite.Repository) {
+	if err := repo.InterruptStaleGenerations(); err != nil {
+		log.Printf("interrupt stale generations failed: %v", err)
+	}
+	n, err := repo.InterruptStaleExecutions()
+	if err != nil {
+		log.Printf("interrupt stale executions failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("interrupted %d stale execution session(s)", n)
 	}
 }
 

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -141,32 +142,9 @@ func (s *Server) generationEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
 		return
 	}
-	sw, err := newSSEWriter(w)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "streaming not supported")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	emit := func(event string, data any) error {
-		return sw.Send(event, data)
-	}
-	if err := svc.Subscribe(
-		r.Context(),
-		r.PathValue("id"),
-		r.PathValue("type"),
-		r.PathValue("genId"),
-		emit,
-	); err != nil {
-		if werr, ok := worksetusecase.AsError(err); ok && werr.Code == "GENERATION_NOT_FOUND" {
-			_ = sw.Send("error", map[string]string{"code": "GENERATION_NOT_FOUND", "message": werr.Message})
-			return
-		}
-		_ = sw.Send("error", map[string]string{"code": "INTERNAL", "message": "streaming failed"})
-	}
+	streamSessionEvents(w, r, "GENERATION_NOT_FOUND", func(ctx context.Context, emit func(string, any) error) error {
+		return svc.Subscribe(ctx, r.PathValue("id"), r.PathValue("type"), r.PathValue("genId"), emit)
+	})
 }
 
 // cancelGeneration handles POST .../planning-sessions/{genId}/cancel.

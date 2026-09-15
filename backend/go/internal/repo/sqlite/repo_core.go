@@ -1022,6 +1022,54 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_op_status
 CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
     ON plan_generations(status, created_at, generation_id);
 
+-- Workset execution sessions: the durable record of one confirmed revision
+-- being executed (ADR 0004 §4, M2). status: queued|running|succeeded|failed|
+-- canceled|interrupted. A revision is executed at most once: the unique
+-- idempotency index holds the key for the session's whole life, and the
+-- plan_id index answers "has this revision already been executed".
+-- report_json is the per-component outcome report (pending entries included);
+-- it is replaced on every component boundary so a crash leaves the facts of
+-- everything that already happened on disk.
+CREATE TABLE IF NOT EXISTS plan_executions (
+    execution_id TEXT PRIMARY KEY,
+    workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    operation_type TEXT NOT NULL DEFAULT '',
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    delete_mode TEXT NOT NULL DEFAULT 'soft',
+    idempotency_key TEXT NOT NULL DEFAULT '',
+    request_hash TEXT NOT NULL DEFAULT '',
+    expected_operation_version INTEGER NOT NULL DEFAULT 0,
+    request_json TEXT NOT NULL DEFAULT '',
+    total_components INTEGER NOT NULL DEFAULT 0,
+    completed_components INTEGER NOT NULL DEFAULT 0,
+    total_operations INTEGER NOT NULL DEFAULT 0,
+    completed_operations INTEGER NOT NULL DEFAULT 0,
+    current_root TEXT NOT NULL DEFAULT '',
+    current_component_id TEXT NOT NULL DEFAULT '',
+    current_component_index INTEGER NOT NULL DEFAULT 0,
+    current_phase TEXT NOT NULL DEFAULT '',
+    report_json TEXT NOT NULL DEFAULT '[]',
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_executions_op_idem
+    ON plan_executions(workset_id, operation_type, idempotency_key)
+    WHERE idempotency_key <> '';
+-- One execution per revision is a storage invariant, not a check: two
+-- concurrent starts would otherwise both pass the read-only eligibility gates.
+DROP INDEX IF EXISTS idx_plan_executions_plan;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_executions_plan_unique ON plan_executions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_executions_op_status
+    ON plan_executions(workset_id, operation_type, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_plan_executions_queue
+    ON plan_executions(status, created_at, execution_id);
+
 -- Global custom classifier tag library. Holds user-entered literal tags for
 -- cross-workset reuse. Case-insensitively unique normalized_tag prevents duplicates.
 CREATE TABLE IF NOT EXISTS classifier_tag_library (

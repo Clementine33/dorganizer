@@ -122,6 +122,15 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
+		if errors.Is(err, sqlite.ErrExecutionInProgress) {
+			writeError(
+				w,
+				http.StatusConflict,
+				"EXECUTION_IN_PROGRESS",
+				"cancel active executions before deleting the library",
+			)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to delete library")
 		return
 	}

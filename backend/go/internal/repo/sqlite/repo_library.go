@@ -222,11 +222,12 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 
 // DeleteLibrary removes a library and orphans its worksets in one transaction.
 // It fails with ErrGenerationInProgress while any owned workset has a queued
-// or running planning session (the client must cancel first), and with
-// ErrLibraryNotFound when the library does not exist. The active-session check
-// happens inside the write transaction; generation claim/complete updates
-// serialize on the same SQLite writer, so a delete that commits cannot race a
-// generation that would start against the deleted library.
+// or running planning session and with ErrExecutionInProgress while any owned
+// workset has a queued or running execution (the client must cancel first), and
+// with ErrLibraryNotFound when the library does not exist. The active-session
+// checks happen inside the write transaction; claim/complete updates serialize
+// on the same SQLite writer, so a delete that commits cannot race a session
+// that would start against the deleted library.
 func (r *Repository) DeleteLibrary(id string) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -252,6 +253,17 @@ func (r *Repository) DeleteLibrary(id string) error {
 	}
 	if active > 0 {
 		return ErrGenerationInProgress
+	}
+
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM plan_executions e
+		JOIN worksets w ON w.id = e.workset_id
+		WHERE w.library_id = ? AND e.status IN ('queued','running')
+	`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrExecutionInProgress
 	}
 
 	if _, err := tx.Exec("UPDATE worksets SET library_id = NULL WHERE library_id = ?", id); err != nil {

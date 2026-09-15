@@ -124,6 +124,21 @@ func (s *serviceImpl) SaveDraft(
 			nil,
 		)
 	}
+	// An active execution runs the confirmation of the revision this draft
+	// belongs to; editing the draft under it would move the operation version
+	// and desynchronize the session's frozen input.
+	activeExec, err := s.repo.GetActiveExecutionForOperation(worksetID, operationType)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active execution", err)
+	}
+	if activeExec != nil {
+		return nil, NewError(
+			ErrKindConflict,
+			"EXECUTION_IN_PROGRESS",
+			"cancel or wait for the active execution before editing the draft",
+			nil,
+		)
+	}
 	doc := normalizeDraft(req.Document, members)
 	raw, hash, err := MarshalDraft(doc)
 	if err != nil {

@@ -136,6 +136,20 @@ func (s *serviceImpl) prepareGeneration(
 			nil,
 		)
 	}
+	// An active execution owns the operation's disk state; planning must wait
+	// for it to reach a terminal status.
+	activeExec, err := s.repo.GetActiveExecutionForOperation(worksetID, operationType)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active execution", err)
+	}
+	if activeExec != nil {
+		return nil, NewError(
+			ErrKindConflict,
+			"EXECUTION_IN_PROGRESS",
+			"wait for the active execution to finish before generating",
+			nil,
+		)
+	}
 	return &generationInput{
 		operation: op,
 		draft:     doc,

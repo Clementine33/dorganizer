@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -81,13 +82,15 @@ type generationSummaryResponse struct {
 // operationResponse is the operation-scoped aggregate. This is the only shape
 // that carries planning state: a workset itself is never planned.
 type operationResponse struct {
-	WorksetID        string                      `json:"workset_id"`
-	OperationType    string                      `json:"operation_type"`
-	Version          int                         `json:"version"`
-	PlanningState    string                      `json:"planning_state"`
-	CurrentRevision  *currentRevisionResponse    `json:"current_revision"`
-	ActiveGeneration *generationProgressResponse `json:"active_generation"`
-	LatestGeneration *generationSummaryResponse  `json:"latest_generation"`
+	WorksetID        string                            `json:"workset_id"`
+	OperationType    string                            `json:"operation_type"`
+	Version          int                               `json:"version"`
+	PlanningState    string                            `json:"planning_state"`
+	CurrentRevision  *currentRevisionResponse          `json:"current_revision"`
+	ActiveGeneration *generationProgressResponse       `json:"active_generation"`
+	LatestGeneration *generationSummaryResponse        `json:"latest_generation"`
+	ActiveExecution  *worksetusecase.ExecutionProgress `json:"active_execution"`
+	LatestExecution  *worksetusecase.ExecutionRef      `json:"latest_execution"`
 }
 
 // worksetResponse is the workset metadata view.
@@ -137,6 +140,8 @@ func toOperationResponse(v *worksetusecase.OperationView) operationResponse {
 			FinishedAt:   v.LatestGeneration.FinishedAt.UTC().Format(timeFormatJSON),
 		}
 	}
+	out.ActiveExecution = v.ActiveExecution
+	out.LatestExecution = v.LatestExecution
 	return out
 }
 
@@ -199,6 +204,37 @@ func (s *Server) worksetService() (worksetusecase.Service, error) {
 		return nil, errors.New("workset service not configured")
 	}
 	return s.deps.WorksetService, nil
+}
+
+// streamSessionEvents opens one SSE stream and delegates to a session
+// subscribe function. A missing session is reported as a structured error
+// event, because the 200 status is already committed with the stream headers.
+func streamSessionEvents(
+	w http.ResponseWriter,
+	r *http.Request,
+	notFoundCode string,
+	subscribe func(ctx context.Context, emit func(event string, data any) error) error,
+) {
+	sw, err := newSSEWriter(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "streaming not supported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	emit := func(event string, data any) error {
+		return sw.Send(event, data)
+	}
+	if err := subscribe(r.Context(), emit); err != nil {
+		if werr, ok := worksetusecase.AsError(err); ok && werr.Code == notFoundCode {
+			_ = sw.Send("error", map[string]string{"code": notFoundCode, "message": werr.Message})
+			return
+		}
+		_ = sw.Send("error", map[string]string{"code": "INTERNAL", "message": "streaming failed"})
+	}
 }
 
 // createWorkset handles POST /api/v1/worksets.

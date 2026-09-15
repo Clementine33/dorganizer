@@ -129,6 +129,20 @@ func (s *serviceImpl) operationView(op *sqlite.Operation) (*OperationView, error
 			FinishedAt:   latest.FinishedAt,
 		}
 	}
+	activeExec, err := s.repo.GetActiveExecutionForOperation(op.WorksetID, op.OperationType)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load active execution", err)
+	}
+	if activeExec != nil {
+		out.ActiveExecution = executionProgressOf(activeExec)
+	}
+	latestExec, err := s.repo.LatestExecutionForOperation(op.WorksetID, op.OperationType)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load latest execution", err)
+	}
+	if latestExec != nil {
+		out.LatestExecution = executionRefOf(latestExec)
+	}
 	return out, nil
 }
 

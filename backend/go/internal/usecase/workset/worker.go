@@ -16,13 +16,19 @@ import (
 // dispatcher is a singleton global FIFO scheduler plus a fixed worker pool. It
 // is not one goroutine per generation: workers claim sessions one at a time
 // from the queue table in julianday(created_at), generation_id order.
+//
+// Execution sessions share the lifecycle but not the queue: one dedicated
+// worker claims executions from their own table, so executions are globally
+// serialized (first version) and a planning worker never consumes an execution
+// wake.
 type dispatcher struct {
 	svc     *serviceImpl
 	workers int
 
-	wakeC chan struct{}
-	done  chan struct{}
-	stop  sync.Once
+	wakeC     chan struct{}
+	execWakeC chan struct{}
+	done      chan struct{}
+	stop      sync.Once
 }
 
 func newDispatcher(svc *serviceImpl, workers int) *dispatcher {
@@ -30,19 +36,22 @@ func newDispatcher(svc *serviceImpl, workers int) *dispatcher {
 		workers = 2
 	}
 	return &dispatcher{
-		svc:     svc,
-		workers: workers,
-		wakeC:   make(chan struct{}, 1),
-		done:    make(chan struct{}),
+		svc:       svc,
+		workers:   workers,
+		wakeC:     make(chan struct{}, 1),
+		execWakeC: make(chan struct{}, 1),
+		done:      make(chan struct{}),
 	}
 }
 
 // Start launches the worker pool. It is called once at process startup after
-// InterruptStaleGenerations, so the queue is always clean.
+// InterruptStaleGenerations and InterruptStaleExecutions, so both queues are
+// always clean.
 func (d *dispatcher) Start() {
 	for range d.workers {
 		go d.run()
 	}
+	go d.runExecutionLoop()
 }
 
 // wake pokes the pool after a session is enqueued or a queued session is
@@ -54,9 +63,18 @@ func (d *dispatcher) wake() {
 	}
 }
 
-// Stop shuts the pool down. In-flight generations still running when Stop is
-// called are allowed to finish; the next process start marks leftovers as
-// interrupted.
+// wakeExecution pokes the execution worker after a session is enqueued or a
+// queued session is canceled.
+func (d *dispatcher) wakeExecution() {
+	select {
+	case d.execWakeC <- struct{}{}:
+	default:
+	}
+}
+
+// Stop shuts the pool down. In-flight generations and executions still running
+// when Stop is called are allowed to finish; the next process start marks
+// leftovers as interrupted.
 func (d *dispatcher) Stop() {
 	d.stop.Do(func() { close(d.done) })
 }

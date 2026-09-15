@@ -212,6 +212,13 @@ func (s *serviceImpl) GetRevision(
 		})
 	}
 	out.Workflow = toPlanResponse(detail)
+	executed, execErr := s.repo.GetExecutionForRevision(planID)
+	if execErr != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision execution", execErr)
+	}
+	if executed != nil {
+		out.Execution = executionRefOf(executed)
+	}
 	return out, nil
 }
 

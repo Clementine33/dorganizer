@@ -157,6 +157,12 @@ type OperationView struct {
 	CurrentRevision  *RevisionSummary
 	ActiveGeneration *GenerationProgress
 	LatestGeneration *GenerationSummary
+	// ActiveExecution is the queued/running execution session of this
+	// operation, if any; it blocks generation, execution and draft edits.
+	ActiveExecution *ExecutionProgress
+	// LatestExecution is the newest execution session (any status) so the UI can
+	// reach a finished partial run after a reload.
+	LatestExecution *ExecutionRef
 }
 
 // WorksetView is the workset metadata view: identity, library, fixed members
@@ -277,6 +283,10 @@ type RevisionView struct {
 	Members []RevisionMember
 	// Counts are the independent plan facts of this revision.
 	Counts RevisionCounts
+	// Execution is the newest execution session of this revision (any status).
+	// A revision is executed at most once, so a present session also means the
+	// revision can no longer be executed again.
+	Execution *ExecutionRef
 }
 
 // ComponentRootRef is the stable component-to-root ownership of a revision.
@@ -360,6 +370,21 @@ type Service interface {
 		req ConfirmRequest,
 	) (*ConfirmResult, error)
 	GetConfirmation(ctx context.Context, worksetID, operationType, planID string) (*ConfirmationView, error)
+	StartExecution(
+		ctx context.Context,
+		worksetID, operationType, planID string,
+		req StartExecutionRequest,
+	) (*StartExecutionResult, error)
+	GetExecution(ctx context.Context, worksetID, operationType, executionID string) (*ExecutionView, error)
+	CancelExecution(
+		ctx context.Context,
+		worksetID, operationType, executionID string,
+	) (*ExecutionView, error)
+	SubscribeExecution(
+		ctx context.Context,
+		worksetID, operationType, executionID string,
+		emit func(event string, data any) error,
+	) error
 }
 
 // toGenerationView converts a persisted session row to the view payload.
