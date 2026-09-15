@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
-import { componentOperationCount, operationsOf, readComponent } from '@/features/worksets/plan-readers'
+import { componentOperationCount, operationsOf, revisionComponents } from '@/features/worksets/plan-readers'
 import type { ComponentOutcome, RevisionDetailResponse, RevisionMember, WorksetMember } from '@/lib/api/types'
 
 /**
@@ -39,10 +39,7 @@ const components = computed<ComponentOutcome[]>(() => {
   const owned = new Set(
     props.revision.component_roots.filter((ref) => ref.root_index === rootIndex.value).map((ref) => ref.component_id),
   )
-  return (props.revision.workflow.steps ?? [])
-    .flatMap((step) => step.components ?? [])
-    .filter((component) => owned.has(component.component_id))
-    .map(readComponent)
+  return revisionComponents(props.revision).filter((component) => owned.has(component.component_id))
 })
 
 const inputStatus = computed(() => props.revision.roots.find((r) => r.root_path === props.member.folder_path) ?? null)

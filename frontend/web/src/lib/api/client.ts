@@ -9,6 +9,7 @@ import type {
   ConfirmationState,
   CreateLibraryInput,
   CreateWorksetInput,
+  DraftEnvelopeResponse,
   DraftResponse,
   Folder,
   GenerationEvent,
@@ -171,8 +172,23 @@ export class ApiClient implements ApiClientContract {
     return this.request(this.operationPath(worksetId, operation), { signal })
   }
 
-  getOperationDraft(worksetId: string, operation: OperationType, signal?: AbortSignal): Promise<DraftResponse> {
-    return this.request(`${this.operationPath(worksetId, operation)}/draft`, { signal })
+  async getOperationDraft(
+    worksetId: string,
+    operation: OperationType,
+    signal?: AbortSignal,
+  ): Promise<DraftResponse> {
+    const wire = await this.request<DraftEnvelopeResponse>(
+      `${this.operationPath(worksetId, operation)}/draft`,
+      { signal },
+    )
+    return {
+      workset_id: wire.workset_id,
+      operation_type: wire.operation_type,
+      version: wire.version,
+      schema_version: wire.task.schema_version,
+      document: wire.task.payload,
+      updated_at: wire.updated_at,
+    }
   }
 
   /** Full replacement of the sparse draft; If-Match is the operation version. */

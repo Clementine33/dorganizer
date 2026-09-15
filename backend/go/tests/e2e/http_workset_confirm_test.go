@@ -17,7 +17,7 @@ import (
 // produced no planning root and that the frozen review reports per-unit
 // inheritance sources, then confirm the revision and check idempotency.
 //
-//nolint:funlen // e2e scenario
+//nolint:funlen,gocyclo // e2e scenario
 func TestHTTPWorksetOperationDraftAndConfirm(t *testing.T) {
 	binPath := buildBackendBinary(t)
 	dataDir := t.TempDir()
@@ -96,21 +96,25 @@ func TestHTTPWorksetOperationDraftAndConfirm(t *testing.T) {
 
 	// Fetch the draft: the seeded document is sparse (no member records).
 	var draft struct {
-		Version  int `json:"version"`
-		Document struct {
-			Mode    string `json:"mode"`
-			Members []struct {
-				MemberID string `json:"member_id"`
-			} `json:"members"`
-		} `json:"document"`
+		Version int `json:"version"`
+		Task    struct {
+			Kind    string `json:"kind"`
+			Payload struct {
+				Mode    string `json:"mode"`
+				Members []struct {
+					MemberID string `json:"member_id"`
+				} `json:"members"`
+			} `json:"payload"`
+		} `json:"task"`
 	}
 	if code := doJSON(
 		t, client, ctx, base, http.MethodGet, opPath+"/draft", token, nil, &draft,
 	); code != http.StatusOK {
 		t.Fatalf("get draft: %d", code)
 	}
-	if draft.Document.Mode != "available_sources" || len(draft.Document.Members) != 0 {
-		t.Fatalf("seeded draft: %+v", draft.Document)
+	if draft.Task.Kind != "conversion" || draft.Task.Payload.Mode != "available_sources" ||
+		len(draft.Task.Payload.Members) != 0 {
+		t.Fatalf("seeded draft: %+v", draft.Task)
 	}
 
 	// Sparse draft: relaxed common mode with an encoded-only target (the wav-only

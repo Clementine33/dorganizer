@@ -170,22 +170,27 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 		t.Fatalf("draft status = %d body=%s", w.Code, w.Body.String())
 	}
 	var draft struct {
-		Version  int `json:"version"`
-		Document struct {
-			SchemaVersion  int      `json:"schema_version"`
-			Mode           string   `json:"mode"`
-			ClassifierTags []string `json:"classifier_tags"`
-			Members        []any    `json:"members"`
-		} `json:"document"`
+		Version int `json:"version"`
+		Task    struct {
+			Kind          string `json:"kind"`
+			SchemaVersion int    `json:"schema_version"`
+			Payload       struct {
+				SchemaVersion  int      `json:"schema_version"`
+				Mode           string   `json:"mode"`
+				ClassifierTags []string `json:"classifier_tags"`
+				Members        []any    `json:"members"`
+			} `json:"payload"`
+		} `json:"task"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
 		t.Fatalf("decode draft: %v", err)
 	}
-	if draft.Version != 1 || draft.Document.SchemaVersion != 1 || draft.Document.Mode != "available_sources" {
+	if draft.Version != 1 || draft.Task.Kind != "conversion" || draft.Task.SchemaVersion != 1 ||
+		draft.Task.Payload.SchemaVersion != 1 || draft.Task.Payload.Mode != "available_sources" {
 		t.Fatalf("draft: %+v", draft)
 	}
-	if len(draft.Document.ClassifierTags) != 1 || len(draft.Document.Members) != 0 {
-		t.Fatalf("seeded draft must be sparse: %+v", draft.Document)
+	if len(draft.Task.Payload.ClassifierTags) != 1 || len(draft.Task.Payload.Members) != 0 {
+		t.Fatalf("seeded draft must be sparse: %+v", draft.Task.Payload)
 	}
 
 	// PUT draft requires If-Match on the operation version.

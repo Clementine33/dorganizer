@@ -108,11 +108,9 @@ type planSummaryResponse struct {
 	SummaryReason   string `json:"summary_reason"`
 }
 
-// workflowStepResponse is the layered review payload of one step.
-type workflowStepResponse struct {
-	StepType   string            `json:"step_type"`
-	StepIndex  int               `json:"step_index"`
-	Status     string            `json:"status"`
+// taskPayloadResponse is one task's reviewable plan payload (the conversion
+// task fills it with its policy, classifier, summary and unit outcomes).
+type taskPayloadResponse struct {
 	Policy     json.RawMessage   `json:"policy"`
 	PolicyHash string            `json:"policy_hash"`
 	Classifier json.RawMessage   `json:"classifier"`
@@ -120,14 +118,34 @@ type workflowStepResponse struct {
 	Components []json.RawMessage `json:"components"`
 }
 
-// workflowPlanResponse is the review shape of one revision's workflow snapshot.
-type workflowPlanResponse struct {
-	PlanID        string                 `json:"plan_id"`
-	SnapshotToken string                 `json:"snapshot_token"`
-	RootPath      string                 `json:"root_path"`
-	PlanKind      string                 `json:"plan_kind"`
-	Summary       planSummaryResponse    `json:"summary"`
-	Steps         []workflowStepResponse `json:"steps"`
+// taskEnvelopeResponse is the opaque task envelope of a revision payload: the
+// generic side names the kind and schema version, the task owns the payload.
+type taskEnvelopeResponse struct {
+	Kind          string              `json:"kind"`
+	SchemaVersion int                 `json:"schema_version"`
+	Payload       taskPayloadResponse `json:"payload"`
+}
+
+// toTaskEnvelope maps one revision's plan to the task envelope, keeping unit
+// outcomes as raw JSON snapshots so the payload agrees byte-for-byte with the
+// persisted outcome.
+func toTaskEnvelope(plan worksetusecase.RevisionPlan) taskEnvelopeResponse {
+	components := make([]json.RawMessage, 0, len(plan.Units))
+	components = append(components, plan.Units...)
+	return taskEnvelopeResponse{
+		Kind:          plan.TaskKind,
+		SchemaVersion: plan.TaskSchemaVersion,
+		Payload: taskPayloadResponse{
+			Policy:     plan.Payload,
+			PolicyHash: plan.PolicyHash,
+			Classifier: rawJSON(struct {
+				Tags []string `json:"tags"`
+				Hash string   `json:"hash"`
+			}{plan.ClassifierTags, plan.ClassifierHash}),
+			Summary:    plan.StepSummary,
+			Components: components,
+		},
+	}
 }
 
 func rawJSON(v any) json.RawMessage {
@@ -136,39 +154,4 @@ func rawJSON(v any) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return json.RawMessage(b)
-}
-
-// toWorkflowPlanResponse maps one revision's plan to the HTTP review shape,
-// keeping component outcomes as raw JSON snapshots so the payload agrees
-// byte-for-byte with the persisted outcome. The nested step array is the
-// frozen wire shape of the retired multi-step plans; one conversion plan is
-// always exactly one step.
-func toWorkflowPlanResponse(plan worksetusecase.RevisionPlan) workflowPlanResponse {
-	out := workflowPlanResponse{
-		PlanID:        plan.PlanID,
-		SnapshotToken: plan.SnapshotToken,
-		RootPath:      plan.RootPath,
-		PlanKind:      plan.TaskKind,
-		Summary: planSummaryResponse{
-			OperationCount: plan.Summary.OperationCount,
-			ErrorCount:     plan.Summary.ErrorCount,
-			SummaryReason:  plan.Summary.SummaryReason,
-		},
-	}
-	components := make([]json.RawMessage, 0, len(plan.Units))
-	components = append(components, plan.Units...)
-	out.Steps = append(out.Steps, workflowStepResponse{
-		StepType:   plan.StepType,
-		StepIndex:  plan.StepIndex,
-		Status:     plan.Status,
-		Policy:     plan.Payload,
-		PolicyHash: plan.PolicyHash,
-		Classifier: rawJSON(struct {
-			Tags []string `json:"tags"`
-			Hash string   `json:"hash"`
-		}{plan.ClassifierTags, plan.ClassifierHash}),
-		Summary:    rawJSON(plan.Summary),
-		Components: components,
-	})
-	return out
 }

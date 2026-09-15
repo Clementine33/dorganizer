@@ -12,7 +12,7 @@ import MemberList from '@/features/worksets/MemberList.vue'
 import {
   memberConclusion,
   partitionStatus,
-  readComponent,
+  revisionComponents,
   type MemberConclusion,
 } from '@/features/worksets/plan-readers'
 import { useOperationContext } from '@/composables/use-operation-context'
@@ -87,10 +87,7 @@ function memberComponents(member: WorksetMember): ComponentOutcome[] {
       .filter((ref) => ref.root_index === root.root_index)
       .map((ref) => ref.component_id),
   )
-  return (view.workflow.steps ?? [])
-    .flatMap((step) => step.components ?? [])
-    .filter((component) => owned.has(component.component_id))
-    .map(readComponent)
+  return revisionComponents(view).filter((component) => owned.has(component.component_id))
 }
 
 /** The visible conclusion of one member row. */

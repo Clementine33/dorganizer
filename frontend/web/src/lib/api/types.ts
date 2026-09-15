@@ -267,6 +267,17 @@ export interface OperationDraftDocument {
   members: DraftMember[]
 }
 
+/** The wire shape of a persisted draft: document wrapped in its task envelope. */
+export interface DraftEnvelopeResponse {
+  workset_id: string
+  operation_type: OperationType
+  /** The OPERATION version: echo it back as If-Match on the next save. */
+  version: number
+  task: TaskEnvelope<OperationDraftDocument>
+  updated_at: string
+}
+
+/** The unwrapped draft editors consume; the API client maps the envelope to it. */
 export interface DraftResponse {
   workset_id: string
   operation_type: OperationType
@@ -360,7 +371,7 @@ export interface LaneDecision {
   message?: string
 }
 
-export interface WorkflowOperation {
+export interface PlanOperation {
   kind: string
   phase: string
   component_id: string
@@ -378,7 +389,7 @@ export interface ComponentOutcome {
   message?: string
   lanes: LaneDecision[]
   variant_decisions: VariantDecision[]
-  operations: WorkflowOperation[]
+  operations: PlanOperation[]
   projected_inventory: string[]
   files: { path: string; size: number; mtime: number }[]
 }
@@ -398,30 +409,23 @@ export interface ClassifierSnapshot {
   hash?: string
 }
 
-export interface WorkflowStepDetail {
-  step_type: string
-  step_index: number
-  status: string
+/**
+ * Opaque task envelope: the generic side names the task kind and its payload
+ * schema version; everything inside `payload` belongs to the task.
+ */
+export interface TaskEnvelope<P> {
+  kind: string
+  schema_version: number
+  payload: P
+}
+
+/** The conversion task's reviewable plan payload. */
+export interface ConversionPlanPayload {
   policy: unknown
   policy_hash: string
   classifier: ClassifierSnapshot
   summary: StepSummary
   components: ComponentOutcome[]
-}
-
-export interface WorkflowPlanDetail {
-  plan_id: string
-  snapshot_token: string
-  root_path: string
-  plan_kind: string
-  summary: {
-    operation_count: number
-    error_count: number
-    total_count: number
-    actionable_count: number
-    summary_reason: string
-  }
-  steps: WorkflowStepDetail[]
 }
 
 /** Server-side confirmation state of one revision (ADR 0003 §5). */
@@ -452,13 +456,24 @@ export interface RevisionDetailResponse {
   plan_id: string
   revision_index: number
   created_at: string
+  root_path: string
+  snapshot_token: string
+  status: string
+  summary: {
+    operation_count: number
+    error_count: number
+    total_count: number
+    actionable_count: number
+    summary_reason: string
+  }
+  /** The plan snapshot, wrapped in its task envelope. */
+  task: TaskEnvelope<ConversionPlanPayload>
   counts: RevisionCounts
   /** Frozen per-member effective settings and inheritance sources. */
   members: RevisionMember[]
   roots: RootValidation[]
   component_roots: ComponentRootRef[]
   confirmation: ConfirmationState
-  workflow: WorkflowPlanDetail
 }
 
 export interface ApiClientContract {

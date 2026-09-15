@@ -338,18 +338,18 @@ func excludedSet(scope string) map[string]bool {
 // belongs to the operation's task.
 func (s *serviceImpl) planView(operationType string, detail *sqlite.PlanDetail) RevisionPlan {
 	out := RevisionPlan{
-		PlanID:        detail.Plan.PlanID,
-		SnapshotToken: detail.Plan.SnapshotToken,
-		RootPath:      detail.Plan.RootPath,
-		TaskKind:      detail.Plan.TaskKind,
-		Summary:       planSummaryOf(detail),
+		PlanID:            detail.Plan.PlanID,
+		SnapshotToken:     detail.Plan.SnapshotToken,
+		RootPath:          detail.Plan.RootPath,
+		TaskKind:          detail.Plan.TaskKind,
+		TaskSchemaVersion: detail.Plan.TaskSchemaVersion,
+		Summary:           planSummaryOf(detail),
 	}
 	if len(detail.Steps) > 0 {
 		st := detail.Steps[0]
-		out.StepType = st.StepType
-		out.StepIndex = st.StepIndex
 		out.Status = st.Status
 		out.PolicyHash = st.PolicyHash
+		out.StepSummary = json.RawMessage(st.StepSummaryJSON)
 	}
 	if review, err := s.revisionReview(operationType, detail); err == nil {
 		out.Payload = review.Payload

@@ -206,11 +206,13 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			ComponentID string `json:"component_id"`
 			RootIndex   int    `json:"root_index"`
 		} `json:"component_roots"`
-		Workflow struct {
-			Summary struct {
-				SummaryReason string `json:"summary_reason"`
-			} `json:"summary"`
-		} `json:"workflow"`
+		Summary struct {
+			SummaryReason string `json:"summary_reason"`
+		} `json:"summary"`
+		Task struct {
+			Kind    string          `json:"kind"`
+			Payload json.RawMessage `json:"payload"`
+		} `json:"task"`
 	}
 	if code := doJSON(
 		t,
@@ -225,8 +227,11 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	); code != http.StatusOK {
 		t.Fatalf("revision detail: %d", code)
 	}
-	if rev.Workflow.Summary.SummaryReason == "" {
+	if rev.Summary.SummaryReason == "" {
 		t.Fatalf("revision missing summary_reason: %+v", rev)
+	}
+	if rev.Task.Kind != "conversion" || len(rev.Task.Payload) == 0 {
+		t.Fatalf("revision missing task payload: %+v", rev)
 	}
 	// Every component must map to a valid planning root (stable ownership for
 	// batch grouping; albumA is root 0).

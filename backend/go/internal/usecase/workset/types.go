@@ -274,19 +274,19 @@ type RevisionMember struct {
 // exactly one plan; the persisted step, root and component rows flatten into
 // it, and the payload decode belongs to the operation's task.
 type RevisionPlan struct {
-	PlanID         string
-	SnapshotToken  string
-	RootPath       string
-	TaskKind       string
-	StepType       string
-	StepIndex      int
-	Status         string
-	PolicyHash     string
-	Summary        PlanSummary
-	Payload        json.RawMessage // task plan payload (policy JSON)
-	ClassifierTags []string
-	ClassifierHash string
-	Units          []json.RawMessage // per-unit payloads in component order
+	PlanID            string
+	SnapshotToken     string
+	RootPath          string
+	TaskKind          string
+	TaskSchemaVersion int
+	Status            string
+	PolicyHash        string
+	Summary           PlanSummary
+	Payload           json.RawMessage // task plan payload (policy JSON)
+	ClassifierTags    []string
+	ClassifierHash    string
+	StepSummary       json.RawMessage   // the task's payload summary, as stored
+	Units             []json.RawMessage // per-unit payloads in component order
 }
 
 // RevisionView is the nested immutable revision detail.

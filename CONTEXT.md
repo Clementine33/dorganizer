@@ -50,8 +50,15 @@ Reusable literal classification tags, comprising installation defaults and user-
 
 ### Planning and review
 
+**Task**:
+One kind of work a Workset Operation can carry: it owns that work's draft document shape, its planning pass, its input facts and its execution. The generic workset module names the kind and payload schema version but never reads a task's payload; one adapter (conversion) exists today.
+_Avoid_: Workflow, job, plugin.
+
 **Plan**:
 A reviewable proposal of media decisions and required filesystem changes, produced before execution.
+
+**Plan Snapshot**:
+The frozen payload of one Plan Revision as its Task wrote it: opaque to the generic workset module, carries `kind` and `schema_version` so a reader knows what it is looking at.
 
 **Plan Revision**:
 An immutable proposal owned by one Workset Operation, freezing its draft, member participation, effective settings and sources, input facts and results.
@@ -61,6 +68,14 @@ An asynchronous attempt to produce a complete Plan Revision from frozen settings
 
 **Planning State**:
 The operation's relationship to planning: unplanned, planning, planned, needs planning or orphaned. It is distinct from input validity and the proposal's results.
+
+**Input Facts**:
+What a plan was made from: per Planning Root, the identity, inventory fingerprint and entry count observed at planning time. The Task says how to recompute them and what counts as moved.
+_Avoid_: Snapshot token, ETag.
+
+**Execution Session**:
+The asynchronous, durable run of one confirmed Plan Revision: globally serialized, cooperatively cancelable at unit boundaries, with a per-unit report that survives a crash and no automatic retry.
+_Avoid_: Run, job.
 
 **Input Validity**:
 Whether a revision's recorded inputs still agree with the current observed inventory: valid, stale or unavailable.

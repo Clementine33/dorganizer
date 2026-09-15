@@ -171,7 +171,7 @@ func openLegacyPlansDB(t *testing.T) (*Repository, error) {
 // phase), drops the retired standalone plan-execute tables, and the current
 // schema is created so new plans round-trip. Libraries, entries and scans
 // survive.
-func TestWorkflowMigrationPurgesLegacyPlans(t *testing.T) {
+func TestTaskSeamMigrationResetsLegacyPlans(t *testing.T) {
 	repo, err := openLegacyPlansDB(t)
 	if err != nil {
 		t.Fatalf("NewRepository on legacy plans schema failed: %v", err)

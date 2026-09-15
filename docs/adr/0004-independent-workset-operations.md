@@ -5,7 +5,8 @@ Accepted; consolidated on 2026-09-14 against the squash feature commits through
 commit `172c1c5404e8ce7ea5170088d339137c96e91e7e`. Number 0004 is retained
 for existing references; earlier numbered decisions remain in Git history.
 The backend operation model, Vue workbench and responsive navigation are
-implemented. Workflow filesystem execution remains unsupported.
+implemented. Filesystem execution of confirmed revisions landed later (see
+ADR 0005 for the task seam that carries it).
 
 Domain language lives in [CONTEXT.md](../../CONTEXT.md); request and response
 contracts live in [api.md](../api.md).
@@ -166,9 +167,10 @@ modal behavior consistent across layouts.
 - This branch introduced a new Workset storage contract without a legacy-data
   migration or dual-schema reader. Existing development databases and media
   are not cleared by that choice; isolated data is used for fresh testing.
-- The standalone workflow and executable `single_action` paths remain separate.
-  Workflow execution returns `EXECUTE_NOT_SUPPORTED`; confirmation is only
-  review acceptance. Member-set editing, future operation types and concurrent
-  cross-operation filesystem scheduling remain outside the delivered scope.
+- The standalone workflow and executable `single_action` paths were retired;
+  the only write path is executing a confirmed revision (M1/M2). Confirmation
+  itself still executes nothing. Member-set editing and concurrent
+  cross-operation filesystem scheduling remain outside the delivered scope;
+  the operation-type seam that admits further tasks is recorded in ADR 0005.
 - Flutter/gRPC is the legacy client line and receives no new Workbench UI.
   The Vue HTTP client is the active product surface.

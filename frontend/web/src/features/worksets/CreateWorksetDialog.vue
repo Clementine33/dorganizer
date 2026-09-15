@@ -55,7 +55,7 @@ const canSubmit = computed(() => effectiveTitle.value.length > 0 && !props.savin
         <div>
           <h2 class="font-heading text-base font-semibold tracking-tight">创建工作集</h2>
           <p class="mt-0.5 text-[11px] text-muted-foreground">
-            将选中的专辑批次纳入一个工作集，随后配置 Workflow 并生成不可变计划版本。
+            将选中的专辑批次纳入一个工作集，随后配置转换策略并生成不可变计划版本。
           </p>
         </div>
         <Button

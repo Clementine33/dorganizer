@@ -35,16 +35,23 @@ type draftOverridesRequest struct {
 	Unmatched      *reconcile.DesiredProfile `json:"unmatched"`
 }
 
+// taskDraftEnvelope is the opaque task envelope of a draft document: the
+// generic side names the kind and schema version, the task owns the payload.
+type taskDraftEnvelope struct {
+	Kind          string          `json:"kind"`
+	SchemaVersion int             `json:"schema_version"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
 // draftResponse is the persisted sparse draft. Version is the OPERATION version
 // — the If-Match authority for the next save; there is no separate draft
 // counter.
 type draftResponse struct {
-	WorksetID     string               `json:"workset_id"`
-	OperationType string               `json:"operation_type"`
-	Version       int                  `json:"version"`
-	SchemaVersion int                  `json:"schema_version"`
-	Document      draftDocumentRequest `json:"document"`
-	UpdatedAt     string               `json:"updated_at"`
+	WorksetID     string            `json:"workset_id"`
+	OperationType string            `json:"operation_type"`
+	Version       int               `json:"version"`
+	Task          taskDraftEnvelope `json:"task"`
+	UpdatedAt     string            `json:"updated_at"`
 }
 
 // revisionListResponse is the revision history payload. NextBeforeIndex is the
@@ -72,25 +79,13 @@ func toDraftResponse(d *worksetusecase.Draft) draftResponse {
 		WorksetID:     d.WorksetID,
 		OperationType: d.OperationType,
 		Version:       d.Version,
-		SchemaVersion: d.SchemaVersion,
-		Document:      toDraftDocument(d.Document),
-		UpdatedAt:     d.UpdatedAt.UTC().Format(timeFormatJSON),
+		Task: taskDraftEnvelope{
+			Kind:          d.OperationType,
+			SchemaVersion: d.SchemaVersion,
+			Payload:       d.Document,
+		},
+		UpdatedAt: d.UpdatedAt.UTC().Format(timeFormatJSON),
 	}
-}
-
-// toDraftDocument decodes the task's opaque stored draft document into the
-// HTTP shape. The wire shape is the conversion document until the payload
-// envelope moves.
-func toDraftDocument(raw json.RawMessage) draftDocumentRequest {
-	var out draftDocumentRequest
-	_ = json.Unmarshal(raw, &out)
-	if out.ClassifierTags == nil {
-		out.ClassifierTags = []string{}
-	}
-	if out.Members == nil {
-		out.Members = []draftMemberRequest{}
-	}
-	return out
 }
 
 // toDraftPayload encodes the HTTP draft body into the task's opaque payload.
@@ -233,12 +228,16 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		PlanID         string                            `json:"plan_id"`
 		RevisionIndex  int                               `json:"revision_index"`
 		CreatedAt      string                            `json:"created_at"`
+		RootPath       string                            `json:"root_path"`
+		SnapshotToken  string                            `json:"snapshot_token"`
+		Status         string                            `json:"status"`
+		Summary        planSummaryResponse               `json:"summary"`
+		Task           taskEnvelopeResponse              `json:"task"`
 		Counts         revisionCountsResponse            `json:"counts"`
 		Members        []revisionMemberResponse          `json:"members"`
 		Roots          []rootValidationResponse          `json:"roots"`
 		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
 		Confirmation   worksetusecase.ConfirmationView   `json:"confirmation"`
-		Workflow       workflowPlanResponse              `json:"workflow"`
 		Execution      *worksetusecase.ExecutionRef      `json:"execution"`
 	}{
 		PlanID:        rv.PlanID,
@@ -251,11 +250,19 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 			Blocked:      rv.Counts.Blocked,
 			Unchanged:    rv.Counts.Unchanged,
 		},
+		RootPath:      rv.Plan.RootPath,
+		SnapshotToken: rv.Plan.SnapshotToken,
+		Status:        rv.Plan.Status,
+		Summary: planSummaryResponse{
+			OperationCount: rv.Plan.Summary.OperationCount,
+			ErrorCount:     rv.Plan.Summary.ErrorCount,
+			SummaryReason:  rv.Plan.Summary.SummaryReason,
+		},
+		Task:           toTaskEnvelope(rv.Plan),
 		Members:        members,
 		Roots:          toRoots(rv.Roots),
 		ComponentRoots: componentRoots,
 		Confirmation:   *confirmation,
-		Workflow:       toWorkflowPlanResponse(rv.Plan),
 		Execution:      rv.Execution,
 	})
 }

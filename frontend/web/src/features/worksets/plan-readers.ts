@@ -1,8 +1,9 @@
 import type {
   ComponentOutcome,
   DesiredProfile,
+  RevisionDetailResponse,
   VariantDecision,
-  WorkflowOperation,
+  PlanOperation,
 } from '@/lib/api/types'
 
 /**
@@ -13,6 +14,14 @@ import type {
  * contract promises arrays, and opening such a revision must not crash the
  * workbench. Normalizing once on read keeps every downstream render simple.
  */
+/**
+ * Normalized components of one revision's plan snapshot (the conversion task
+ * payload inside the task envelope).
+ */
+export function revisionComponents(revision: RevisionDetailResponse): ComponentOutcome[] {
+  return (revision.task?.payload?.components ?? []).map(readComponent)
+}
+
 export function readComponent(component: ComponentOutcome): ComponentOutcome {
   return {
     ...component,
@@ -28,7 +37,7 @@ export function readVariant(variant: VariantDecision): VariantDecision {
   return { ...variant, decisions: variant.decisions ?? [] }
 }
 
-export function operationsOf(component: ComponentOutcome): WorkflowOperation[] {
+export function operationsOf(component: ComponentOutcome): PlanOperation[] {
   return component.operations ?? []
 }
 
