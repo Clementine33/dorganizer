@@ -60,27 +60,6 @@ jobs:
         env:
           ONSEI_E2E: '1'
 
-  flutter-quality:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
-        with:
-          version: 2026.8.13
-          cache: true
-          cache_key_prefix: mise-flutter
-      # Legacy Flutter app is scheduled for removal — keep flutter installed by
-      # its own action (stable channel); only `task` comes from mise.toml here.
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('frontend/flutter_app/pubspec.lock') }}
-      - name: Run Flutter tests
-        run: task test:flutter
-      - name: Run Flutter analyze
-        run: task analyze:flutter
-
   # Windows dev-environment gate: catches regressions in Windows-only paths
   # (dev-web.mjs isWin/.cmd handling, .exe build) that Linux CI cannot see.
   # Main jobs run on Linux for speed/cost; this stays lean.

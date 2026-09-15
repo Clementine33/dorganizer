@@ -16,7 +16,7 @@ func TestVersion_DefaultNonEmptyAndEmittedInHandshake(t *testing.T) {
 		t.Fatal("expected default version to be non-empty")
 	}
 
-	handshake := bootstrap.BuildHandshakeLine(43123, "token-1", version, 54321)
+	handshake := bootstrap.BuildHandshakeLine("token-1", version, 54321)
 	if !strings.Contains(handshake, "version="+version) {
 		t.Fatalf("expected handshake to include version %q, got %q", version, handshake)
 	}
@@ -112,35 +112,25 @@ func TestParseCORSOrigins(t *testing.T) {
 
 var errTestCleanup = errors.New("test cleanup error")
 
-// TestDrainServersStartsBothAndUnblocksOnDeadline verifies the shutdown
-// coordinator starts HTTP and gRPC drains concurrently (gRPC must not wait for
-// the HTTP drain to finish first) and force-stops both once the graceful
-// deadline arrives, so the drain returns.
-func TestDrainServersStartsBothAndUnblocksOnDeadline(t *testing.T) {
+// TestDrainHTTPServerUnblocksOnDeadline verifies the shutdown coordinator
+// starts the HTTP drain and force-closes it once the graceful deadline
+// arrives, so the drain always returns.
+func TestDrainHTTPServerUnblocksOnDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	httpEntered := make(chan struct{}, 1)
-	grpcEntered := make(chan struct{}, 1)
 	httpClosed := make(chan struct{}, 1)
-	grpcStopped := make(chan struct{}, 1)
 
-	drainServers(ctx,
+	drainHTTPServer(ctx,
 		func(c context.Context) error {
 			httpEntered <- struct{}{}
-			<-c.Done() // HTTP drain blocks past the caller's request
+			<-c.Done() // the drain blocks past the caller's request
 			return c.Err()
 		},
 		func() error {
 			httpClosed <- struct{}{}
 			return nil
-		},
-		func() {
-			grpcEntered <- struct{}{}
-			<-grpcStopped // gRPC graceful stop blocks until force-stopped
-		},
-		func() {
-			close(grpcStopped)
 		},
 	)
 
@@ -148,11 +138,6 @@ func TestDrainServersStartsBothAndUnblocksOnDeadline(t *testing.T) {
 	case <-httpEntered:
 	default:
 		t.Error("http shutdown never entered")
-	}
-	select {
-	case <-grpcEntered:
-	default:
-		t.Error("gRPC graceful stop never entered concurrently")
 	}
 	select {
 	case <-httpClosed:

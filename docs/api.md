@@ -1,11 +1,9 @@
 # Onsei Backend HTTP / SSE API
 
 
-The backend runs a gRPC listener (Flutter client) and a net/http listener
-(Vue web client) in one process over loopback. Both listeners bind
-`127.0.0.1` only. They share the same SQLite repository and the same scan and
-plan usecase instances, so browser and Flutter clients never contend for a
-second writer.
+The backend runs a single net/http listener (the Vue web client) over
+loopback. It binds `127.0.0.1` only and owns the one SQLite writer, the scan
+service and the workset service.
 
 HTTP endpoints live under `/api/v1`. Machine-checked contract coverage lives
 in the Go tests (`backend/go/tests/e2e/*_test.go` and the
@@ -17,17 +15,15 @@ reference.
 On startup the backend prints exactly one line to stdout:
 
 ```
-ONSEI_BACKEND_READY port=%d token=%s version=%s http_port=%d
+ONSEI_BACKEND_READY token=%s version=%s http_port=%d
 ```
 
-- `port` — gRPC port
 - `http_port` — HTTP port
 - `token` — the configured `ONSEI_TOKEN` (empty when auth is disabled)
 - `version` — build version stamp (`dev` by default)
 
-Hosts (Flutter, the Vue dev script) scan stdout for the `ONSEI_BACKEND_READY`
-line and read both ports from it. Existing Flutter key/value parsing is
-preserved — `http_port` is purely additive.
+The Vue dev script and the Playwright launchers scan stdout for the
+`ONSEI_BACKEND_READY` line and read the HTTP port from it.
 
 ## Auth
 
@@ -389,5 +385,4 @@ the plan usecase.
 ## Shutdown
 
 On `SIGINT`/`SIGTERM` (or stdin EOF), the backend drains the HTTP server
-(in-flight SSE scans included) and gRPC server concurrently,
-under a single 5-second forced-exit guard shared by both listeners.
+(in-flight SSE scans included) under a single 5-second forced-exit guard.

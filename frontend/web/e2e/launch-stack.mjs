@@ -102,8 +102,8 @@ function launchVite(httpPort) {
 }
 
 function handleLine(line) {
-  // ONSEI_BACKEND_READY port=51234 token=tok-1 version=v1 http_port=54321
-  const match = /^ONSEI_BACKEND_READY port=\d+ token=\S* version=\S+ http_port=(\d+)$/.exec(line.trim())
+  // ONSEI_BACKEND_READY token=tok-1 version=v1 http_port=54321
+  const match = /^ONSEI_BACKEND_READY token=\S* version=\S+ http_port=(\d+)$/.exec(line.trim())
   if (!match) return
   const httpPort = Number(match[1])
   writeFileSync(stateFile, JSON.stringify({ fixtureRoot, httpPort }, null, 2))

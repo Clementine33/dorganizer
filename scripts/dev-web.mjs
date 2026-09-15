@@ -7,7 +7,7 @@
  *      with ONSEI_DATA_DIR=<repo>/.dev_data so dev data never touches the
  *      real library location.
  *   2. Read the backend's stdout handshake:
- *        ONSEI_BACKEND_READY port=<grpc> token=<token> version=<v> http_port=<http>
+ *        ONSEI_BACKEND_READY token=<token> version=<v> http_port=<http>
  *      and launch Vite with VITE_API_BASE=http://127.0.0.1:<http>/api/v1.
  *   3. On exit (SIGINT/SIGTERM, Vite exit, backend exit) tear down the
  *      backend first, cross-platform, using plain Node child processes —
@@ -84,9 +84,9 @@ function launchVite(apiBase) {
 }
 
 function handleLine(line) {
-  // ONSEI_BACKEND_READY port=51234 token=tok-1 version=v1 http_port=54321
+  // ONSEI_BACKEND_READY token=tok-1 version=v1 http_port=54321
   // (token may be empty in dev runs)
-  const match = /^ONSEI_BACKEND_READY port=\d+ token=\S* version=\S+ http_port=(\d+)$/.exec(
+  const match = /^ONSEI_BACKEND_READY token=\S* version=\S+ http_port=(\d+)$/.exec(
     line.trim(),
   )
   if (!match) return

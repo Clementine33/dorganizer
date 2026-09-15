@@ -13,12 +13,9 @@
 # Test binary, built with `go test -c`
 *.test
 test/
-!frontend/flutter_app/test/
-!frontend/flutter_app/test/**
 !frontend/web/src/test/
 
 # Test config
-frontend/flutter_app/.dev_data
 
 # IDE
 .vscode/

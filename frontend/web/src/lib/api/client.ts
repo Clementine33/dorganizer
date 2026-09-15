@@ -181,12 +181,19 @@ export class ApiClient implements ApiClientContract {
       `${this.operationPath(worksetId, operation)}/draft`,
       { signal },
     )
+    const payload = wire.task.payload
     return {
       workset_id: wire.workset_id,
       operation_type: wire.operation_type,
       version: wire.version,
       schema_version: wire.task.schema_version,
-      document: wire.task.payload,
+      // The stored document is sparse: absent keys mean "no records", and the
+      // editors rely on the arrays being present.
+      document: {
+        ...payload,
+        classifier_tags: payload.classifier_tags ?? [],
+        members: payload.members ?? [],
+      },
       updated_at: wire.updated_at,
     }
   }

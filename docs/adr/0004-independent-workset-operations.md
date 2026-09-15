@@ -172,5 +172,5 @@ modal behavior consistent across layouts.
   itself still executes nothing. Member-set editing and concurrent
   cross-operation filesystem scheduling remain outside the delivered scope;
   the operation-type seam that admits further tasks is recorded in ADR 0005.
-- Flutter/gRPC is the legacy client line and receives no new Workbench UI.
-  The Vue HTTP client is the active product surface.
+- The Flutter/gRPC client line and the protobuf schema were removed; the Vue
+  HTTP client is the only product surface.

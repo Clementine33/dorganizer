@@ -59,5 +59,6 @@ sit behind a seam instead of inside the lifecycle.
   operations and drafts survive).
 - Adding a task means registering an adapter at the composition root and
   shipping its tables; it does not change the lifecycle paths.
-- `entries`' legacy columns and the gRPC/Flutter client line are separate,
-  later retirements (ADR 0004 §6).
+- The gRPC/Flutter client line and the protobuf schema were removed in the
+  same refactor; `entries`' legacy columns remain a separate, later retirement
+  (ADR 0004 §6).

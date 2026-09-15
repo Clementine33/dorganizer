@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,18 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"google.golang.org/grpc"
-
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	appconfig "github.com/onsei/organizer/backend/internal/config"
-	pb "github.com/onsei/organizer/backend/internal/gen/onsei/v1"
-	grpcimpl "github.com/onsei/organizer/backend/internal/grpc"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
@@ -147,36 +141,23 @@ func main() {
 	runServer(ctx, repo, dataDir, configDir, ffmpegPath, token, version)
 }
 
-// runServer starts the gRPC + HTTP listeners and blocks until the process is
-// killed. Startup failures are fatal (log.Fatalf) so CI/dev surfaces them.
+// runServer starts the HTTP listener and blocks until the process is killed.
+// Startup failures are fatal (log.Fatalf) so CI/dev surfaces them.
 func runServer(
 	ctx context.Context,
 	repo *sqlite.Repository,
 	dataDir, configDir, ffmpegPath, token, version string,
 ) {
-	// Start TCP listener on a random available port
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatalf("listen: %v", err)
-	}
-	port := lis.Addr().(*net.TCPAddr).Port
-
-	// Register gRPC server
-	grpcServer := grpc.NewServer()
-	srv := grpcimpl.NewOnseiServer(repo, configDir, ffmpegPath)
-	pb.RegisterOnseiServiceServer(grpcServer, srv)
 	startPprofServer("127.0.0.1:6060", http.ListenAndServe)
 
-	// HTTP listener beside gRPC: same repository and usecase instances, so
-	// browser and Flutter clients share one SQLite writer and one planner.
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("http listen: %v", err)
 	}
 	httpPort := httpListener.Addr().(*net.TCPAddr).Port
 
-	// Shared scan/workset usecases power both the gRPC server and the HTTP
-	// API. The workset service owns the async planning dispatcher.
+	// The HTTP API is the only client surface. The workset service owns the
+	// async planning dispatcher.
 	scanSvc := scanusecase.NewService(repo)
 	generationConcurrency := appconfig.DefaultAppConfig().Workset.GenerationConcurrency
 	if cfg, err := os.ReadFile(filepath.Join(configDir, "config.json")); err == nil {
@@ -217,7 +198,7 @@ func runServer(
 	var gracefulStopOnce sync.Once
 	gracefulStop := func() {
 		gracefulStopOnce.Do(func() {
-			log.Printf("shutdown requested: draining HTTP and gRPC servers")
+			log.Printf("shutdown requested: draining the HTTP server")
 
 			forcedExit := time.AfterFunc(5*time.Second, func() {
 				log.Printf("forced shutdown timeout reached")
@@ -225,13 +206,11 @@ func runServer(
 			})
 			defer forcedExit.Stop()
 
-			// Drain HTTP and gRPC concurrently so gRPC gets the full graceful
-			// window instead of whatever remains after HTTP's own timeout. At
-			// the graceful deadline both drains are force-stopped; the outer
-			// forced-exit guard remains as the final process-level fallback.
+			// Drained with a deadline; the outer forced-exit guard remains as
+			// the final process-level fallback.
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer shutdownCancel()
-			drainServers(shutdownCtx, httpSrv.Shutdown, httpSrv.Close, grpcServer.GracefulStop, grpcServer.Stop)
+			drainHTTPServer(shutdownCtx, httpSrv.Shutdown, httpSrv.Close)
 		})
 	}
 
@@ -240,30 +219,15 @@ func runServer(
 		gracefulStop()
 	}()
 
-	// Print ready handshake BEFORE blocking — Flutter reads this line
+	// Print the ready handshake BEFORE blocking — the dev and e2e launchers
+	// read this line to learn the HTTP port
 	//nolint:forbidigo // stdout handshake is a wire protocol for the host
-	fmt.Println(bootstrap.BuildHandshakeLine(port, token, version, httpPort))
+	fmt.Println(bootstrap.BuildHandshakeLine(token, version, httpPort))
 
 	// Block until killed
-	log.Printf("onsei-backend listening on grpc 127.0.0.1:%d, http 127.0.0.1:%d (data=%s)", port, httpPort, dataDir)
-	if err := grpcServer.Serve(lis); err != nil {
-		if runtime.GOOS == "windows" {
-			const wsacancelled = 10004
-			opErr := &net.OpError{}
-			if errors.As(err, &opErr) {
-				sysErr := &os.SyscallError{}
-				if errors.As(opErr.Err, &sysErr) {
-					if _, ok := errors.AsType[syscall.Errno](sysErr.Err); ok {
-						return
-					}
-				}
-			}
-		}
-		if ctx.Err() != nil {
-			return
-		}
-		log.Fatalf("serve: %v", err)
-	}
+	log.Printf("onsei-backend listening on http 127.0.0.1:%d (data=%s)", httpPort, dataDir)
+	<-ctx.Done()
+	gracefulStop()
 }
 
 // interruptStaleSessions marks leftover queued/running sessions of a previous
@@ -284,32 +248,22 @@ func interruptStaleSessions(repo *sqlite.Repository) {
 	}
 }
 
-// drainServers shuts down both servers concurrently so neither consumes the
-// other's graceful window. httpShutdown runs with ctx; at the deadline (ctx
-// done) httpClose and grpcStop force-stop each server so the drain returns.
-func drainServers(
+// drainHTTPServer shuts the HTTP server down gracefully; at the deadline (ctx
+// done) it force-closes so the drain always returns.
+func drainHTTPServer(
 	ctx context.Context,
 	httpShutdown func(context.Context) error,
 	httpClose func() error,
-	grpcGraceful func(),
-	grpcStop func(),
 ) {
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if err := httpShutdown(ctx); err != nil {
 			log.Printf("http shutdown: %v", err)
 		}
-	}()
-	go func() {
-		defer wg.Done()
-		grpcGraceful()
-	}()
+	})
 	go func() {
 		<-ctx.Done()
 		_ = httpClose()
-		grpcStop()
 	}()
 	wg.Wait()
 }

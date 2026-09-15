@@ -2,10 +2,6 @@ version: '3'
 
 vars:
   GO: go
-  PROTOC: protoc
-  PROTO_ROOT: api/proto
-  PROTO_FILES: onsei/v1/service.proto
-  PROTO_GEN_DIR: internal/gen
 
 tasks:
   default:
@@ -65,20 +61,3 @@ tasks:
     desc: Auto-fix mechanical golangci-lint issues
     cmds:
       - golangci-lint run --fix ./...
-
-  check:tools:
-    desc: Check protoc and Go plugins are available
-    cmds:
-      - '{{.PROTOC}} --version'
-      - '{{.GO}} list -f ''{{if .Target}}{{.Target}}{{end}}'' google.golang.org/protobuf/cmd/protoc-gen-go'
-      - '{{.GO}} list -f ''{{if .Target}}{{.Target}}{{end}}'' google.golang.org/grpc/cmd/protoc-gen-go-grpc'
-
-  proto:
-    desc: Regenerate protobuf Go stubs
-    deps: [check:tools]
-    cmds:
-      - >
-        {{.PROTOC}} -I {{.PROTO_ROOT}}
-        --go_out={{.PROTO_GEN_DIR}} --go_opt=paths=source_relative
-        --go-grpc_out={{.PROTO_GEN_DIR}} --go-grpc_opt=paths=source_relative
-        {{.PROTO_FILES}}

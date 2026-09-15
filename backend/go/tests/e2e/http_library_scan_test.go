@@ -37,7 +37,7 @@ func TestHTTPLibraryScanLoop(t *testing.T) {
 
 	const token = "e2e-token"
 	proc := startBackendBinary(t, binPath, dataDir, token)
-	t.Logf("backend ready: grpc_port=%d http_port=%d", proc.grpcPort, proc.httpPort)
+	t.Logf("backend ready: http_port=%d", proc.httpPort)
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", proc.httpPort)
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -151,8 +151,8 @@ func buildBackendBinary(t *testing.T) string {
 
 // backendProc holds the running backend subprocess and its parsed ports.
 type backendProc struct {
-	cmd      *exec.Cmd
-	grpcPort int
+	cmd *exec.Cmd
+
 	httpPort int
 	token    string
 }
@@ -186,7 +186,6 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 
 	type handshakeResult struct {
 		line     string
-		grpcPort int
 		httpPort int
 		err      error
 	}
@@ -198,15 +197,15 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 			if !strings.HasPrefix(line, "ONSEI_BACKEND_READY") {
 				continue
 			}
-			var port, httpPort int
+			var httpPort int
 			var tok, ver string
-			n, err := fmt.Sscanf(line, "ONSEI_BACKEND_READY port=%d token=%s version=%s http_port=%d",
-				&port, &tok, &ver, &httpPort)
-			if err != nil || n != 4 {
+			n, err := fmt.Sscanf(line, "ONSEI_BACKEND_READY token=%s version=%s http_port=%d",
+				&tok, &ver, &httpPort)
+			if err != nil || n != 3 {
 				handshake <- handshakeResult{line: line, err: fmt.Errorf("parse handshake fields: n=%d err=%w", n, err)}
 				return
 			}
-			handshake <- handshakeResult{line: line, grpcPort: port, httpPort: httpPort}
+			handshake <- handshakeResult{line: line, httpPort: httpPort}
 			// Keep draining stdout until EOF so the backend never blocks on a
 			// full pipe; the handshake result is already delivered.
 			for scanner.Scan() {
@@ -227,13 +226,13 @@ func startBackendBinary(t *testing.T, binPath, dataDir, token string) backendPro
 		_ = cmd.Wait()
 		t.Fatalf("backend handshake: %v", hs.err)
 	}
-	if hs.grpcPort == 0 || hs.httpPort == 0 {
+	if hs.httpPort == 0 {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		t.Fatalf("backend handshake %q: missing port", hs.line)
 	}
 
-	proc := backendProc{cmd: cmd, grpcPort: hs.grpcPort, httpPort: hs.httpPort, token: token}
+	proc := backendProc{cmd: cmd, httpPort: hs.httpPort, token: token}
 	t.Cleanup(func() {
 		_ = stdinW.Close()
 		_ = cmd.Process.Signal(os.Interrupt)
