@@ -12,9 +12,11 @@ import (
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
-// recoveryDirName is the in-root recovery folder of the soft-delete
-// convention, preserved from the legacy runner.
-const recoveryDirName = "Delete"
+// RecoveryDirName is the in-root recovery folder of the soft-delete
+// convention: removed media is preserved at <root>/Delete/<relative path>.
+// It is the single definition of the folder name; the conversion task reads
+// it to tell real media in their scanned place from temp leftovers.
+const RecoveryDirName = "Delete"
 
 // maxRecoveryNameAttempts bounds unique-name generation below Delete/.
 const maxRecoveryNameAttempts = 100
@@ -49,7 +51,7 @@ func softRemove(tk *componentToolkit, absRoot, source string) (string, error) {
 	if pathnorm.IsWindowsUNCPath(absRoot) {
 		relDir = pathnorm.TruncatePathComponentsToBytes(relDir, 214)
 	}
-	deleteDir := filepath.Join(absRoot, recoveryDirName, relDir)
+	deleteDir := filepath.Join(absRoot, RecoveryDirName, relDir)
 	if mkdirErr := os.MkdirAll(deleteDir, 0o755); mkdirErr != nil {
 		return "", fmt.Errorf("create recovery directory: %w", mkdirErr)
 	}

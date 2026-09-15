@@ -294,11 +294,15 @@ func (t *Task) RunUnit(
 			worksetusecase.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
 		)
 	}
+	mode, modeErr := deleteModeOf(in.DeleteMode)
+	if modeErr != nil {
+		return result, modeErr
+	}
 	res, runErr := execute.RunComponent(ctx, execute.ComponentRunRequest{
 		Root:       in.Unit.RootPath,
 		Component:  outcome,
 		Specs:      profile,
-		DeleteMode: execute.DeleteMode(in.DeleteMode),
+		DeleteMode: mode,
 		Tools:      t.tools(),
 	})
 	result.Committed = nonNil(res.Committed)
@@ -429,6 +433,25 @@ func componentErrorOf(err error) (stage, code, message string) {
 	return cerr.Stage, cerr.Code, msg
 }
 
+// deleteModeOf maps the frozen session option onto the execute service's
+// mode. The two constant sets are separate on purpose — the generic side owns
+// the option string on the wire and in storage, the execute service owns the
+// file behavior — and this switch is their single bridge.
+func deleteModeOf(option string) (execute.DeleteMode, error) {
+	switch option {
+	case worksetusecase.ExecutionDeleteModeSoft:
+		return execute.DeleteModeSoft, nil
+	case worksetusecase.ExecutionDeleteModeHard:
+		return execute.DeleteModeHard, nil
+	}
+	return "", worksetusecase.NewError(
+		worksetusecase.ErrKindInvalidArgument,
+		"INVALID_DELETE_MODE",
+		"delete_mode must be soft or hard",
+		nil,
+	)
+}
+
 // underRecoveryDir reports whether a persisted path is inside the member root's
 // soft-delete recovery folder: the only recovery entries that are real media in
 // their scanned place. A temp leftover is not an inventory fact.
@@ -438,12 +461,8 @@ func underRecoveryDir(componentRoot, p string) bool {
 		return false
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	return len(parts) > 1 && parts[0] == softDeleteDirName
+	return len(parts) > 1 && parts[0] == execute.RecoveryDirName
 }
-
-// softDeleteDirName mirrors the soft-delete convention owned by the execute
-// service: removed media is preserved at <member root>/Delete/<relative path>.
-const softDeleteDirName = "Delete"
 
 // nonNil turns a nil path slice into an empty one so the persisted report never
 // marshals a planned-empty list as JSON null.
