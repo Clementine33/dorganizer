@@ -1,5 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { readStackState } from './helpers/stack-state.ts'
+
+/**
+ * Picks one option of a UnitSelect. Those fields are reka-ui comboboxes
+ * (custom widgets with a portalled listbox), not native <select> elements, so
+ * the trigger is opened and the option clicked.
+ */
+async function pickUnitOption(page: Page, testId: string, option: string) {
+  await page.getByTestId(testId).click()
+  await page.getByRole('option', { name: option, exact: true }).click()
+}
 
 /**
  * End-to-end smoke of the workset operation workflow against a real stack (Go
@@ -112,7 +122,7 @@ test.describe('workset operation smoke', () => {
     // seeded value.
     await page.getByTestId('common-classifier_tags').fill('SEなし')
     await page.getByTestId('common-classifier_tags').blur()
-    await page.getByTestId('common-matched-encoded').selectOption('mp3')
+    await pickUnitOption(page, 'common-matched-encoded', 'MP3')
     await page.getByTestId('apply-common').click()
     await expect(page.getByTestId('conversion-settings')).toBeVisible()
 
@@ -197,7 +207,7 @@ test.describe('workset operation smoke', () => {
     await page.getByTestId('member-review-edit').click()
     await expect(page.getByTestId('member-edit')).toBeVisible()
     await page.getByTestId('unit-matched-override').click()
-    await page.getByTestId('override-matched-lossless').selectOption('flac')
+    await pickUnitOption(page, 'override-matched-lossless', 'FLAC')
     await page.getByTestId('apply-member').click()
     // The frozen review keeps reporting the revision it was planned with, so
     // the override shows up on the member's row first: 默认 becomes 已修改.
@@ -219,7 +229,7 @@ test.describe('workset operation smoke', () => {
     // unfolded first (it was folded back in the drawer above).
     await page.getByTestId('nav-group-conversion').click()
     await page.getByTestId('nav-conversion-settings').click()
-    await page.getByTestId('common-mode').selectOption('strict')
+    await pickUnitOption(page, 'common-mode', '严格（strict）')
     await page.getByTestId('apply-common').click()
     await page.getByRole('link', { name: '← 转换列表' }).click()
     await page.getByTestId('start-generation').click()
