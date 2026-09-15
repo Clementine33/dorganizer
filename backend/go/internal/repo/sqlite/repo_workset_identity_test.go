@@ -165,15 +165,15 @@ func TestLegacyWorksetDatabaseOpensAndBackfillsMemberIDs(t *testing.T) {
 			UpdatedAt:   now,
 		},
 		nil,
-		Operation{WorksetID: "ws-new", OperationType: "conversion", Version: 1, CreatedAt: now, UpdatedAt: now},
-		OperationDraft{
+		[]Operation{{WorksetID: "ws-new", OperationType: "conversion", Version: 1, CreatedAt: now, UpdatedAt: now}},
+		[]OperationDraft{{
 			WorksetID:     "ws-new",
 			OperationType: "conversion",
 			SchemaVersion: 1,
 			DraftJSON:     `{}`,
 			DraftHash:     "h",
 			UpdatedAt:     now,
-		},
+		}},
 	); createErr != nil {
 		t.Fatalf("create on legacy database: %v", createErr)
 	}

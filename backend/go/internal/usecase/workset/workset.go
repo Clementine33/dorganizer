@@ -121,18 +121,31 @@ func (s *serviceImpl) persistWorkset(
 		m.MemberIndex = i
 		rows = append(rows, m)
 	}
-	// The conversion operation and its seeded draft are part of the creation
-	// transaction: a workset is never visible without the operation the UI
-	// navigates to (ADR 0004 §2, D01).
-	op := sqlite.Operation{
-		WorksetID:     ws.ID,
-		OperationType: OperationTypeConversion,
-		Version:       1,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+	// Every registered task materializes its operation and seeded draft in the
+	// creation transaction: a workset is never visible without the operations
+	// the UI navigates to (ADR 0004 §2, D01). Operations follow registration
+	// order.
+	ops := make([]sqlite.Operation, 0, len(s.tasks))
+	drafts := make([]sqlite.OperationDraft, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		ops = append(ops, sqlite.Operation{
+			WorksetID:     ws.ID,
+			OperationType: task.Kind(),
+			Version:       1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		raw, hash, schemaVersion := task.SeedDraft()
+		drafts = append(drafts, sqlite.OperationDraft{
+			WorksetID:     ws.ID,
+			OperationType: task.Kind(),
+			SchemaVersion: schemaVersion,
+			DraftJSON:     string(raw),
+			DraftHash:     hash,
+			UpdatedAt:     now,
+		})
 	}
-	draft := s.seedDraft(ws.ID, OperationTypeConversion, now)
-	if err := s.repo.CreateWorkset(ws, rows, op, draft); err != nil {
+	if err := s.repo.CreateWorkset(ws, rows, ops, drafts); err != nil {
 		if errors.Is(err, sqlite.ErrWorksetIdemConflict) {
 			if result, replayed, _ := s.replayCreate(ctx, idemKey); replayed {
 				return result, nil

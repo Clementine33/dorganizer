@@ -79,7 +79,7 @@ func TestWorksetCRUD(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "crud")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 
@@ -130,7 +130,7 @@ func TestCreateWorksetIdempotency(t *testing.T) {
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "idem")
 	w.CreationIdemKey = "key-1"
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	replayed, err := repo.GetWorksetByCreationIdemKey("key-1")
@@ -140,7 +140,15 @@ func TestCreateWorksetIdempotency(t *testing.T) {
 
 	w2, members2, op2, draft2 := newOperationFixture(t, "lib-1", "idem2")
 	w2.CreationIdemKey = "key-1"
-	if err := repo.CreateWorkset(w2, members2, op2, draft2); !errors.Is(err, ErrWorksetIdemConflict) {
+	if err := repo.CreateWorkset(
+		w2,
+		members2,
+		[]Operation{op2},
+		[]OperationDraft{draft2},
+	); !errors.Is(
+		err,
+		ErrWorksetIdemConflict,
+	) {
 		t.Fatalf("duplicate creation key must conflict, got %v", err)
 	}
 
@@ -157,7 +165,7 @@ func TestClearExpiredWorksetIdemKey(t *testing.T) {
 	w.CreationIdemKey = "key-old"
 	w.CreatedAt = time.Now().Add(-60 * 24 * time.Hour)
 	w.UpdatedAt = w.CreatedAt
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	if err := repo.ClearExpiredWorksetIdemKey(w.ID, time.Now().Add(-30*24*time.Hour)); err != nil {
@@ -177,7 +185,7 @@ func TestWorksetVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "guard")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	if err := repo.RenameWorkset(w.ID, "新名字", 1, time.Now()); err != nil {
@@ -205,7 +213,7 @@ func TestOperationDraftSaveVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "draft")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	if err := repo.SaveOperationDraft(w.ID, "conversion", 1, `{"a":1}`, "hash-2", 1, time.Now()); err != nil {
@@ -255,7 +263,7 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "rev")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 
@@ -393,7 +401,7 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "gen")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	now := time.Now()
@@ -471,7 +479,7 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "fail")
-	if err := repo.CreateWorkset(w, members, op, draft); err != nil {
+	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
 		t.Fatalf("CreateWorkset: %v", err)
 	}
 	now := time.Now()

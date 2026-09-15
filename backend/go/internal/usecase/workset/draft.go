@@ -2,53 +2,12 @@ package workset
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
-	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
-
-// seedDraft builds the initial sparse draft of a new conversion operation:
-// no member records at all (everyone participates and inherits the common
-// settings), mode available_sources stored explicitly, tag literals copied
-// from config.json's prune.literal_tags, and wav + mp3@320 outputs so a new
-// workset is immediately usable.
-func (s *serviceImpl) seedDraft(worksetID, operationType string, now time.Time) sqlite.OperationDraft {
-	doc := &DraftDoc{
-		SchemaVersion:  DraftSchemaVersion,
-		Mode:           reconcile.ModeAvailableSources,
-		ClassifierTags: appconfig.LoadPruneLiteralTags(s.configDir),
-		Matched:        defaultProfile(),
-		Unmatched:      defaultProfile(),
-	}
-	if doc.ClassifierTags == nil {
-		doc.ClassifierTags = []string{}
-	}
-	raw, hash, err := MarshalDraft(doc)
-	if err != nil {
-		raw, hash = "{}", ""
-	}
-	return sqlite.OperationDraft{
-		WorksetID:     worksetID,
-		OperationType: operationType,
-		SchemaVersion: DraftSchemaVersion,
-		DraftJSON:     raw,
-		DraftHash:     hash,
-		UpdatedAt:     now,
-	}
-}
-
-func defaultProfile() reconcile.DesiredProfile {
-	return reconcile.DesiredProfile{
-		Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecWav},
-		Encoded: &reconcile.AudioOutputSpec{
-			Codec:   reconcile.CodecMp3,
-			Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 320},
-		},
-	}
-}
 
 // GetDraft returns the operation's sparse draft document with the operation
 // version as its concurrency token.
@@ -97,17 +56,25 @@ func (s *serviceImpl) SaveDraft(
 	if req.Document == nil {
 		return nil, NewError(ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is required", nil)
 	}
-	if _, err := s.loadOperation(worksetID, operationType); err != nil {
+	task, err := s.requireTask(operationType)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.rejectOrphaned(worksetID); err != nil {
+	if _, err = s.loadOperation(worksetID, operationType); err != nil {
+		return nil, err
+	}
+	if err = s.rejectOrphaned(worksetID); err != nil {
 		return nil, err
 	}
 	members, err := s.repo.ListWorksetMembers(worksetID)
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load members", err)
 	}
-	if validateErr := validateDraftDoc(req.Document, members); validateErr != nil {
+	raw, err := json.Marshal(req.Document)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to encode draft", err)
+	}
+	if validateErr := task.ValidateDraft(raw, members); validateErr != nil {
 		return nil, validateErr
 	}
 	// Reject while a generation is queued/running: the session freezes the
@@ -139,16 +106,15 @@ func (s *serviceImpl) SaveDraft(
 			nil,
 		)
 	}
-	doc := normalizeDraft(req.Document, members)
-	raw, hash, err := MarshalDraft(doc)
-	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to encode draft", err)
+	canonical, hash, schemaVersion, normErr := task.NormalizeDraft(raw, members)
+	if normErr != nil {
+		return nil, normErr
 	}
 	if err := s.repo.SaveOperationDraft(
 		worksetID,
 		operationType,
-		DraftSchemaVersion,
-		raw,
+		schemaVersion,
+		string(canonical),
 		hash,
 		req.IfMatchVersion,
 		time.Now(),

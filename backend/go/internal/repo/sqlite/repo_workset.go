@@ -118,15 +118,15 @@ func (r *Repository) ClearExpiredWorksetIdemKey(id string, cutoff time.Time) err
 	return err
 }
 
-// CreateWorkset inserts a workset with its ordered members, its seeded
-// operation and that operation's draft in one transaction. A workset without
-// its operation is never visible. It fails with ErrWorksetIdemConflict when
+// CreateWorkset inserts a workset with its ordered members, one operation plus
+// seeded draft per registered task, all in one transaction. A workset without
+// its operations is never visible. It fails with ErrWorksetIdemConflict when
 // the creation key is already owned by another workset.
 func (r *Repository) CreateWorkset(
 	w *Workset,
 	members []WorksetMember,
-	operation Operation,
-	draft OperationDraft,
+	operations []Operation,
+	drafts []OperationDraft,
 ) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -137,11 +137,15 @@ func (r *Repository) CreateWorkset(
 	if err := insertWorkset(tx, w, members); err != nil {
 		return err
 	}
-	if err := insertOperation(tx, operation); err != nil {
-		return err
+	for _, operation := range operations {
+		if err := insertOperation(tx, operation); err != nil {
+			return err
+		}
 	}
-	if err := upsertOperationDraft(tx, draft); err != nil {
-		return err
+	for _, draft := range drafts {
+		if err := upsertOperationDraft(tx, draft); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

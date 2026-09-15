@@ -6,11 +6,18 @@ type serviceImpl struct {
 	repo       *sqlite.Repository
 	configDir  string
 	dispatcher *dispatcher
+	tasks      []Task
 }
 
-// NewService creates the workset usecase service.
+// NewService creates the workset usecase service. The registered tasks are the
+// wiring point for task kinds: creation materializes one operation and seed
+// draft per entry, in this order.
 func NewService(repo *sqlite.Repository, configDir string, concurrency int) Service {
-	s := &serviceImpl{repo: repo, configDir: configDir}
+	s := &serviceImpl{
+		repo:      repo,
+		configDir: configDir,
+		tasks:     []Task{newConversionTask(configDir)},
+	}
 	s.dispatcher = newDispatcher(s, concurrency)
 	return s
 }

@@ -7,10 +7,22 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// operationTypes is the set of publicly available operation types. Only
-// conversion exists in this iteration; unimplemented operations have no
-// addressable state.
-var operationTypes = map[string]bool{OperationTypeConversion: true}
+// requireTask returns the registered task for an operation type. Only
+// registered kinds are addressable state: an unimplemented operation type has
+// no operation, draft, revision or session to resolve.
+func (s *serviceImpl) requireTask(operationType string) (Task, error) {
+	for _, task := range s.tasks {
+		if task.Kind() == operationType {
+			return task, nil
+		}
+	}
+	return nil, NewError(
+		ErrKindNotFound,
+		"UNKNOWN_OPERATION_TYPE",
+		"unsupported operation type "+operationType,
+		nil,
+	)
+}
 
 // loadWorkset loads a workset or fails with the canonical not-found error.
 func (s *serviceImpl) loadWorkset(id string) (*sqlite.Workset, error) {
@@ -28,7 +40,7 @@ func (s *serviceImpl) loadWorkset(id string) (*sqlite.Workset, error) {
 // checks every operation-scoped read and write shares: unknown workset,
 // unsupported operation type and unestablished operation are all not-found.
 func (s *serviceImpl) loadOperation(worksetID, operationType string) (*sqlite.Operation, error) {
-	if err := validateOperationType(operationType); err != nil {
+	if _, err := s.requireTask(operationType); err != nil {
 		return nil, err
 	}
 	w, err := s.loadWorkset(worksetID)
@@ -43,18 +55,6 @@ func (s *serviceImpl) loadOperation(worksetID, operationType string) (*sqlite.Op
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load operation", err)
 	}
 	return op, nil
-}
-
-func validateOperationType(operationType string) error {
-	if !operationTypes[operationType] {
-		return NewError(
-			ErrKindNotFound,
-			"UNKNOWN_OPERATION_TYPE",
-			"unsupported operation type "+operationType,
-			nil,
-		)
-	}
-	return nil
 }
 
 // rejectOrphaned refuses writes on a workset whose library is gone. Orphaned
