@@ -118,6 +118,16 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * Whether two draft documents hold the same persisted content. Both sides come
+ * from the server's canonical JSON (or from a save of it), so an exact string
+ * compare is enough — and a content that merely was NOT changed by an unrelated
+ * event (a generation publication advancing the version) compares equal.
+ */
+export function sameDocument(a: OperationDraftDocument, b: OperationDraftDocument): boolean {
+  return sameValue(a, b)
+}
+
+/**
  * Reads the current value and provenance of one unit for a target. A batch
  * whose members disagree reports `mixed`: a mixed value is a display state,
  * never something that can be saved (C07).

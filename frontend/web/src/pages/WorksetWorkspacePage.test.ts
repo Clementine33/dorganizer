@@ -1,4 +1,5 @@
 import { flushPromises, mount, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
+import { VueQueryPlugin, type QueryClient } from '@tanstack/vue-query'
 import { createPinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
@@ -12,8 +13,10 @@ import type {
   RevisionDetailResponse,
   Workset,
 } from '@/lib/api/types'
+import { queryKeys } from '@/queries/query-keys'
+import { useWorksetEditorStore } from '@/stores/workset-editor'
 import { apiStub as sharedApiStub } from '@/test/api-stub'
-import { installTestQueryPlugin } from '@/test/query-client'
+import { createTestQueryClient } from '@/test/query-client'
 import WorksetWorkspacePage from './WorksetWorkspacePage.vue'
 
 enableAutoUnmount(afterEach)
@@ -136,7 +139,17 @@ function pageApi(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
   })
 }
 
-async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper; router: Router }> {
+async function mountPage(
+  api: ApiClientContract,
+  queryClient: QueryClient = createTestQueryClient(),
+): Promise<{
+  wrapper: VueWrapper
+  router: Router
+  pinia: ReturnType<typeof createPinia>
+  queryClient: QueryClient
+}> {
+  const pinia = createPinia()
+  const queryPlugin: [typeof VueQueryPlugin, { queryClient: QueryClient }] = [VueQueryPlugin, { queryClient }]
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -163,14 +176,14 @@ async function mountPage(api: ApiClientContract): Promise<{ wrapper: VueWrapper;
   await router.isReady()
   const wrapper = mount(WorksetWorkspacePage, {
     global: {
-      plugins: [createPinia(), router, installTestQueryPlugin()],
+      plugins: [pinia, router, queryPlugin],
       provide: { [apiClientKey as symbol]: api },
       stubs: { RouterView: true },
     },
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper, router }
+  return { wrapper, router, pinia, queryClient }
 }
 
 describe('WorksetWorkspacePage execution entry', () => {
@@ -290,5 +303,29 @@ describe('WorksetWorkspacePage execution entry', () => {
     await wrapper.get('[data-testid="open-execution"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toMatch(/\/conversion\/execution$/)
+  })
+})
+
+describe('WorksetWorkspacePage draft reconciliation', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('re-bases the edit session when the draft refetch only advanced the version', async () => {
+    const getOperationDraft = vi.fn().mockResolvedValueOnce(draft).mockResolvedValue({ ...draft, version: 6 })
+    const { pinia, queryClient } = await mountPage(pageApi({ getOperationDraft }))
+    const editor = useWorksetEditorStore(pinia)
+    editor.open({
+      worksetId: 'ws-1',
+      operation: 'conversion',
+      target: { kind: 'common' },
+      baseVersion: 5,
+      baseDocument: draft.document,
+    })
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.worksets.draft('ws-1', 'conversion') })
+    await flushPromises()
+
+    expect(getOperationDraft).toHaveBeenCalledTimes(2)
+    expect(editor.session?.baseVersion).toBe(6)
+    expect(editor.session?.baseDocument).toEqual(draft.document)
   })
 })

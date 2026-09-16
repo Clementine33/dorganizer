@@ -5,6 +5,7 @@ import {
   EMPTY_INTENT,
   intentIsEmpty,
   intentUnitCount,
+  sameDocument,
   type EditIntent,
   type EditTarget,
 } from '@/features/worksets/draft-intents'
@@ -114,10 +115,34 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
       if (document) this.session.baseDocument = document
       if (version !== undefined) this.session.baseVersion = version
     },
-    markFailed(message: string) {
+    /** A refused save is answered by its cause, never one blanket banner. */
+    failSave(error: { code?: string; message?: string }) {
       if (!this.session) return
       this.session.applying = false
-      this.session.error = message
+      this.session.error = saveFailureMessage(error)
+    },
+    /**
+     * The server copy moved. A version that advanced without the document
+     * changing — a generation publication — is not a conflict: re-base silently
+     * so the next save echoes the current If-Match. A genuinely moved document
+     * is adopted only while nothing is unapplied; a dirty session keeps its
+     * edits, and the save reports the conflict.
+     */
+    syncWithServer(
+      input: { worksetId: string; operation: OperationType },
+      server: { version: number; document: OperationDraftDocument },
+    ) {
+      const session = this.session
+      if (!session || session.worksetId !== input.worksetId || session.operation !== input.operation) return
+      const versionMoved = server.version !== session.baseVersion
+      const documentMoved = !sameDocument(server.document, session.baseDocument)
+      if (!versionMoved && !documentMoved) return
+      if (documentMoved && !intentIsEmpty(session.intent)) return
+      session.baseVersion = server.version
+      if (documentMoved) session.baseDocument = server.document
+      // A moved server copy retires both a stale-conflict banner and the
+      // "wait for the generation" advice: neither cause is true any more.
+      session.error = null
     },
     /** Discard: only an explicit user action drops unapplied edits (E08). */
     close() {
@@ -126,10 +151,22 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
     /** Server data moved under a dirty session: keep content, flag conflict. */
     markStale() {
       if (!this.session) return
-      this.session.error = '服务端草稿已更新，请重新加载或放弃本地修改'
+      this.session.applying = false
+      this.session.error = '服务端草稿已更新：请放弃本地修改后重新进入以加载服务器版本'
     },
   },
 })
+
+/** A busy operation is a wait, not a reload: the code decides the text. */
+const BUSY_SAVE_MESSAGES: Record<string, string> = {
+  GENERATION_IN_PROGRESS: '正在生成计划版本：请等待生成结束或取消后再应用设置',
+  EXECUTION_IN_PROGRESS: '正在执行：请等待执行结束或取消后再应用设置',
+}
+
+function saveFailureMessage(error: { code?: string; message?: string }): string {
+  const mapped = error.code ? BUSY_SAVE_MESSAGES[error.code] : undefined
+  return mapped ?? error.message ?? '保存草稿失败'
+}
 
 function sameTarget(a: EditTarget, b: EditTarget): boolean {
   if (a.kind !== b.kind) return false

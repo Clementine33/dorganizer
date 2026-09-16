@@ -77,13 +77,15 @@ describe('editor session', () => {
     expect(store.session?.baseVersion).toBe(4)
   })
 
-  it('flags a conflict without dropping the content', () => {
+  it('flags a conflict without dropping the content, and leaves the form usable', () => {
     const store = useWorksetEditorStore()
     openMember(store, 'm-1')
     store.setUnit('classifier_tags', { intent: 'set', value: [] })
+    store.startApplying()
     store.markStale()
 
-    expect(store.session?.error).toContain('重新加载')
+    expect(store.session?.error).toContain('放弃本地修改')
+    expect(store.session?.applying).toBe(false)
     expect(store.pendingDocument?.members).toEqual([{ member_id: 'm-1', overrides: { classifier_tags: [] } }])
   })
 
@@ -94,5 +96,92 @@ describe('editor session', () => {
     expect(store.session).not.toBeNull()
     store.close()
     expect(store.session).toBeNull()
+  })
+})
+
+describe('server draft reconciliation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  const scope = { worksetId: 'ws-1', operation: 'conversion' } as const
+
+  it('re-bases the version when a generation advanced it without touching the draft', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+    store.setUnit('matched', { intent: 'set', value: FLAC })
+
+    store.syncWithServer(scope, { version: 6, document: base })
+
+    expect(store.session?.baseVersion).toBe(6)
+    expect(store.isDirty).toBe(true)
+    expect(store.pendingDocument?.members).toEqual([{ member_id: 'm-1', overrides: { matched: FLAC } }])
+  })
+
+  it('adopts a genuinely moved document while nothing is unapplied', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+
+    store.syncWithServer(scope, { version: 6, document: { ...base, classifier_tags: ['B'] } })
+
+    expect(store.session?.baseVersion).toBe(6)
+    expect(store.session?.baseDocument.classifier_tags).toEqual(['B'])
+  })
+
+  it('keeps pending edits against a moved document, for the save to report', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+    store.setUnit('matched', { intent: 'set', value: FLAC })
+
+    store.syncWithServer(scope, { version: 6, document: { ...base, classifier_tags: ['B'] } })
+
+    expect(store.session?.baseVersion).toBe(3)
+    expect(store.session?.baseDocument.classifier_tags).toEqual(['A'])
+  })
+
+  it('ignores another workset or operation', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+
+    store.syncWithServer({ worksetId: 'ws-9', operation: 'conversion' }, { version: 6, document: base })
+
+    expect(store.session?.baseVersion).toBe(3)
+  })
+
+  it('retires a stale banner once the server copy moved', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+    store.markStale()
+
+    store.syncWithServer(scope, { version: 6, document: base })
+
+    expect(store.session?.error).toBeNull()
+  })
+})
+
+describe('refused save', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('names the cause: a busy operation is a wait, not a reload', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+    store.startApplying()
+    store.failSave({ code: 'GENERATION_IN_PROGRESS', message: 'cancel or wait for the active generation' })
+
+    expect(store.session?.applying).toBe(false)
+    expect(store.session?.error).toContain('正在生成')
+    expect(store.session?.error).not.toContain('放弃本地修改')
+  })
+
+  it('falls back to the server message and never loses the edits', () => {
+    const store = useWorksetEditorStore()
+    openMember(store, 'm-1')
+    store.setUnit('mode', { intent: 'set', value: 'strict' })
+    store.failSave({ message: 'invalid JSON payload' })
+
+    expect(store.session?.error).toBe('invalid JSON payload')
+    expect(store.isDirty).toBe(true)
   })
 })

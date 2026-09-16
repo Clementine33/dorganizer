@@ -1,4 +1,4 @@
-import { computed, type Ref } from 'vue'
+import { computed, watch, type Ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { useApiClient } from '@/lib/api/client'
 import { CONVERSION, type OperationType } from '@/lib/api/types'
@@ -77,6 +77,17 @@ export function useOperationContext(
   const saveMutation = useMutation(saveOperationDraftMutationOptions(api, queryClient))
   const startMutation = useMutation(startGenerationMutationOptions(api, queryClient))
 
+  // Every fresh server draft reconciles the open edit session. Generation
+  // publication advances the operation version without touching the draft, and
+  // a session still echoing the pre-generation version would read as a
+  // third-party conflict on its next save; identical content re-bases silently,
+  // while a genuinely moved document under unapplied edits stays a conflict the
+  // save reports.
+  watch(draft, (server) => {
+    if (!server || !worksetId.value) return
+    editor.syncWithServer({ worksetId: worksetId.value, operation }, server)
+  })
+
   /** Persists the session's pending document; the base becomes what was saved. */
   async function applySession(): Promise<boolean> {
     const session = editor.session
@@ -93,12 +104,12 @@ export function useOperationContext(
       editor.markApplied(document, view.version)
       return true
     } catch (error) {
-      const status = (error as { status?: number }).status
-      if (status === 409) {
+      const failure = error as { status?: number; code?: string; message?: string }
+      if (failure.status === 409 && failure.code === 'VERSION_CONFLICT') {
         editor.markStale()
         await syncAfterDraftConflict(queryClient, session.worksetId, session.operation)
       } else {
-        editor.markFailed((error as Error).message)
+        editor.failSave(failure)
       }
       return false
     }
