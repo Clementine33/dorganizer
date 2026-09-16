@@ -1,6 +1,8 @@
 import type {
+  AudioOutputSpec,
   ComponentOutcome,
   DesiredProfile,
+  OverrideUnit,
   RevisionDetailResponse,
   VariantDecision,
   PlanOperation,
@@ -52,60 +54,67 @@ export function componentOperationCount(component: ComponentOutcome): number {
   return (component.operations ?? []).length
 }
 
-/** Whether one partition's targets are met by the planned inventory. */
-export type PartitionStatus = 'satisfied' | 'unmet' | 'blocked' | 'absent'
+/** One partition's independent facts within a member's planned components. */
+export interface PartitionFacts {
+  /** A component exists for this partition: there are files to review at all. */
+  applicable: boolean
+  blocked: boolean
+  unmet: boolean
+  /** The plan carries executable operations for this partition. */
+  changes: boolean
+}
 
-export interface MemberParts {
-  matched: PartitionStatus
-  unmatched: PartitionStatus
+export interface MemberFacts {
+  matched: PartitionFacts
+  unmatched: PartitionFacts
+}
+
+export const PARTITION_TEXT: Record<keyof MemberFacts, string> = {
+  matched: '无音效',
+  unmatched: '有音效',
 }
 
 /**
- * Per-partition status of one member's components. A partition with no
- * components has nothing asked of it, so it counts as satisfied rather than as
- * a failure — the relaxed conversion mode keeps unsatisfied stems on purpose
- * and still converts them.
+ * Per-partition facts of one member's components. The three axes stay
+ * independent: a partition can change and still carry an unmet target (the
+ * relaxed mode converts what it can and keeps what it cannot).
  */
-export function partitionStatus(components: ComponentOutcome[]): MemberParts {
-  const status: MemberParts = { matched: 'absent', unmatched: 'absent' }
-  for (const component of components) {
-    const key: keyof MemberParts = component.partition === 'matched' ? 'matched' : 'unmatched'
-    if (component.status === 'blocked') {
-      status[key] = 'blocked'
-      continue
-    }
-    if (componentHasUnmetTarget(component)) {
-      if (status[key] !== 'blocked') status[key] = 'unmet'
-    } else if (status[key] === 'absent') {
-      status[key] = 'satisfied'
-    }
+export function partitionFacts(components: ComponentOutcome[]): MemberFacts {
+  const facts: MemberFacts = {
+    matched: { applicable: false, blocked: false, unmet: false, changes: false },
+    unmatched: { applicable: false, blocked: false, unmet: false, changes: false },
   }
-  return status
+  for (const component of components) {
+    const side = facts[component.partition === 'matched' ? 'matched' : 'unmatched']
+    side.applicable = true
+    if (component.status === 'blocked') side.blocked = true
+    if (componentHasUnmetTarget(component)) side.unmet = true
+    if (componentOperationCount(component) > 0) side.changes = true
+  }
+  return facts
 }
 
 export interface MemberConclusion {
   tone: 'neutral' | 'success' | 'warning' | 'danger'
   /**
-   * The one label the row shows. A partial result names the satisfied side
-   * (无音效满足 / 有音效满足) and carries the warning tone, so the row never
-   * says "partial" twice.
+   * The one label the row shows, phrased as what will happen to this folder:
+   * 仅无音效转换 / 仅有音效转换 / 全量转换, or why nothing will change.
    */
   label: string
-  /** Which partitions are short of their target, for the detail view. */
+  /** Both partitions' own facts, so neither side's state hides behind a word. */
   detail: string
 }
 
 /**
- * One member's conclusion. The label reports how far the targets are met, so
- * an unmet target under the relaxed mode reads as a partial result instead of
- * an error that contradicts the plan being convertible.
+ * One member's conclusion. The label names who changes; the tone carries the
+ * risk, so a folder that converts while a target stays unmet says so in the
+ * label and still reads as a warning.
  */
 export function memberConclusion(input: {
   excluded: boolean
   hasRoot: boolean
   rootMissing: boolean
-  hasOperations: boolean
-  parts: MemberParts
+  facts: MemberFacts
 }): MemberConclusion {
   if (input.excluded) {
     return { tone: 'neutral', label: '已排除', detail: '本操作已排除该文件夹。' }
@@ -116,32 +125,48 @@ export function memberConclusion(input: {
   if (input.rootMissing) {
     return { tone: 'danger', label: '输入缺失', detail: '规划时未在扫描结果中找到该文件夹。' }
   }
-  if (input.parts.matched === 'blocked' || input.parts.unmatched === 'blocked') {
+  const sides = Object.values(input.facts)
+  if (sides.some((side) => side.blocked)) {
     return { tone: 'danger', label: '阻塞', detail: '存在需要先处理的冲突或歧义。' }
   }
-  const matchedUnmet = input.parts.matched === 'unmet'
-  const unmatchedUnmet = input.parts.unmatched === 'unmet'
-  if (matchedUnmet && unmatchedUnmet) {
-    return { tone: 'warning', label: '目标未满足', detail: '无音效与有音效目标均未满足，现有文件按可用源保留。' }
+  const detail = detailText(input.facts)
+  const changing = changedSides(input.facts)
+  if (changing.length === 2) return { tone: toneFor(input.facts, 'success'), label: '全量转换', detail }
+  if (changing.length === 1) {
+    return { tone: toneFor(input.facts, 'success'), label: `仅${changing[0]}转换`, detail }
   }
-  if (matchedUnmet || unmatchedUnmet) {
-    const satisfied = satisfiedLabel(input.parts)
-    const unmetSide = matchedUnmet ? '无音效目标未满足' : '有音效目标未满足'
-    return { tone: 'warning', label: satisfied, detail: `${satisfied}；${unmetSide}，按可用源保留。` }
+  if (sides.some((side) => side.unmet)) {
+    return { tone: 'warning', label: '目标未满足', detail }
   }
-  if (!input.hasOperations) {
-    return { tone: 'neutral', label: '无变化', detail: '目标已满足，无需改动。' }
+  if (!sides.some((side) => side.applicable)) {
+    return { tone: 'neutral', label: '无适用', detail }
   }
-  return { tone: 'success', label: '全部满足', detail: '两个分类的目标都已满足。' }
+  return { tone: 'neutral', label: '无需转换', detail }
 }
 
-/** Short label of the satisfied side, used where space is tight. */
-export function satisfiedLabel(parts: MemberParts): string {
-  const matchedOk = parts.matched !== 'unmet' && parts.matched !== 'blocked'
-  const unmatchedOk = parts.unmatched !== 'unmet' && parts.unmatched !== 'blocked'
-  if (matchedOk && !unmatchedOk) return '无音效满足'
-  if (!matchedOk && unmatchedOk) return '有音效满足'
-  return ''
+/** Warning wins over success: an unmet target is the row's risk to read. */
+function toneFor(facts: MemberFacts, base: MemberConclusion['tone']): MemberConclusion['tone'] {
+  return Object.values(facts).some((side) => side.unmet) ? 'warning' : base
+}
+
+function changedSides(facts: MemberFacts): string[] {
+  return (Object.keys(facts) as (keyof MemberFacts)[])
+    .filter((key) => facts[key].changes)
+    .map((key) => PARTITION_TEXT[key])
+}
+
+/** One line per partition: what it does, or why it does nothing. */
+function detailText(facts: MemberFacts): string {
+  return (Object.keys(facts) as (keyof MemberFacts)[])
+    .map((key) => `${PARTITION_TEXT[key]}：${sideText(facts[key])}`)
+    .join('；')
+}
+
+function sideText(side: PartitionFacts): string {
+  if (side.blocked) return '阻塞'
+  if (side.unmet) return side.changes ? '目标未满足，其余按可用源转换' : '目标未满足，现有文件按可用源保留'
+  if (side.changes) return '将转换'
+  return side.applicable ? '无需改动' : '无适用文件'
 }
 
 /**
@@ -165,4 +190,42 @@ export function cloneProfile(value: unknown): DesiredProfile {
     }
   }
   return out
+}
+
+/** One lane of a profile: "WAV", "MP3 320", or nothing when the lane is absent. */
+function laneText(spec: AudioOutputSpec | undefined): string | null {
+  if (!spec?.codec) return null
+  const codec = spec.codec.toUpperCase()
+  const bitrate = spec.quality?.bitrate
+  return bitrate ? `${codec} ${bitrate}` : codec
+}
+
+/** A desired profile in one line: the exact output set the revision asks for. */
+export function profileText(profile: DesiredProfile | undefined): string {
+  const parts = [laneText(profile?.lossless), laneText(profile?.encoded)].filter(
+    (part): part is string => part !== null,
+  )
+  return parts.length > 0 ? parts.join(' + ') : '未设置'
+}
+
+const MODE_TEXT: Record<string, string> = { strict: '严格', available_sources: '可用源' }
+
+/**
+ * One unit's value as the editors show it — the same rendering for a stored
+ * value, a common value and a pending one, so "独立值" never has to stand in
+ * for the value itself.
+ */
+export function unitValueText(unit: OverrideUnit, value: unknown): string {
+  switch (unit) {
+    case 'mode': {
+      const mode = typeof value === 'string' ? value : ''
+      return MODE_TEXT[mode] ?? (mode || '未设置')
+    }
+    case 'classifier_tags': {
+      const tags = (value as string[] | undefined) ?? []
+      return tags.length > 0 ? tags.join(', ') : '（空）'
+    }
+    default:
+      return profileText(value as DesiredProfile | undefined)
+  }
 }

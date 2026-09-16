@@ -5,7 +5,10 @@ import {
   componentOperationCount,
   memberConclusion,
   operationsOf,
+  partitionFacts,
   readComponent,
+  type MemberFacts,
+  type PartitionFacts,
 } from './plan-readers'
 
 /** A snapshot as an older backend wrote it: empty collections serialized as null. */
@@ -65,28 +68,82 @@ describe('plan snapshot readers', () => {
 })
 
 describe('member conclusion', () => {
-  const base = { excluded: false, hasRoot: true, rootMissing: false, hasOperations: true }
-
-  it('names the satisfied side once instead of labelling a partial result twice', () => {
-    const partial = memberConclusion({ ...base, parts: { matched: 'unmet', unmatched: 'satisfied' } })
-    expect(partial.label).toBe('有音效满足')
-    expect(partial.tone).toBe('warning')
-    expect(partial.detail).toContain('无音效目标未满足')
-
-    const mirror = memberConclusion({ ...base, parts: { matched: 'satisfied', unmatched: 'unmet' } })
-    expect(mirror.label).toBe('无音效满足')
-    expect(mirror.tone).toBe('warning')
+  const base = { excluded: false, hasRoot: true, rootMissing: false }
+  const side = (overrides: Partial<PartitionFacts> = {}): PartitionFacts => ({
+    applicable: true,
+    blocked: false,
+    unmet: false,
+    changes: false,
+    ...overrides,
+  })
+  const facts = (matched: Partial<PartitionFacts> = {}, unmatched: Partial<PartitionFacts> = {}): MemberFacts => ({
+    matched: side(matched),
+    unmatched: side(unmatched),
   })
 
-  it('keeps full and empty results as their own labels', () => {
-    expect(memberConclusion({ ...base, parts: { matched: 'satisfied', unmatched: 'satisfied' } })).toEqual({
-      tone: 'success',
-      label: '全部满足',
-      detail: '两个分类的目标都已满足。',
-    })
-    expect(memberConclusion({ ...base, hasOperations: false, parts: { matched: 'satisfied', unmatched: 'satisfied' } }).label).toBe(
-      '无变化',
-    )
-    expect(memberConclusion({ ...base, parts: { matched: 'unmet', unmatched: 'unmet' } }).label).toBe('目标未满足')
+  it('names the partition that will change, not the one that is satisfied', () => {
+    const matchedOnly = memberConclusion({ ...base, facts: facts({ changes: true }) })
+    expect(matchedOnly.label).toBe('仅无音效转换')
+    expect(matchedOnly.tone).toBe('success')
+    expect(matchedOnly.detail).toContain('无音效：将转换')
+    expect(matchedOnly.detail).toContain('有音效：无需改动')
+
+    const unmatchedOnly = memberConclusion({ ...base, facts: facts({}, { changes: true }) })
+    expect(unmatchedOnly.label).toBe('仅有音效转换')
+
+    const both = memberConclusion({ ...base, facts: facts({ changes: true }, { changes: true }) })
+    expect(both.label).toBe('全量转换')
+  })
+
+  it('keeps the changed label but reads as a warning while a target stays unmet', () => {
+    const partial = memberConclusion({ ...base, facts: facts({ changes: true }, { unmet: true }) })
+
+    expect(partial.label).toBe('仅无音效转换')
+    expect(partial.tone).toBe('warning')
+    expect(partial.detail).toContain('有音效：目标未满足，现有文件按可用源保留')
+  })
+
+  it('separates an unmet target from a folder with nothing to do', () => {
+    const unmet = memberConclusion({ ...base, facts: facts({ unmet: true }) })
+    expect(unmet.tone).toBe('warning')
+    expect(unmet.label).toBe('目标未满足')
+    expect(unmet.detail).toContain('无音效：目标未满足')
+
+    const nothing = memberConclusion({ ...base, facts: facts() })
+    expect(nothing.label).toBe('无需转换')
+    expect(nothing.tone).toBe('neutral')
+
+    // No component at all is 无适用, not 无变化: nothing was asked of it.
+    const noFiles = memberConclusion({ ...base, facts: facts({ applicable: false }, { applicable: false }) })
+    expect(noFiles.label).toBe('无适用')
+    expect(noFiles.detail).toContain('无音效：无适用文件')
+  })
+
+  it('reports a blocked component above every other fact', () => {
+    const blocked = memberConclusion({ ...base, facts: facts({ blocked: true, changes: true }) })
+
+    expect(blocked.tone).toBe('danger')
+    expect(blocked.label).toBe('阻塞')
+  })
+})
+
+describe('partition facts', () => {
+  function component(overrides: Partial<ComponentOutcome>): ComponentOutcome {
+    return readComponent({ component_id: 'cmp', partition: 'matched', status: 'ok', ...overrides } as ComponentOutcome)
+  }
+
+  it('accumulates independent facts per partition', () => {
+    const facts = partitionFacts([
+      component({ operations: [{ kind: 'encode' }] as ComponentOutcome['operations'] }),
+      component({
+        component_id: 'cmp-2',
+        status: 'blocked',
+        variant_decisions: [{ stem: 'track', decisions: [{ path: '/a.mp3', resolution: 'keep', reason_code: 'UNMET_TARGET' }] }],
+      }),
+    ])
+
+    expect(facts.matched).toEqual({ applicable: true, blocked: true, unmet: true, changes: true })
+    // The partition with no component holds none of those facts.
+    expect(facts.unmatched).toEqual({ applicable: false, blocked: false, unmet: false, changes: false })
   })
 })

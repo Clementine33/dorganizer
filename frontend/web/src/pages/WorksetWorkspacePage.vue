@@ -11,7 +11,7 @@ import { workbenchNav } from '@/features/worksets/workbench-nav'
 import MemberList from '@/features/worksets/MemberList.vue'
 import {
   memberConclusion,
-  partitionStatus,
+  partitionFacts,
   revisionComponents,
   type MemberConclusion,
 } from '@/features/worksets/plan-readers'
@@ -98,8 +98,7 @@ function conclusionFor(member: WorksetMember): MemberConclusion {
     excluded: frozen?.excluded ?? false,
     hasRoot: Boolean(root),
     rootMissing: root?.root_status === 'missing',
-    hasOperations: components.some((component) => component.operations.length > 0),
-    parts: partitionStatus(components),
+    facts: partitionFacts(components),
   })
 }
 

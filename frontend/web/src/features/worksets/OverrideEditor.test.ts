@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { nextTick, reactive } from 'vue'
@@ -39,6 +39,10 @@ function mountEditor(
   return mount(OverrideEditor, { props: { draft: harness, target, readOnly: false, participationEditable: true } })
 }
 
+function statusText(wrapper: VueWrapper, unit: string): string {
+  return wrapper.get(`[data-testid="unit-${unit}"] [data-testid="unit-status"]`).text()
+}
+
 describe('OverrideEditor', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -61,6 +65,35 @@ describe('OverrideEditor', () => {
     // matched = 独立值, everything else = 默认.
     expect(wrapper.get('[data-testid="unit-matched"]').text()).toContain('独立值')
     expect(wrapper.get('[data-testid="unit-mode"]').text()).toContain('默认')
+    // The source word never stands in for the value itself.
+    expect(statusText(wrapper, 'matched')).toBe('当前：FLAC（与全局不同）')
+    expect(statusText(wrapper, 'mode')).toBe('当前：可用源')
+    expect(statusText(wrapper, 'classifier_tags')).toBe('当前：A')
+    expect(statusText(wrapper, 'unmatched')).toBe('当前：WAV + MP3 320')
+  })
+
+  it('says out loud when an override merely spells the common value', () => {
+    const wrapper = mountEditor(draft([{ member_id: 'm-1', overrides: { matched: WAV_MP3 } }]), {
+      kind: 'member',
+      memberId: 'm-1',
+    })
+
+    expect(statusText(wrapper, 'matched')).toBe('当前：WAV + MP3 320（与全局相同）')
+  })
+
+  it('states what an apply would write or restore', async () => {
+    const wrapper = mountEditor(draft([{ member_id: 'm-1', overrides: { matched: FLAC } }]), {
+      kind: 'member',
+      memberId: 'm-1',
+    })
+
+    await wrapper.get('[data-testid="unit-matched-default"]').trigger('click')
+    await nextTick()
+    expect(statusText(wrapper, 'matched')).toBe('将回到全局值（WAV + MP3 320）')
+
+    await wrapper.get('[data-testid="unit-matched-override"]').trigger('click')
+    await nextTick()
+    expect(statusText(wrapper, 'matched')).toBe('将写入 FLAC')
   })
 
   it('picking 默认 removes the override', async () => {
@@ -105,6 +138,7 @@ describe('OverrideEditor', () => {
     const wrapper = mountEditor(harness, { kind: 'batch', memberIds: ['m-1', 'm-2'] })
 
     expect(wrapper.get('[data-testid="unit-matched"]').text()).toContain('多种值')
+    expect(statusText(wrapper, 'matched')).toBe('当前：多种值')
     // Neither choice is pressed until the user decides.
     expect(wrapper.get('[data-testid="unit-matched-default"]').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('[data-testid="unit-matched-override"]').attributes('aria-checked')).toBe('false')

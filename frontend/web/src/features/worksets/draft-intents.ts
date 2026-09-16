@@ -113,7 +113,8 @@ function overrideValue(record: DraftMember | undefined, unit: OverrideUnit): { p
   }
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+/** Structural equality of two unit values (a mode string, tags, a profile). */
+export function sameUnitValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
@@ -124,7 +125,7 @@ function sameValue(a: unknown, b: unknown): boolean {
  * event (a generation publication advancing the version) compares equal.
  */
 export function sameDocument(a: OperationDraftDocument, b: OperationDraftDocument): boolean {
-  return sameValue(a, b)
+  return sameUnitValue(a, b)
 }
 
 /**
@@ -150,7 +151,7 @@ export function readUnit(doc: OperationDraftDocument, target: EditTarget, unit: 
     }
   }
   const first = effective[0]
-  const uniform = effective.every((v) => sameValue(v, first))
+  const uniform = effective.every((v) => sameUnitValue(v, first))
   const source: UnitSource =
     overridden === 0 ? 'common' : overridden === memberIds.length && uniform ? 'member' : 'mixed'
   return {

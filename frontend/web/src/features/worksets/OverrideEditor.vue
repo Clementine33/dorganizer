@@ -2,7 +2,14 @@
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { OVERRIDE_UNITS, readParticipation, readUnit, type EditTarget } from '@/features/worksets/draft-intents'
+import {
+  OVERRIDE_UNITS,
+  readParticipation,
+  readUnit,
+  sameUnitValue,
+  type EditTarget,
+} from '@/features/worksets/draft-intents'
+import { unitValueText } from '@/features/worksets/plan-readers'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
 import type { OperationDraftDocument, OverrideUnit } from '@/lib/api/types'
 import UnitFields from './UnitFields.vue'
@@ -83,12 +90,30 @@ function valueOf(unit: OverrideUnit): unknown {
 function statusLabel(unit: OverrideUnit): string {
   switch (choiceOf(unit)) {
     case 'default':
-      return '将改为默认（继承全局值）'
+      return `将回到全局值（${unitValueText(unit, commonFallback(unit))}）`
     case 'override':
-      return '将写入独立值'
+      return `将写入 ${unitValueText(unit, valueOf(unit))}`
     default:
-      return `当前：${sourceText(storedSource(unit))}`
+      return storedLabel(unit)
   }
+}
+
+/**
+ * The stored state in full: what the value is, and — for an override — whether
+ * it merely spells out the common value. Equal values with different sources
+ * stay a real configuration relationship, so they are said out loud instead of
+ * letting the source word stand in for the value.
+ */
+function storedLabel(unit: OverrideUnit): string {
+  const stored = readUnit(props.draft, props.target, unit)
+  if (stored.source === 'mixed') return '当前：多种值'
+  const relation =
+    stored.source === 'member'
+      ? sameUnitValue(stored.value, commonFallback(unit))
+        ? '（与全局相同）'
+        : '（与全局不同）'
+      : ''
+  return `当前：${unitValueText(unit, stored.value)}${relation}`
 }
 
 function sourceText(source: 'common' | 'member' | 'mixed'): string {

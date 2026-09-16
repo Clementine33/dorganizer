@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
-import { componentOperationCount, operationsOf, revisionComponents } from '@/features/worksets/plan-readers'
+import {
+  componentHasUnmetTarget,
+  componentOperationCount,
+  operationsOf,
+  profileText,
+  revisionComponents,
+} from '@/features/worksets/plan-readers'
 import type { ComponentOutcome, RevisionDetailResponse, RevisionMember, WorksetMember } from '@/lib/api/types'
 
 /**
@@ -49,21 +55,20 @@ function isOverride(unit: string): boolean {
   return frozen.value?.sources[unit] === 'member'
 }
 
-function profileText(profile: { lossless?: { codec?: string }; encoded?: { codec?: string; quality?: { bitrate?: number } } } | undefined): string {
-  if (!profile) return '未设置'
-  const parts: string[] = []
-  if (profile.lossless?.codec) parts.push(profile.lossless.codec.toUpperCase())
-  if (profile.encoded?.codec) {
-    const bitrate = profile.encoded.quality?.bitrate
-    parts.push(bitrate ? `${profile.encoded.codec.toUpperCase()} ${bitrate}` : profile.encoded.codec.toUpperCase())
-  }
-  return parts.length > 0 ? parts.join(' + ') : '未设置'
-}
-
-function componentTone(status: string): 'success' | 'danger' | 'neutral' {
-  if (status === 'blocked') return 'danger'
-  if (status === 'ok') return 'success'
-  return 'neutral'
+/**
+ * Every state a component can hold at once. An unmet target is not "no
+ * change": the component may still convert other stems, so both facts show.
+ */
+function componentFacts(component: ComponentOutcome): { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] {
+  if (component.status === 'blocked') return [{ label: '阻塞', tone: 'danger' }]
+  const facts: { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] = []
+  if (componentHasUnmetTarget(component)) facts.push({ label: '目标未满足', tone: 'warning' })
+  facts.push(
+    componentOperationCount(component) > 0
+      ? { label: '有变化', tone: 'success' }
+      : { label: '无变化', tone: 'neutral' },
+  )
+  return facts
 }
 </script>
 
@@ -110,8 +115,8 @@ function componentTone(status: string): 'success' | 'danger' | 'neutral' {
       <ul v-else class="space-y-2">
         <li v-for="component in components" :key="component.component_id" class="rounded-md border border-border p-2">
           <div class="flex flex-wrap items-center gap-1.5">
-            <Badge :tone="componentTone(component.status)">
-              {{ component.status === 'blocked' ? '阻塞' : componentOperationCount(component) > 0 ? '有变化' : '无变化' }}
+            <Badge v-for="fact in componentFacts(component)" :key="fact.label" :tone="fact.tone">
+              {{ fact.label }}
             </Badge>
             <span class="text-[11px] text-[var(--text-muted)]">
               {{ component.partition === 'matched' ? '无音效' : '有音效' }}
