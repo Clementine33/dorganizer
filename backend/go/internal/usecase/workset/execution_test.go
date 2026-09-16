@@ -205,8 +205,8 @@ type seedComponent struct {
 }
 
 // seedRevision writes a plan snapshot, the operation revision association and
-// the promotion, optionally followed by a confirmation.
-func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedComponent) {
+// the promotion.
+func (f *execFixture) seedRevision(planID string, comps ...seedComponent) {
 	f.t.Helper()
 	rootIndex := map[string]int{}
 	roots := make([]sqlite.PlanRootRecord, 0, len(comps))
@@ -282,19 +282,48 @@ func (f *execFixture) seedRevision(planID string, confirm bool, comps ...seedCom
 	`, planID, now, f.worksetID); err != nil {
 		f.t.Fatalf("promote revision: %v", err)
 	}
-	if confirm {
-		if _, err := f.svc.ConfirmRevision(
-			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, planID,
-			worksetusecase.ConfirmRequest{IfMatchVersion: f.operation().Version},
-		); err != nil {
-			f.t.Fatalf("ConfirmRevision: %v", err)
-		}
+}
+
+// setDraftDeleteMode re-freezes the fixture draft with an explicit
+// obsolete-audio handling, so a seeded revision carries it (the session
+// options come from the revision's own draft snapshot). The stored draft is
+// updated too, exactly as a real draft save would leave it.
+func (f *execFixture) setDraftDeleteMode(mode string) {
+	f.t.Helper()
+	doc, err := tasksconversion.ParseDraft(f.draftJSON)
+	if err != nil {
+		f.t.Fatalf("parse draft: %v", err)
 	}
+	doc.DeleteMode = mode
+	raw, hash, err := tasksconversion.MarshalDraft(doc)
+	if err != nil {
+		f.t.Fatalf("marshal draft: %v", err)
+	}
+	f.draftJSON, f.draftHash = raw, hash
+	if _, err := f.repo.DB().Exec(
+		`UPDATE workset_operation_drafts SET draft_json = ?, draft_hash = ?
+		 WHERE workset_id = ? AND operation_type = 'conversion'`,
+		raw, hash, f.worksetID,
+	); err != nil {
+		f.t.Fatalf("update stored draft: %v", err)
+	}
+}
+
+// sessionDeleteMode reads the frozen session option back out of the view.
+func sessionDeleteMode(t *testing.T, options json.RawMessage) string {
+	t.Helper()
+	var opts struct {
+		DeleteMode string `json:"delete_mode"`
+	}
+	if err := json.Unmarshal(options, &opts); err != nil {
+		t.Fatalf("parse session options: %v", err)
+	}
+	return opts.DeleteMode
 }
 
 // startExecution enqueues a session through the exported API.
 func (f *execFixture) startExecution(
-	planID, key, mode string,
+	planID, key string,
 ) (*worksetusecase.StartExecutionResult, error) {
 	f.t.Helper()
 	return f.svc.StartExecution(
@@ -302,14 +331,13 @@ func (f *execFixture) startExecution(
 		worksetusecase.StartExecutionRequest{
 			IfMatchVersion: f.operation().Version,
 			IdempotencyKey: key,
-			DeleteMode:     mode,
 		},
 	)
 }
 
-func (f *execFixture) mustStart(planID, key, mode string) *worksetusecase.ExecutionView {
+func (f *execFixture) mustStart(planID, key string) *worksetusecase.ExecutionView {
 	f.t.Helper()
-	res, err := f.startExecution(planID, key, mode)
+	res, err := f.startExecution(planID, key)
 	if err != nil {
 		f.t.Fatalf("StartExecution: %v", err)
 	}
@@ -370,21 +398,11 @@ func deleteOp(componentID, path string) reconcile.Operation {
 }
 
 func TestStartExecutionGates(t *testing.T) {
-	t.Run("not_confirmed", func(t *testing.T) {
-		f := newExecFixture(t)
-		f.seedRevision("plan-nc", false)
-		_, err := f.startExecution("plan-nc", "k-nc", "")
-		code, details := errorDetail(t, err)
-		if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "NOT_CONFIRMED") {
-			t.Fatalf("err = %s %v, want PLAN_NOT_EXECUTABLE [NOT_CONFIRMED]", code, details)
-		}
-	})
-
 	t.Run("not_current_revision", func(t *testing.T) {
 		f := newExecFixture(t)
 		// A revision row that was never promoted to the operation's current one.
 		f.seedUnpromotedRevision("plan-old")
-		_, err := f.startExecution("plan-old", "k-old", "")
+		_, err := f.startExecution("plan-old", "k-old")
 		code, details := errorDetail(t, err)
 		if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "NOT_CURRENT_REVISION") {
 			t.Fatalf("err = %s %v, want NOT_CURRENT_REVISION", code, details)
@@ -393,7 +411,7 @@ func TestStartExecutionGates(t *testing.T) {
 
 	t.Run("version_conflict", func(t *testing.T) {
 		f := newExecFixture(t)
-		f.seedRevision("plan-v", true)
+		f.seedRevision("plan-v")
 		_, err := f.svc.StartExecution(
 			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, "plan-v",
 			worksetusecase.StartExecutionRequest{IfMatchVersion: 1, IdempotencyKey: "k-v"},
@@ -406,7 +424,7 @@ func TestStartExecutionGates(t *testing.T) {
 
 	t.Run("draft_changed", func(t *testing.T) {
 		f := newExecFixture(t)
-		f.seedRevision("plan-dc", true)
+		f.seedRevision("plan-dc")
 		doc := mustDraft(t, f.draft())
 		doc.Mode = reconcile.ModeStrict
 		if _, err := f.svc.SaveDraft(
@@ -415,7 +433,7 @@ func TestStartExecutionGates(t *testing.T) {
 		); err != nil {
 			t.Fatalf("SaveDraft: %v", err)
 		}
-		_, err := f.startExecution("plan-dc", "k-dc", "")
+		_, err := f.startExecution("plan-dc", "k-dc")
 		code, details := errorDetail(t, err)
 		if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "DRAFT_CHANGED") {
 			t.Fatalf("err = %s %v, want DRAFT_CHANGED", code, details)
@@ -424,11 +442,11 @@ func TestStartExecutionGates(t *testing.T) {
 
 	t.Run("orphaned_workset", func(t *testing.T) {
 		f := newExecFixture(t)
-		f.seedRevision("plan-or", true)
+		f.seedRevision("plan-or")
 		if err := f.repo.DeleteLibrary(f.libraryID); err != nil {
 			t.Fatalf("DeleteLibrary: %v", err)
 		}
-		_, err := f.startExecution("plan-or", "k-or", "")
+		_, err := f.startExecution("plan-or", "k-or")
 		code, _ := errorDetail(t, err)
 		if code != "ORPHANED_WORKSET" {
 			t.Fatalf("err code = %s, want ORPHANED_WORKSET", code)
@@ -441,13 +459,13 @@ func TestStartExecutionGates(t *testing.T) {
 func TestStartExecutionSnapshotGates(t *testing.T) {
 	t.Run("blocked_component", func(t *testing.T) {
 		f := newExecFixture(t)
-		f.seedRevision("plan-bl", true, seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
+		f.seedRevision("plan-bl", seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
 		if _, err := f.repo.DB().Exec(
 			"UPDATE conversion_components SET status = 'blocked' WHERE plan_id = 'plan-bl'",
 		); err != nil {
 			t.Fatalf("block component: %v", err)
 		}
-		_, err := f.startExecution("plan-bl", "k-bl", "")
+		_, err := f.startExecution("plan-bl", "k-bl")
 		code, details := errorDetail(t, err)
 		if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "BLOCKED_COMPONENTS") {
 			t.Fatalf("err = %s %v, want BLOCKED_COMPONENTS", code, details)
@@ -457,23 +475,13 @@ func TestStartExecutionSnapshotGates(t *testing.T) {
 	t.Run("input_changed_vs_frozen_fingerprint", func(t *testing.T) {
 		f := newExecFixture(t)
 		f.writeAudio("albumA", "00.mp3", []byte("audio-one"))
-		f.seedRevision("plan-in", true, seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
+		f.seedRevision("plan-in", seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
 		// The disk (and the scan) moved on after the revision was frozen.
 		f.writeAudio("albumA", "99.mp3", []byte("later-audio"))
-		_, err := f.startExecution("plan-in", "k-in", "")
+		_, err := f.startExecution("plan-in", "k-in")
 		code, details := errorDetail(t, err)
 		if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "INPUT_CHANGED") {
 			t.Fatalf("err = %s %v, want INPUT_CHANGED", code, details)
-		}
-	})
-
-	t.Run("invalid_delete_mode", func(t *testing.T) {
-		f := newExecFixture(t)
-		f.seedRevision("plan-dm", true)
-		_, err := f.startExecution("plan-dm", "k-dm", "medium")
-		code, _ := errorDetail(t, err)
-		if code != "INVALID_DELETE_MODE" {
-			t.Fatalf("err code = %s, want INVALID_DELETE_MODE", code)
 		}
 	})
 
@@ -481,8 +489,8 @@ func TestStartExecutionSnapshotGates(t *testing.T) {
 		f := newExecFixture(t)
 		f.runDispatcher()
 		f.writeAudio("albumA", "00.mp3", []byte("already-satisfied"))
-		f.seedRevision("plan-zero", true, seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
-		started := f.mustStart("plan-zero", "k-zero", "")
+		f.seedRevision("plan-zero", seedComponent{member: "albumA", partition: reconcile.PartitionMatched})
+		started := f.mustStart("plan-zero", "k-zero")
 		done := f.waitTerminal(started.ExecutionID)
 		if done.Status != sqlite.ExecStatusSucceeded {
 			t.Fatalf("status = %s (%s: %s), want succeeded", done.Status, done.ErrorCode, done.ErrorMessage)
@@ -503,7 +511,7 @@ func TestExecutionSoftDeleteMovesAndSyncsInventory(t *testing.T) {
 	f := newExecFixture(t)
 	f.runDispatcher()
 	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("obsolete-audio"))
-	f.seedRevision("plan-soft", true, seedComponent{
+	f.seedRevision("plan-soft", seedComponent{
 		id:        "comp-soft",
 		member:    "albumA",
 		partition: reconcile.PartitionMatched,
@@ -511,13 +519,13 @@ func TestExecutionSoftDeleteMovesAndSyncsInventory(t *testing.T) {
 		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
 	})
 
-	started := f.mustStart("plan-soft", "k-soft", "")
+	started := f.mustStart("plan-soft", "k-soft")
 	done := f.waitTerminal(started.ExecutionID)
 	if done.Status != sqlite.ExecStatusSucceeded {
 		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
 	}
-	if done.DeleteMode != worksetusecase.ExecutionDeleteModeSoft {
-		t.Fatalf("delete mode = %s, want soft", done.DeleteMode)
+	if mode := sessionDeleteMode(t, done.Options); mode != "soft" {
+		t.Fatalf("delete mode = %s, want soft", mode)
 	}
 	if done.TotalOperations != 1 || done.CompletedOperations != 1 {
 		t.Fatalf("progress = %d/%d, want 1/1", done.CompletedOperations, done.TotalOperations)
@@ -562,7 +570,10 @@ func TestExecutionHardDeleteRemovesWithoutRecovery(t *testing.T) {
 	f := newExecFixture(t)
 	f.runDispatcher()
 	source, size, mtime := f.writeAudio("albumB", "01.mp3", []byte("hard-delete-me"))
-	f.seedRevision("plan-hard", true, seedComponent{
+	// The obsolete-audio handling is a draft setting: the seeded revision's own
+	// snapshot declares hard deletion.
+	f.setDraftDeleteMode("hard")
+	f.seedRevision("plan-hard", seedComponent{
 		id:        "comp-hard",
 		member:    "albumB",
 		partition: reconcile.PartitionUnmatched,
@@ -570,13 +581,13 @@ func TestExecutionHardDeleteRemovesWithoutRecovery(t *testing.T) {
 		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
 	})
 
-	started := f.mustStart("plan-hard", "k-hard", worksetusecase.ExecutionDeleteModeHard)
+	started := f.mustStart("plan-hard", "k-hard")
 	done := f.waitTerminal(started.ExecutionID)
 	if done.Status != sqlite.ExecStatusSucceeded {
 		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
 	}
-	if done.DeleteMode != worksetusecase.ExecutionDeleteModeHard {
-		t.Fatalf("delete mode = %s, want hard", done.DeleteMode)
+	if mode := sessionDeleteMode(t, done.Options); mode != "hard" {
+		t.Fatalf("delete mode = %s, want hard", mode)
 	}
 	entry := done.Components[0]
 	if len(entry.Removed) != 1 || len(entry.Recovery) != 0 {
@@ -596,8 +607,8 @@ func TestExecutionComponentFailureStopsAdmission(t *testing.T) {
 	first, _, _ := f.writeAudio("albumA", "00.mp3", []byte("first-file"))
 	second, size2, mtime2 := f.writeAudio("albumB", "00.mp3", []byte("second-file"))
 	// The frozen fact of the first component no longer matches the disk: the
-	// plan was confirmed before the file changed and the DB was never rescanned.
-	f.seedRevision("plan-fail", true,
+	// plan was made before the file changed and the DB was never rescanned.
+	f.seedRevision("plan-fail",
 		seedComponent{
 			id:        "comp-fail-a",
 			member:    "albumA",
@@ -614,7 +625,7 @@ func TestExecutionComponentFailureStopsAdmission(t *testing.T) {
 		},
 	)
 
-	started := f.mustStart("plan-fail", "k-fail", "")
+	started := f.mustStart("plan-fail", "k-fail")
 	done := f.waitTerminal(started.ExecutionID)
 	if done.Status != sqlite.ExecStatusFailed {
 		t.Fatalf("status = %s, want failed", done.Status)
@@ -646,7 +657,7 @@ func TestExecutionRevisionRunsOnceAndReplaysItsKey(t *testing.T) {
 	f := newExecFixture(t)
 	f.runDispatcher()
 	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("once-only"))
-	f.seedRevision("plan-once", true, seedComponent{
+	f.seedRevision("plan-once", seedComponent{
 		id:        "comp-once",
 		member:    "albumA",
 		partition: reconcile.PartitionMatched,
@@ -654,14 +665,14 @@ func TestExecutionRevisionRunsOnceAndReplaysItsKey(t *testing.T) {
 		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
 	})
 
-	first := f.mustStart("plan-once", "key-once", "")
+	first := f.mustStart("plan-once", "key-once")
 	done := f.waitTerminal(first.ExecutionID)
 	if done.Status != sqlite.ExecStatusSucceeded {
 		t.Fatalf("status = %s (%s)", done.Status, done.ErrorMessage)
 	}
 
 	// A retry of the same request observes its own session.
-	replay, err := f.startExecution("plan-once", "key-once", "")
+	replay, err := f.startExecution("plan-once", "key-once")
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -670,24 +681,17 @@ func TestExecutionRevisionRunsOnceAndReplaysItsKey(t *testing.T) {
 	}
 
 	// A new key on the same revision is refused: one execution per revision.
-	_, err = f.startExecution("plan-once", "key-once-2", "")
+	_, err = f.startExecution("plan-once", "key-once-2")
 	code, details := errorDetail(t, err)
 	if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "ALREADY_EXECUTED") {
 		t.Fatalf("err = %s %v, want ALREADY_EXECUTED", code, details)
-	}
-
-	// The same key with a different delete mode is a conflict, not a session.
-	_, err = f.startExecution("plan-once", "key-once", worksetusecase.ExecutionDeleteModeHard)
-	code, _ = errorDetail(t, err)
-	if code != "IDEMPOTENCY_KEY_REUSED" {
-		t.Fatalf("err code = %s, want IDEMPOTENCY_KEY_REUSED", code)
 	}
 }
 
 func TestExecutionConcurrentStartsHaveOneWriter(t *testing.T) {
 	f := newExecFixture(t)
 	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("race"))
-	f.seedRevision("plan-race", true, seedComponent{
+	f.seedRevision("plan-race", seedComponent{
 		id:        "comp-race",
 		member:    "albumA",
 		partition: reconcile.PartitionMatched,
@@ -704,7 +708,7 @@ func TestExecutionConcurrentStartsHaveOneWriter(t *testing.T) {
 	for _, key := range []string{"race-1", "race-2"} {
 		go func(k string) {
 			<-start
-			res, err := f.startExecution("plan-race", k, "")
+			res, err := f.startExecution("plan-race", k)
 			results <- outcome{res: res, err: err}
 		}(key)
 	}
@@ -739,7 +743,7 @@ func TestExecutionConcurrentStartsHaveOneWriter(t *testing.T) {
 func TestExecutionBlocksGenerationAndDraftEdits(t *testing.T) {
 	f := newExecFixture(t)
 	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("busy"))
-	f.seedRevision("plan-busy", true, seedComponent{
+	f.seedRevision("plan-busy", seedComponent{
 		id:        "comp-busy",
 		member:    "albumA",
 		partition: reconcile.PartitionMatched,
@@ -747,7 +751,7 @@ func TestExecutionBlocksGenerationAndDraftEdits(t *testing.T) {
 		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
 	})
 	// The session stays queued: the dispatcher is not started in this test.
-	queued := f.mustStart("plan-busy", "k-busy", "")
+	queued := f.mustStart("plan-busy", "k-busy")
 	view := f.operation()
 	if view.ActiveExecution == nil || view.ActiveExecution.ExecutionID != queued.ExecutionID {
 		t.Fatalf("active execution missing from the operation view: %+v", view.ActiveExecution)
@@ -773,7 +777,7 @@ func TestExecutionBlocksGenerationAndDraftEdits(t *testing.T) {
 
 	// A second start of the same revision answers with the active session's
 	// conflict, and canceling the queued session never runs it.
-	_, err = f.startExecution("plan-busy", "k-busy-2", "")
+	_, err = f.startExecution("plan-busy", "k-busy-2")
 	code, _ = errorDetail(t, err)
 	if code != "EXECUTION_IN_PROGRESS" {
 		t.Fatalf("second start: code = %s, want EXECUTION_IN_PROGRESS", code)
@@ -796,14 +800,14 @@ func TestExecutionSubscriptionSnapshotAndTerminalEvent(t *testing.T) {
 	f := newExecFixture(t)
 	f.runDispatcher()
 	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("streamed"))
-	f.seedRevision("plan-sse", true, seedComponent{
+	f.seedRevision("plan-sse", seedComponent{
 		id:        "comp-sse",
 		member:    "albumA",
 		partition: reconcile.PartitionMatched,
 		ops:       []reconcile.Operation{deleteOp("comp-sse", source)},
 		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
 	})
-	started := f.mustStart("plan-sse", "k-sse", "")
+	started := f.mustStart("plan-sse", "k-sse")
 
 	type event struct {
 		name string

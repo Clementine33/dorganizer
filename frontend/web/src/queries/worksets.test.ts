@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Operation, Workset } from '@/lib/api/types'
+import type { ExecutionView, Operation, Workset } from '@/lib/api/types'
 import { apiStub } from '@/test/api-stub'
 import { createTestQueryClient } from '@/test/query-client'
 import { queryKeys } from './query-keys'
 import {
   createWorksetMutationOptions,
   saveOperationDraftMutationOptions,
+  startExecutionMutationOptions,
   startGenerationMutationOptions,
   syncAfterDraftConflict,
+  syncAfterExecutionRefusal,
+  syncAfterExecutionTerminal,
   syncAfterGenerationTerminal,
 } from './worksets'
 
@@ -28,6 +31,8 @@ const operation: Operation = {
   },
   active_generation: null,
   latest_generation: null,
+  active_execution: null,
+  latest_execution: null,
 }
 
 const workset: Workset = {
@@ -124,5 +129,75 @@ describe('workset mutation cache synchronization', () => {
 
     expect(client.getQueryData(queryKeys.worksets.operation('ws-1', 'conversion'))).toBeUndefined()
     expect(client.getQueryData(queryKeys.worksets.draft('ws-1', 'conversion'))).toBeUndefined()
+  })
+})
+
+const executionView: ExecutionView = {
+  execution_id: 'exec-1',
+  workset_id: 'ws-1',
+  operation_type: 'conversion',
+  plan_id: 'plan-1',
+  status: 'queued',
+  options: { delete_mode: 'soft' },
+  total_components: 2,
+  completed_components: 0,
+  total_operations: 3,
+  completed_operations: 0,
+  current_root: '',
+  current_component_id: '',
+  current_phase: '',
+  components: [],
+  error_code: '',
+  error_message: '',
+  started_at: '',
+  finished_at: '',
+  created_at: '2026-09-16T00:00:00Z',
+}
+
+describe('execution cache synchronization', () => {
+  it('execution start seeds the session entry and refreshes the operation and its revision', async () => {
+    const client = createTestQueryClient()
+    client.setQueryData(queryKeys.worksets.operation('ws-1', 'conversion'), operation)
+    client.setQueryData(queryKeys.worksets.revision('ws-1', 'conversion', 'plan-1'), { marker: 'stale' })
+    const api = apiStub()
+    const options = startExecutionMutationOptions(api, client)
+
+    options.onSuccess(
+      { created: true, execution: executionView },
+      { worksetId: 'ws-1', operation: 'conversion', planId: 'plan-1' },
+    )
+    await flush()
+
+    expect(client.getQueryData(queryKeys.worksets.execution('ws-1', 'conversion', 'exec-1'))).toEqual(executionView)
+    expect(client.getQueryData(queryKeys.worksets.operation('ws-1', 'conversion'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.revision('ws-1', 'conversion', 'plan-1'))).toBeUndefined()
+  })
+
+  it('a refused execution start refreshes the operation and its revisions, never retrying', async () => {
+    const client = createTestQueryClient()
+    client.setQueryData(queryKeys.worksets.operation('ws-1', 'conversion'), operation)
+    client.setQueryData(queryKeys.worksets.revisionList('ws-1', 'conversion'), { marker: 'stale' })
+
+    await syncAfterExecutionRefusal(client, 'ws-1', 'conversion')
+
+    expect(client.getQueryData(queryKeys.worksets.operation('ws-1', 'conversion'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.revisionList('ws-1', 'conversion'))).toBeUndefined()
+  })
+
+  it('an execution terminal refreshes the session report, the operation, the revisions and the library inventory', async () => {
+    const client = createTestQueryClient()
+    client.setQueryData(queryKeys.worksets.detail('ws-1'), workset)
+    const keys = [
+      queryKeys.worksets.operation('ws-1', 'conversion'),
+      queryKeys.worksets.revisionList('ws-1', 'conversion'),
+      queryKeys.worksets.executionsPrefix('ws-1', 'conversion'),
+      queryKeys.libraries.foldersPrefix('lib-a'),
+      queryKeys.libraries.treesPrefix('lib-a'),
+    ]
+    for (const key of keys) client.setQueryData(key, { marker: 'stale' })
+
+    await syncAfterExecutionTerminal(client, 'ws-1', 'conversion')
+
+    for (const key of keys) expect(client.getQueryData(key)).toBeUndefined()
   })
 })

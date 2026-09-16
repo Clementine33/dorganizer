@@ -60,10 +60,6 @@ func NewServer(deps Dependencies) http.Handler {
 		"GET /api/v1/worksets/{id}/operations/{type}/revisions/{planId}",
 		protect(http.HandlerFunc(s.getRevision)),
 	)
-	mux.Handle(
-		"POST /api/v1/worksets/{id}/operations/{type}/revisions/{planId}/confirmation",
-		protect(http.HandlerFunc(s.confirmRevision)),
-	)
 	// Execution sessions: the only write path to the disk. The session is
 	// addressed through its operation, never by a workset-level route.
 	mux.Handle(

@@ -1,4 +1,5 @@
 import type {
+  DeleteMode,
   DraftMember,
   OperationDraftDocument,
   OverrideSet,
@@ -26,6 +27,11 @@ export type ParticipationIntent = 'keep' | 'participate' | 'exclude'
 
 export interface EditIntent {
   units: Partial<Record<OverrideUnit, UnitIntent<unknown>>>
+  /**
+   * The obsolete-audio handling. It is a whole-operation choice, so it exists
+   * only on the common target and is never a member override.
+   */
+  deleteMode?: UnitIntent<DeleteMode>
   participation: ParticipationIntent
 }
 
@@ -240,6 +246,7 @@ export function applyIntent(
       // Common settings have no inheritance to restore: only `set` writes.
       if (unitIntent?.intent === 'set') setCommon(doc, unit, unitIntent.value)
     }
+    if (intent.deleteMode?.intent === 'set') doc.delete_mode = intent.deleteMode.value
     pruneMembers(doc)
     return doc
   }
@@ -269,6 +276,7 @@ export function applyIntent(
 /** True when the intent would write anything at all (C09). */
 export function intentIsEmpty(intent: EditIntent): boolean {
   if (intent.participation !== 'keep') return false
+  if (intent.deleteMode && intent.deleteMode.intent !== 'keep') return false
   return OVERRIDE_UNITS.every((unit) => {
     const unitIntent = intent.units[unit]
     return !unitIntent || unitIntent.intent === 'keep'
@@ -277,8 +285,12 @@ export function intentIsEmpty(intent: EditIntent): boolean {
 
 /** How many units an intent sets or restores — the K in "N folders, K settings". */
 export function intentUnitCount(intent: EditIntent): number {
-  return OVERRIDE_UNITS.filter((unit) => {
-    const unitIntent = intent.units[unit]
-    return unitIntent && unitIntent.intent !== 'keep'
-  }).length
+  const deleteModeSet = intent.deleteMode && intent.deleteMode.intent !== 'keep' ? 1 : 0
+  return (
+    deleteModeSet +
+    OVERRIDE_UNITS.filter((unit) => {
+      const unitIntent = intent.units[unit]
+      return unitIntent && unitIntent.intent !== 'keep'
+    }).length
+  )
 }

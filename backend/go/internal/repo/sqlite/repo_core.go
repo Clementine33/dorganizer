@@ -606,7 +606,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_lib_path ON library_folder
 
 -- Worksets: long-lived aggregates owned by a library (nullable once the
 -- library is deleted). title duplicates are allowed. version is the metadata
--- concurrency counter (rename only); drafts, generations and confirmations
+-- concurrency counter (rename only); drafts and generations
 -- advance their operation's own version (workset_operations.version).
 -- creation_idem_key enables replay of workset creation for up to 30 days
 -- (expired keys are cleared, never the row).
@@ -642,7 +642,7 @@ CREATE TABLE IF NOT EXISTS workset_members (
 
 -- Independent Workset Operations (ADR 0004 §2), keyed by (workset, type).
 -- version is the operation concurrency counter: draft saves and revision
--- publication advance it, and If-Match on draft/generation/confirmation
+-- publication advance it, and If-Match on draft/generation
 -- writes is bound to it. current_revision_id is never mutated by a failed,
 -- canceled or interrupted generation.
 CREATE TABLE IF NOT EXISTS workset_operations (
@@ -689,16 +689,6 @@ CREATE TABLE IF NOT EXISTS workset_operation_revisions (
     UNIQUE (workset_id, operation_type, revision_index)
 );
 
--- One confirmation per operation revision, bound to plan_id: a new revision
--- never inherits the previous confirmation.
-CREATE TABLE IF NOT EXISTS workset_operation_confirmations (
-    plan_id TEXT PRIMARY KEY REFERENCES plans(plan_id) ON DELETE CASCADE,
-    workset_id TEXT NOT NULL,
-    operation_type TEXT NOT NULL,
-    confirmed_version INTEGER NOT NULL DEFAULT 0,
-    confirmed_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Async planning session. status: queued|running|completed|failed|canceled|
 -- interrupted. idempotency_key is guaranteed for 30 days for completed rows;
 -- failed/canceled/interrupted release the key immediately. cancel_requested is
@@ -739,7 +729,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_op_status
 CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
     ON plan_generations(status, created_at, generation_id);
 
--- Workset execution sessions: the durable record of one confirmed revision
+-- Workset execution sessions: the durable record of one revision
 -- being executed (ADR 0004 §4, M2). status: queued|running|succeeded|failed|
 -- canceled|interrupted. A revision is executed at most once: the unique
 -- idempotency index holds the key for the session's whole life, and the

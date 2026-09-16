@@ -7,7 +7,8 @@ import type { Operation, PlanningState, RevisionCounts } from '@/lib/api/types'
 /**
  * Compact operation context: workspace/operation identity, version state and
  * the five independent summary facts (F16). Blocking, unmet-target and stale
- * notices are never hidden for density.
+ * notices are never hidden for density. A planned revision is directly
+ * executable — there is no separate confirmation step.
  */
 const props = defineProps<{
   title: string
@@ -18,20 +19,23 @@ const props = defineProps<{
   validationState: string | null
   /** Label of the revision being shown; null while editing the current draft. */
   revisionLabel: string | null
-  confirmed: boolean
   generating: boolean
   canGenerate: boolean
-  /** Why confirmation is unavailable right now (null when it is available). */
-  confirmBlocked: string | null
-  /** The server's refusal of the last confirmation attempt, if any. */
-  error: string | null
+  /** Why execution is unavailable right now (null when it may start). */
+  executeBlocked: string | null
+  /** A session exists for the revision in view (live or finished). */
+  showExecution: boolean
+  /** A cancel request is waiting for the server to reach its terminal status. */
+  canceling: boolean
   busy: boolean
 }>()
 
 const emit = defineEmits<{
   generate: []
   cancel: []
-  confirm: []
+  execute: []
+  'open-execution': []
+  'cancel-execution': []
   'restore-current': []
 }>()
 
@@ -59,7 +63,7 @@ const cells = computed(() =>
     : [],
 )
 const validationWarning = computed(() => {
-  if (props.validationState === 'stale') return '输入已变化，当前版本需要重新规划后才能确认'
+  if (props.validationState === 'stale') return '输入已变化，当前版本需要重新规划后才能执行'
   if (props.validationState === 'unavailable') return '媒体库不可用，无法校验当前版本'
   return null
 })
@@ -75,7 +79,6 @@ const validationWarning = computed(() => {
       <Badge :tone="state.tone" size="md">{{ state.label }}</Badge>
       <Badge v-if="operation" tone="neutral">操作版本 v{{ operation.version }}</Badge>
       <Badge v-if="revisionLabel" tone="neutral">{{ revisionLabel }}</Badge>
-      <Badge v-if="confirmed" tone="success">已确认</Badge>
 
       <div class="ml-auto flex flex-wrap items-center gap-1.5">
         <Button v-if="operation?.active_generation" variant="destructive" size="sm" :disabled="busy" @click="emit('cancel')">
@@ -85,15 +88,36 @@ const validationWarning = computed(() => {
           生成计划版本
         </Button>
         <Button
-          v-if="operation?.current_revision && !revisionLabel"
-          :variant="confirmed ? 'secondary' : 'default'"
+          v-if="operation?.active_execution"
+          variant="destructive"
           size="sm"
-          :disabled="busy || confirmBlocked !== null"
-          :title="confirmBlocked ?? undefined"
-          data-testid="confirm-revision"
-          @click="emit('confirm')"
+          :disabled="canceling"
+          data-testid="cancel-execution"
+          @click="emit('cancel-execution')"
         >
-          {{ confirmed ? '确认（已确认）' : '确认当前版本' }}
+          {{ canceling ? '取消中…' : '取消执行' }}
+        </Button>
+        <!-- The plan is directly executable; generating it was the gate. -->
+        <Button
+          v-else-if="operation?.current_revision && !revisionLabel"
+          size="sm"
+          :disabled="busy || executeBlocked !== null"
+          :title="executeBlocked ?? undefined"
+          data-testid="start-execution"
+          @click="emit('execute')"
+        >
+          执行当前版本
+        </Button>
+        <!-- The session report lives in its own detail page; this is the way
+             back to it after the carrier was closed. -->
+        <Button
+          v-if="showExecution"
+          variant="ghost"
+          size="sm"
+          data-testid="open-execution"
+          @click="emit('open-execution')"
+        >
+          执行结果
         </Button>
         <Button v-if="revisionLabel" variant="ghost" size="sm" @click="emit('restore-current')">回到当前草稿</Button>
       </div>
@@ -109,13 +133,6 @@ const validationWarning = computed(() => {
 
     <p v-if="validationWarning" class="mt-1 text-[11px] text-[var(--warning-ink)]" data-testid="validation-warning">
       {{ validationWarning }}
-    </p>
-    <!-- Why 确认当前版本 is unavailable is stated, never left to a disabled button (F16, T14). -->
-    <p v-if="confirmBlocked" class="mt-1 text-[11px] text-[var(--warning-ink)]" data-testid="confirm-blocked">
-      暂不能确认：{{ confirmBlocked }}。
-    </p>
-    <p v-if="error" class="mt-1 text-[11px] text-[var(--danger-ink)]" role="alert" data-testid="confirm-error">
-      {{ error }}
     </p>
     <p v-if="operation?.latest_generation?.status === 'failed'" class="mt-1 text-[11px] text-[var(--danger-ink)]">
       上次生成失败：{{ operation.latest_generation.error_message || operation.latest_generation.error_code }}

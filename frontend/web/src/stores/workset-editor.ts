@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
-import type { OperationDraftDocument, OperationType, OverrideUnit } from '@/lib/api/types'
+import type { DeleteMode, OperationDraftDocument, OperationType, OverrideUnit } from '@/lib/api/types'
 import {
   applyIntent,
   EMPTY_INTENT,
   intentIsEmpty,
-  OVERRIDE_UNITS,
+  intentUnitCount,
   type EditIntent,
   type EditTarget,
 } from '@/features/worksets/draft-intents'
@@ -51,10 +51,7 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
     },
     editedUnitCount(): number {
       if (!this.session) return 0
-      return OVERRIDE_UNITS.filter((unit) => {
-        const unitIntent = this.session!.intent.units[unit]
-        return unitIntent && unitIntent.intent !== 'keep'
-      }).length
+      return intentUnitCount(this.session.intent)
     },
   },
   actions: {
@@ -94,6 +91,11 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
         ...this.session.intent,
         units: { ...this.session.intent.units, [unit]: next },
       }
+    },
+    /** The obsolete-audio handling: a whole-operation choice, common only. */
+    setDeleteMode(value: DeleteMode) {
+      if (!this.session) return
+      this.session.intent = { ...this.session.intent, deleteMode: { intent: 'set', value } }
     },
     setParticipation(participation: EditIntent['participation']) {
       if (!this.session) return

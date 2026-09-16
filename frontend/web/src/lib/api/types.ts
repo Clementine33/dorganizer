@@ -193,6 +193,8 @@ export interface Operation {
   current_revision: CurrentRevisionSummary | null
   active_generation: GenerationProgress | null
   latest_generation: GenerationSummary | null
+  active_execution: ExecutionProgress | null
+  latest_execution: ExecutionRef | null
 }
 
 export interface Workset {
@@ -261,6 +263,12 @@ export interface DraftMember {
 export interface OperationDraftDocument {
   schema_version: number
   mode?: 'strict' | 'available_sources'
+  /**
+   * Obsolete-audio handling of the whole operation; absent means soft. It is
+   * one global choice (never a per-member override) and is frozen into every
+   * revision the draft produces.
+   */
+  delete_mode?: DeleteMode
   classifier_tags: string[]
   matched: DesiredProfile
   unmatched: DesiredProfile
@@ -330,6 +338,124 @@ export type GenerationEvent =
   | { type: 'canceled'; data: { generation_id: string } }
   | { type: 'interrupted'; data: { generation_id: string } }
   | { type: 'error'; data: { code: string; message: string } }
+
+// ==================== Execution sessions ====================
+
+export type DeleteMode = 'soft' | 'hard'
+export type ExecutionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'interrupted'
+
+/**
+ * Task-owned frozen session options. The generic side stores and forwards
+ * this payload untouched; the conversion task freezes the delete mode its
+ * draft declared.
+ */
+export interface ExecutionOptions {
+  delete_mode?: DeleteMode
+}
+
+/** Where a failing component stopped (only set on failure). */
+export type ExecutionStage = 'precheck' | 'materialize' | 'validate' | 'commit' | 'remove'
+
+/** Compact session reference attached to the operation and revision views. */
+export interface ExecutionRef {
+  execution_id: string
+  plan_id: string
+  status: ExecutionStatus
+  error_code?: string
+  error_message?: string
+  finished_at?: string
+}
+
+/** Progress of the session currently queued/running for an operation. */
+export interface ExecutionProgress {
+  execution_id: string
+  plan_id: string
+  status: ExecutionStatus
+  options?: ExecutionOptions
+  total_components: number
+  completed_components: number
+  total_operations: number
+  completed_operations: number
+  current_root: string
+  current_component_id: string
+  current_phase: string
+}
+
+/**
+ * One component's frozen work and observed outcome. `remaining` lists the
+ * operations that did not complete (frozen order) and `recovery` the preserved
+ * files an operator may need to look at.
+ */
+export interface ExecutionComponent {
+  component_index: number
+  component_id: string
+  root_path: string
+  partition: 'matched' | 'unmatched'
+  status: 'pending' | 'succeeded' | 'failed' | 'canceled'
+  stage?: ExecutionStage
+  operations: number
+  completed_operations: number
+  committed: string[]
+  removed: string[]
+  remaining: string[]
+  recovery: string[]
+  error_code?: string
+  error_message?: string
+  inventory_synced: boolean
+  inventory_sync_error?: string
+}
+
+/** The session detail payload; also the SSE snapshot. */
+export interface ExecutionView {
+  execution_id: string
+  workset_id: string
+  operation_type: OperationType
+  plan_id: string
+  status: ExecutionStatus
+  options?: ExecutionOptions
+  total_components: number
+  completed_components: number
+  total_operations: number
+  completed_operations: number
+  current_root: string
+  current_component_id: string
+  current_phase: string
+  components: ExecutionComponent[]
+  error_code: string
+  error_message: string
+  started_at: string
+  finished_at: string
+  created_at: string
+}
+
+/** The progress event carries counts only; `components` needs the detail GET. */
+export interface ExecutionProgressEvent {
+  execution_id: string
+  status: ExecutionStatus
+  total_components: number
+  completed_components: number
+  total_operations: number
+  completed_operations: number
+  current_root: string
+  current_component_id: string
+  current_phase: string
+}
+
+// Execution SSE events (execution_snapshot payload is an ExecutionView).
+export type ExecutionEvent =
+  | { type: 'execution_snapshot'; data: ExecutionView }
+  | { type: 'progress'; data: ExecutionProgressEvent }
+  | { type: 'succeeded'; data: { execution_id: string; plan_id: string } }
+  | { type: 'failed'; data: { execution_id: string; error_code: string; error_message: string } }
+  | { type: 'canceled'; data: { execution_id: string } }
+  | { type: 'interrupted'; data: { execution_id: string } }
+  | { type: 'error'; data: { code: string; message: string } }
+
+export interface StartExecutionResponse {
+  /** true only for a fresh 202; false when the idempotency key replayed (200). */
+  created: boolean
+  execution: ExecutionView
+}
 
 // ==================== Revision detail (immutable review) ====================
 
@@ -428,13 +554,6 @@ export interface ConversionPlanPayload {
   components: ComponentOutcome[]
 }
 
-/** Server-side confirmation state of one revision (ADR 0003 §5). */
-export interface ConfirmationState {
-  confirmed: boolean
-  confirmed_version?: number
-  confirmed_at?: string
-}
-
 /** One member of a frozen revision: effective settings plus unit provenance. */
 export interface RevisionMember {
   member_id: string
@@ -473,7 +592,8 @@ export interface RevisionDetailResponse {
   members: RevisionMember[]
   roots: RootValidation[]
   component_roots: ComponentRootRef[]
-  confirmation: ConfirmationState
+  /** The session that ran this revision, if any (a revision runs at most once). */
+  execution: ExecutionRef | null
 }
 
 export interface ApiClientContract {
@@ -534,10 +654,27 @@ export interface ApiClientContract {
     planId: string,
     signal?: AbortSignal,
   ): Promise<RevisionDetailResponse>
-  confirmRevision(
+  startExecution(
     worksetId: string,
     operation: OperationType,
     planId: string,
-    ifMatchVersion: number,
-  ): Promise<ConfirmationState>
+    input: { ifMatchVersion: number; idempotencyKey: string },
+  ): Promise<StartExecutionResponse>
+  getExecution(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<ExecutionView>
+  cancelExecution(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+  ): Promise<ExecutionView>
+  streamExecutionEvents(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+    signal: AbortSignal,
+  ): AsyncIterable<ExecutionEvent>
 }

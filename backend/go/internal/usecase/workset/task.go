@@ -67,9 +67,10 @@ type Task interface {
 	EvaluateRevision(repo *sqlite.Repository, in RevisionFacts) (RevisionHealth, error)
 
 	// FreezeExecution validates that a revision can run and freezes its
-	// ordered execution units. Business block reasons are returned as
-	// fail-forward values alongside a nil error.
-	FreezeExecution(repo *sqlite.Repository, in RevisionFacts, deleteMode string) (FrozenExecution, []string, error)
+	// ordered execution units plus the task's opaque execution options.
+	// Business block reasons are returned as fail-forward values alongside a
+	// nil error.
+	FreezeExecution(repo *sqlite.Repository, in RevisionFacts) (FrozenExecution, []string, error)
 
 	// RunUnit executes one frozen unit and reports its observed facts; the
 	// generic side applies them to the report and the observed inventory.
@@ -180,17 +181,19 @@ type ExecutionUnit struct {
 }
 
 // FrozenExecution is a task's frozen plan for one execution session.
+// Options is the task-owned session configuration (conversion: the delete
+// mode its draft declared); the generic side stores and forwards it untouched.
 type FrozenExecution struct {
 	Units           []ExecutionUnit
 	TotalOperations int
+	Options         json.RawMessage
 }
 
-// UnitRunInput is one unit run's context. DeleteMode is the frozen session
-// option as the wire and the session row carry it today; it folds into an
-// opaque options payload when the execution request payload moves.
+// UnitRunInput is one unit run's context. Options is the frozen session
+// options payload exactly as the task froze them at the start of the session.
 type UnitRunInput struct {
 	WorksetRoot string
-	DeleteMode  string
+	Options     json.RawMessage
 	Unit        ExecutionUnit
 	// Outcome is the unit's frozen plan payload, as stored in the revision.
 	Outcome json.RawMessage

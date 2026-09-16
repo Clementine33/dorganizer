@@ -29,8 +29,8 @@ const (
 	ExecStatusInterrupted = "interrupted"
 )
 
-// PlanExecution is one persisted execution session: the durable record of a
-// confirmed revision being executed against the disk. RequestJSON freezes the
+// PlanExecution is one persisted execution session: the durable record of one
+// revision being executed against the disk. RequestJSON freezes the
 // ordered execution units (generic identity plus the task's opaque payload)
 // and the frozen session options at creation time; ReportJSON is the unit
 // outcome report.
@@ -128,27 +128,25 @@ var ErrExecutionNotEligible = errors.New("execution is not eligible")
 
 // ExecutionGuards are the persisted facts an execution start must re-check
 // inside its own write transaction: the read-only eligibility gates cannot
-// freeze the operation version, the confirmation or the draft hash on their
-// own.
+// freeze the operation version or the draft hash on their own.
 type ExecutionGuards struct {
 	ExpectedOperationVersion int
 	ExpectedCurrentRevision  string
 	ExpectedDraftHash        string
-	RequireConfirmation      bool
 }
 
 // CreateExecutionGuarded inserts a queued execution session only when the
 // persisted eligibility facts still hold, as one conditional write statement:
 // the guard predicates and the insert are evaluated atomically by SQLite, so a
-// concurrent draft save, revision promotion, confirmation, generation or
-// library deletion cannot slip between the gate checks and the session's
-// creation. The unique indexes cover the remaining invariants (one session per
-// idempotency key and per revision).
+// concurrent draft save, revision promotion, generation or library deletion
+// cannot slip between the gate checks and the session's creation. The unique
+// indexes cover the remaining invariants (one session per idempotency key and
+// per revision).
 //
 // Sentinel failures: ErrExecutionIdemConflict (key or revision already has a
 // session), ErrVersionConflict, ErrRevisionNotFound (no longer the current
-// revision), ErrDraftChanged, ErrConfirmationNotFound, ErrGenerationInProgress,
-// ErrWorksetOrphaned, ErrWorksetNotFound, ErrOperationNotFound.
+// revision), ErrDraftChanged, ErrGenerationInProgress, ErrWorksetOrphaned,
+// ErrWorksetNotFound, ErrOperationNotFound.
 func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards) error {
 	now := e.CreatedAt.Format(timeFormat)
 	result, err := r.db.Exec(`
@@ -170,9 +168,6 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 			SELECT 1 FROM workset_operation_drafts d
 			WHERE d.workset_id = ? AND d.operation_type = ? AND d.draft_hash = ?
 		)
-		AND EXISTS (
-			SELECT 1 FROM workset_operation_confirmations c WHERE c.plan_id = ?
-		)
 		AND NOT EXISTS (
 			SELECT 1 FROM plan_generations gen
 			WHERE gen.workset_id = ? AND gen.operation_type = ? AND gen.status IN ('queued','running')
@@ -183,7 +178,6 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 		e.WorksetID,
 		e.WorksetID, e.OperationType, g.ExpectedOperationVersion, e.PlanID,
 		e.WorksetID, e.OperationType, g.ExpectedDraftHash,
-		e.PlanID,
 		e.WorksetID, e.OperationType)
 	if err != nil {
 		if isUniqueConstraintError(err) {
@@ -244,17 +238,6 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 	}
 	if draftHash != g.ExpectedDraftHash {
 		return ErrDraftChanged
-	}
-	if g.RequireConfirmation {
-		var confirmed int
-		if confirmErr := r.db.QueryRow(
-			"SELECT COUNT(*) FROM workset_operation_confirmations WHERE plan_id = ?", e.PlanID,
-		).Scan(&confirmed); confirmErr != nil {
-			return confirmErr
-		}
-		if confirmed == 0 {
-			return ErrConfirmationNotFound
-		}
 	}
 	var generating int
 	if genErr := r.db.QueryRow(`

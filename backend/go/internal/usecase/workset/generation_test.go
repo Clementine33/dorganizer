@@ -85,7 +85,7 @@ func TestGenerationPublishesRevisionAndReplays(t *testing.T) {
 
 // TestDraftChangeMakesOperationNeedPlanning covers P02: after a draft change
 // the operation is dirty, and the next successful session publishes a new
-// revision that does not inherit the previous confirmation.
+// revision.
 func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
@@ -97,17 +97,6 @@ func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
 		t.Fatalf("first generation: %+v", first)
 	}
 	op := f.operation(ws.WorksetID)
-	if _, err := f.svc.ConfirmRevision(
-		f.ctx,
-		ws.WorksetID,
-		worksetusecase.OperationTypeConversion,
-		first.RevisionID,
-		worksetusecase.ConfirmRequest{
-			IfMatchVersion: op.Version,
-		},
-	); err != nil {
-		t.Fatalf("ConfirmRevision: %v", err)
-	}
 
 	doc := draftDoc()
 	doc.ClassifierTags = []string{"别的标签"}
@@ -119,18 +108,6 @@ func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
 	second := f.runGeneration(ws.WorksetID, saved.Version)
 	if second.Status != "completed" || second.RevisionID == first.RevisionID {
 		t.Fatalf("second generation = %+v", second)
-	}
-	conf, err := f.svc.GetConfirmation(f.ctx, ws.WorksetID, worksetusecase.OperationTypeConversion, second.RevisionID)
-	if err != nil {
-		t.Fatalf("GetConfirmation: %v", err)
-	}
-	if conf.Confirmed {
-		t.Fatal("a new revision must not inherit the previous confirmation")
-	}
-	// The historical revision keeps its own confirmation record.
-	old, err := f.svc.GetConfirmation(f.ctx, ws.WorksetID, worksetusecase.OperationTypeConversion, first.RevisionID)
-	if err != nil || !old.Confirmed {
-		t.Fatalf("historical confirmation lost: %+v err=%v", old, err)
 	}
 }
 
@@ -249,8 +226,8 @@ func TestGenerationRejectsScanInProgress(t *testing.T) {
 	}
 }
 
-// TestGenerationScopedAddressing covers T10: sessions, revisions and
-// confirmations are addressable only through their owning operation.
+// TestGenerationScopedAddressing covers T10: sessions and revisions are
+// addressable only through their owning operation.
 func TestGenerationScopedAddressing(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
@@ -283,17 +260,6 @@ func TestGenerationScopedAddressing(t *testing.T) {
 		gen.RevisionID,
 	); err == nil {
 		t.Fatal("a revision must not resolve through another workset")
-	}
-	if _, err := f.svc.ConfirmRevision(
-		f.ctx,
-		other.WorksetID,
-		worksetusecase.OperationTypeConversion,
-		gen.RevisionID,
-		worksetusecase.ConfirmRequest{
-			IfMatchVersion: f.operation(other.WorksetID).Version,
-		},
-	); err == nil {
-		t.Fatal("a confirmation must not resolve through another workset")
 	}
 	if _, err := f.svc.GetGeneration(f.ctx, ws.WorksetID, "rename", gen.GenerationID); err == nil {
 		t.Fatal("an unknown operation type must not resolve")

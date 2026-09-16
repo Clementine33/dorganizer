@@ -174,9 +174,9 @@ Two independent counters, never interchangeable:
 | Version | Advances on | Guarded by |
 | --- | --- | --- |
 | `workset.version` (metadata) | rename | `If-Match` on `PATCH /worksets/{id}` |
-| `operation.version` | draft save, revision publication | `If-Match` on draft save, generation start, confirmation |
+| `operation.version` | draft save, revision publication | `If-Match` on draft save, generation start |
 
-A rename therefore never dirties an operation or revokes a confirmation, and
+A rename therefore never dirties an operation, and
 another operation's change never advances this operation's version. There is no
 separate draft counter: `GET .../draft` returns the operation version to echo
 back as `If-Match`.
@@ -199,9 +199,8 @@ All routes require auth and use the standard error envelope.
 | GET | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/events` | SSE progress (`session_snapshot`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/cancel` | Cooperative cancel; idempotent on terminal sessions. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/revisions` | History, newest first, keyset `?before_index=&limit=` → `next_before_index`. |
-| GET | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}` | Immutable snapshot: `root_path`, `snapshot_token`, `status`, `summary`, the plan payload in its task envelope (`task: {kind, schema_version, payload}` — conversion: policy, classifier, summary, components), `counts`, frozen `members[]` (effective settings + per-unit `sources`), `roots[]`, `component_roots[]`, `confirmation`, and `execution` (the session that ran this revision, if any). |
-| POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/confirmation` | Formal whole-revision confirmation, `If-Match` = operation version. 201 first / 200 idempotent repeat. 409 `PLAN_NOT_CONFIRMABLE` with `details[]`: `NOT_CURRENT_REVISION`, `DRAFT_CHANGED`, `GENERATION_IN_PROGRESS`, `INPUT_CHANGED`, `BLOCKED_COMPONENTS`. Unmet targets and zero-operation revisions do not block. `ORPHANED_WORKSET` when the library is gone. |
-| POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions` | Execute a confirmed revision (see below). Body `{"delete_mode":"soft"\|"hard"}`, optional, default `soft`. `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"execution":…}`; 200 with the same session for a key replay. |
+| GET | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}` | Immutable snapshot: `root_path`, `snapshot_token`, `status`, `summary`, the plan payload in its task envelope (`task: {kind, schema_version, payload}` — conversion: policy, classifier, summary, components), `counts`, frozen `members[]` (effective settings + per-unit `sources`), `roots[]`, `component_roots[]`, and `execution` (the session that ran this revision, if any). |
+| POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions` | Execute the operation's current revision (see below). No request body: the worklist and the session options (the obsolete-audio handling the draft declares) are the frozen revision's. `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"execution":…}`; 200 with the same session for a key replay. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}` | Session detail, including the per-component report. A session of another workset or operation is 404. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/events` | SSE execution stream (`execution_snapshot`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/cancel` | Cooperative cancel; idempotent on terminal sessions (200 with the session either way). |
@@ -214,12 +213,11 @@ effective targets are consumed as persisted — no reconcile, no live draft, no
 client-supplied file list.
 
 **Authorization.** The gates below all run before a session exists; they are
-the same facts confirmation certified, re-read at execution time:
+the plan's own facts, re-read at execution time:
 
 | Rejection (409 unless noted) | Meaning |
 | --- | --- |
 | `PLAN_NOT_EXECUTABLE` + `NOT_CURRENT_REVISION` | the plan is not the operation's current revision |
-| `PLAN_NOT_EXECUTABLE` + `NOT_CONFIRMED` | the revision has no confirmation |
 | `PLAN_NOT_EXECUTABLE` + `DRAFT_CHANGED` | the live draft no longer matches the revision's frozen draft hash |
 | `PLAN_NOT_EXECUTABLE` + `INPUT_CHANGED` | a root is missing or its live inventory fingerprint no longer matches the frozen one, or the revision's members no longer resolve |
 | `PLAN_NOT_EXECUTABLE` + `BLOCKED_COMPONENTS` | the frozen snapshot has a blocked component |
@@ -228,16 +226,15 @@ the same facts confirmation certified, re-read at execution time:
 | `EXECUTION_IN_PROGRESS` | another session of this operation is queued/running |
 | `SCAN_IN_PROGRESS` | the library root is being scanned |
 | `VERSION_CONFLICT` | stale `If-Match`; re-read the operation |
-| `IDEMPOTENCY_KEY_REUSED` | the key was used for another revision or delete mode |
+| `IDEMPOTENCY_KEY_REUSED` | the key was used for another revision |
 | `ORPHANED_WORKSET` | the library is gone; orphaned worksets are read-only |
-| `INVALID_DELETE_MODE` (400) | `delete_mode` is neither `soft` nor `hard` |
 
 **One session per revision.** The storage enforces it (a unique index on the
 revision): a retry with the same `Idempotency-Key` returns its own session
 (200), a new key on an executed revision is `ALREADY_EXECUTED`, and concurrent
 starts have exactly one winner. Failures, partial completions and interrupted
-sessions do not auto-retry: refresh the inputs (rescan), then generate and
-confirm a new revision — an old confirmation never authorizes a second run.
+sessions do not auto-retry: refresh the inputs (rescan), then generate a new
+revision — a revision never runs twice.
 
 **Lifecycle.** Statuses `queued` → `running` → `succeeded` | `failed` |
 `canceled` | `interrupted`; a terminal status never regresses. Sessions run
@@ -251,7 +248,9 @@ component's disk state must be treated as unverified (a temporary
 `<target>.tmp.<token>` output may remain).
 
 **Detail payload** (also the SSE snapshot): `execution_id`, `workset_id`,
-`operation_type`, `plan_id`, `status`, `delete_mode`, `total_components`,
+`operation_type`, `plan_id`, `status`, `options` (the task-owned frozen
+session options — conversion: `{"delete_mode":"soft"|"hard"}`),
+`total_components`,
 `completed_components` (components that are no longer pending),
 `total_operations`, `completed_operations`, `current_root`,
 `current_component_id`, `current_phase` (`component` while a component runs),
@@ -297,12 +296,16 @@ cannot be scanned.
 ### Operation draft document
 
 The draft is one sparse document. The four common setting groups are the base;
-a member record overrides only the units it explicitly replaces.
+a member record overrides only the units it explicitly replaces. The
+operation-wide `delete_mode` (obsolete-audio handling: `soft` — the default —
+or `hard`) is a common-level field, never a member override, and freezes into
+every revision the draft produces; the execution uses the frozen value.
 
 ```json
 {
   "schema_version": 1,
   "mode": "available_sources",
+  "delete_mode": "soft",
   "classifier_tags": ["SEなし"],
   "matched":   {"lossless": {"codec": "wav"}, "encoded": {"codec": "mp3", "quality": {"kind": "bitrate", "bitrate": 320}}},
   "unmatched": {"lossless": {"codec": "wav"}, "encoded": {"codec": "mp3", "quality": {"kind": "bitrate", "bitrate": 320}}},
@@ -324,11 +327,11 @@ a member record overrides only the units it explicitly replaces.
   as `[]`. `GET` returns that canonical document, so a save/read round trip
   never materializes unmodified units.
 - **Structural vs business validation.** Save rejects unknown JSON fields,
-  wrong types, unknown/duplicate `member_id`, unknown `mode` values and unknown
-  codec or quality literals. It accepts structurally valid but incomplete
-  settings (empty tags, undeclared outputs, missing quality). Generation
-  requires every participating member's effective settings to pass the full
-  reconcile policy validation (`INVALID_POLICY`).
+  wrong types, unknown/duplicate `member_id`, unknown `mode` or `delete_mode`
+  values and unknown codec or quality literals. It accepts structurally valid
+  but incomplete settings (empty tags, undeclared outputs, missing quality).
+  Generation requires every participating member's effective settings to pass
+  the full reconcile policy validation (`INVALID_POLICY`).
 - **Exclusion** changes participation only: overrides and inheritance survive
   it, and restoring participation restores the previous relationships.
   Excluding every member saves but cannot generate (`NO_ACTIVE_MEMBERS`).

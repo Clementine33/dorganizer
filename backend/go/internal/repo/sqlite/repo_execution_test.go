@@ -22,8 +22,8 @@ func newExecutionRepo(t *testing.T) *sqlite.Repository {
 
 const execDraftHash = "draft-hash"
 
-// seedExecutionWorkset writes a workset with a current revision, its draft and
-// its confirmation, so the guarded execution insert has real facts to check.
+// seedExecutionWorkset writes a workset with a current revision and its draft,
+// so the guarded execution insert has real facts to check.
 func seedExecutionWorkset(t *testing.T, repo *sqlite.Repository, worksetID, root string) {
 	t.Helper()
 	now := time.Now().Format(time.RFC3339Nano)
@@ -57,12 +57,6 @@ func seedExecutionWorkset(t *testing.T, repo *sqlite.Repository, worksetID, root
 	`, root, now); err != nil {
 		t.Fatalf("seed plan: %v", err)
 	}
-	if _, err := repo.DB().Exec(`
-		INSERT INTO workset_operation_confirmations (plan_id, workset_id, operation_type, confirmed_version, confirmed_at)
-		VALUES ('plan-1', ?, 'conversion', 2, ?)
-	`, worksetID, now); err != nil {
-		t.Fatalf("seed confirmation: %v", err)
-	}
 }
 
 // insertExecutionRow writes one session row directly.
@@ -89,7 +83,6 @@ func createExecution(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExecut
 		ExpectedOperationVersion: 2,
 		ExpectedCurrentRevision:  planID,
 		ExpectedDraftHash:        execDraftHash,
-		RequireConfirmation:      true,
 	})
 }
 
@@ -164,7 +157,6 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 		ExpectedOperationVersion: 2,
 		ExpectedCurrentRevision:  "plan-1",
 		ExpectedDraftHash:        execDraftHash,
-		RequireConfirmation:      true,
 	}
 	t.Run("stale_version", func(t *testing.T) {
 		repo := newExecutionRepo(t)
@@ -187,17 +179,6 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
 		if !errors.Is(err, sqlite.ErrDraftChanged) {
 			t.Fatalf("err = %v, want ErrDraftChanged", err)
-		}
-	})
-	t.Run("not_confirmed", func(t *testing.T) {
-		repo := newExecutionRepo(t)
-		seedExecutionWorkset(t, repo, "ws-1", "/music")
-		if _, err := repo.DB().Exec("DELETE FROM workset_operation_confirmations"); err != nil {
-			t.Fatalf("clear confirmation: %v", err)
-		}
-		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
-		if !errors.Is(err, sqlite.ErrConfirmationNotFound) {
-			t.Fatalf("err = %v, want ErrConfirmationNotFound", err)
 		}
 	})
 	t.Run("not_current_revision", func(t *testing.T) {

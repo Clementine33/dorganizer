@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { useApiClient } from '@/lib/api/client'
 import { CONVERSION, type OperationType } from '@/lib/api/types'
 import {
-  confirmRevisionMutationOptions,
+  executionQueryOptions,
   operationDraftQueryOptions,
   operationQueryOptions,
   operationRevisionDetailQueryOptions,
@@ -13,6 +13,7 @@ import {
 } from '@/queries/worksets'
 import { worksetDetailQueryOptions } from '@/queries/worksets'
 import { useWorksetGeneration } from '@/composables/use-workset-generation'
+import { useWorksetExecution } from '@/composables/use-workset-execution'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
 
 /**
@@ -32,6 +33,7 @@ export function useOperationContext(
   const queryClient = useQueryClient()
   const editor = useWorksetEditorStore()
   const generation = useWorksetGeneration()
+  const execution = useWorksetExecution()
 
   const worksetQuery = useQuery(computed(() => worksetDetailQueryOptions(api, worksetId.value)))
   const operationQuery = useQuery(computed(() => operationQueryOptions(api, worksetId.value, operation)))
@@ -51,9 +53,29 @@ export function useOperationContext(
   const draft = computed(() => draftQuery.data.value ?? null)
   const revision = computed(() => revisionQuery.data.value ?? null)
 
+  // The session worth showing: the one currently running for this operation,
+  // or the one that ran the revision in view (a revision executes at most
+  // once, so its ref is final).
+  const executionRef = computed<{ id: string; active: boolean } | null>(() => {
+    const op = operationQuery.data.value
+    if (op?.active_execution) return { id: op.active_execution.execution_id, active: true }
+    const rev = revisionQuery.data.value
+    if (rev?.execution) return { id: rev.execution.execution_id, active: false }
+    return null
+  })
+  const executionQuery = useQuery(
+    computed(() => executionQueryOptions(api, worksetId.value, operation, executionRef.value?.id ?? null)),
+  )
+  // While the stream is live its snapshot/progress is the freshest truth; once
+  // it ends the detail GET owns the full per-component report.
+  const executionView = computed(() => {
+    const store = execution.store
+    if (store.status === 'streaming' && store.view) return store.view
+    return executionQuery.data.value ?? store.view
+  })
+
   const saveMutation = useMutation(saveOperationDraftMutationOptions(api, queryClient))
   const startMutation = useMutation(startGenerationMutationOptions(api, queryClient))
-  const confirmMutation = useMutation(confirmRevisionMutationOptions(api, queryClient))
 
   /** Persists the session's pending document; the base becomes what was saved. */
   async function applySession(): Promise<boolean> {
@@ -93,25 +115,15 @@ export function useOperationContext(
     })
   }
 
-  async function confirm(planId: string): Promise<void> {
-    const view = operationView.value
-    if (!worksetId.value || !view) return
-    await confirmMutation.mutateAsync({
-      worksetId: worksetId.value,
-      operation,
-      planId,
-      ifMatchVersion: view.version,
-    })
-  }
-
   return {
     workspace: { workset, operation: operationView, draft, revision },
-    queries: { worksetQuery, operationQuery, draftQuery, revisionQuery },
-    mutations: { saveMutation, startMutation, confirmMutation },
+    queries: { worksetQuery, operationQuery, draftQuery, revisionQuery, executionQuery },
+    mutations: { saveMutation, startMutation },
     generation,
+    execution,
+    executionView,
     editor,
     applySession,
     startGeneration,
-    confirm,
   }
 }

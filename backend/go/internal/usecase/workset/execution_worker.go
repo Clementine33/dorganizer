@@ -165,7 +165,7 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 
 		res, runErr := task.RunUnit(ctx, d.svc.repo, UnitRunInput{
 			WorksetRoot: run.rootPath,
-			DeleteMode:  req.DeleteMode,
+			Options:     req.Options,
 			Unit:        u,
 			Outcome:     outcome,
 		})
@@ -278,14 +278,12 @@ func watchExecutionCancel(
 	}
 }
 
-// parseExecutionRequest decodes the frozen units.
+// parseExecutionRequest decodes the frozen request: the task-owned options and
+// the ordered units.
 func parseExecutionRequest(raw string) (*executionRequest, error) {
 	var req executionRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		return nil, err
-	}
-	if req.DeleteMode == "" {
-		req.DeleteMode = ExecutionDeleteModeSoft
 	}
 	return &req, nil
 }

@@ -25,7 +25,7 @@ var ErrVersionConflict = errors.New("version conflict")
 var ErrOperationNotFound = errors.New("operation not found")
 
 // Workset is the persisted aggregate row. Version is the metadata concurrency
-// counter: only renames advance it. Draft, generation and confirmation state
+// counter: only renames advance it. Draft and generation state
 // live on the operation (workset_operations).
 type Workset struct {
 	ID              string

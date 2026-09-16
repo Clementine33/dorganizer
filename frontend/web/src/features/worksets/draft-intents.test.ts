@@ -157,4 +157,23 @@ describe('intent accounting', () => {
     expect(intentUnitCount(intent({ matched: { intent: 'set', value: FLAC }, mode: { intent: 'inherit' } }))).toBe(2)
     expect(intentUnitCount(EMPTY_INTENT)).toBe(0)
   })
+
+  it('counts the obsolete-audio handling as one setting', () => {
+    const withMode = { ...EMPTY_INTENT, units: {}, deleteMode: { intent: 'set' as const, value: 'hard' as const } }
+    expect(intentIsEmpty(withMode)).toBe(false)
+    expect(intentUnitCount(withMode)).toBe(1)
+  })
+})
+
+describe('the obsolete-audio handling', () => {
+  it('is written by the common target and never becomes a member override', () => {
+    const set = { ...EMPTY_INTENT, units: {}, deleteMode: { intent: 'set' as const, value: 'hard' as const } }
+
+    const common = applyIntent(base, { kind: 'common' }, set)
+    expect(common.delete_mode).toBe('hard')
+
+    const member = applyIntent(base, { kind: 'member', memberId: 'm-yi' }, set)
+    expect(member.delete_mode).toBeUndefined()
+    expect(member.members).toEqual(base.members.length ? member.members : [])
+  })
 })

@@ -18,7 +18,7 @@ sit behind a seam instead of inside the lifecycle.
 ## Decision
 
 1. **The generic side owns the operation lifecycle.** Identity, ownership,
-   versioning, drafts, revisions, confirmations, planning sessions, execution
+   versioning, drafts, revisions, planning sessions, execution
    sessions, their mutual exclusions and their storage stay in
    `usecase/workset` — task-agnostic.
 

@@ -13,14 +13,13 @@ import (
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// seedConfirmedRevision writes a plan snapshot, its revision association, the
-// promotion and (optionally) the confirmation of the single-member workset.
-func seedConfirmedRevision(
+// seedRevision writes a plan snapshot, its revision association and the
+// promotion of the single-member workset, and returns the operation version.
+func seedRevision(
 	t *testing.T,
 	repo *sqlite.Repository,
 	svc worksetusecase.Service,
 	libID, worksetID, planID string,
-	confirm bool,
 ) int {
 	t.Helper()
 	draft, err := svc.GetDraft(t.Context(), worksetID, worksetusecase.OperationTypeConversion)
@@ -55,16 +54,7 @@ func seedConfirmedRevision(
 	`, planID, now, worksetID); err != nil {
 		t.Fatalf("promote revision: %v", err)
 	}
-	op := getOperationVersion(t, svc, worksetID)
-	if confirm {
-		if _, err := svc.ConfirmRevision(
-			t.Context(), worksetID, worksetusecase.OperationTypeConversion, planID,
-			worksetusecase.ConfirmRequest{IfMatchVersion: op},
-		); err != nil {
-			t.Fatalf("ConfirmRevision: %v", err)
-		}
-	}
-	return op
+	return getOperationVersion(t, svc, worksetID)
 }
 
 func getOperationVersion(t *testing.T, svc worksetusecase.Service, worksetID string) int {
@@ -76,7 +66,7 @@ func getOperationVersion(t *testing.T, svc worksetusecase.Service, worksetID str
 	return view.Version
 }
 
-//nolint:funlen,gocognit,gocyclo,cyclop // one HTTP lifecycle walk over the execution routes
+//nolint:funlen,gocyclo,cyclop // one HTTP lifecycle walk over the execution routes
 func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	libID := seedLibrary(t, repo)
@@ -101,39 +91,9 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
 
-	// Unconfirmed revision: the plan is not executable.
-	version := seedConfirmedRevision(t, repo, svc, libID, wsID, "plan-http", false)
-	w = reqWithIdempotencyAndIfMatch(
-		t,
-		h,
-		http.MethodPost,
-		execPath,
-		testToken,
-		nil,
-		"exec-http-1",
-		strconv.Itoa(version),
-	)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("unconfirmed start = %d, want 409: %s", w.Code, w.Body.String())
-	}
-	var conflict struct {
-		Code    string   `json:"code"`
-		Details []string `json:"details"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &conflict); err != nil {
-		t.Fatalf("decode conflict: %v", err)
-	}
-	if conflict.Code != "PLAN_NOT_EXECUTABLE" || len(conflict.Details) != 1 || conflict.Details[0] != "NOT_CONFIRMED" {
-		t.Fatalf("conflict = %+v", conflict)
-	}
-
-	// Confirm, then a stale If-Match still loses the race.
-	if _, err := svc.ConfirmRevision(
-		t.Context(), wsID, worksetusecase.OperationTypeConversion, "plan-http",
-		worksetusecase.ConfirmRequest{IfMatchVersion: version},
-	); err != nil {
-		t.Fatalf("ConfirmRevision: %v", err)
-	}
+	// A promoted revision is directly executable; only the If-Match race gate
+	// can refuse the start.
+	version := seedRevision(t, repo, svc, libID, wsID, "plan-http")
 	w = reqWithIdempotencyAndIfMatch(
 		t, h, http.MethodPost, execPath, testToken, nil, "exec-http-1", strconv.Itoa(version-1),
 	)
@@ -150,22 +110,16 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("start without If-Match = %d, want 400", w.Code)
 	}
-	w = reqWithIdempotencyAndIfMatch(
-		t, h, http.MethodPost, execPath, testToken, map[string]any{"delete_mode": "medium"},
-		"exec-http-1", strconv.Itoa(version),
-	)
-	if w.Code != http.StatusBadRequest || !containsCode(w.Body.Bytes(), "INVALID_DELETE_MODE") {
-		t.Fatalf("invalid delete mode = %d %s", w.Code, w.Body.String())
-	}
 
-	// First start: 202 with the created session, defaulting to soft delete.
+	// First start: 202 with the created session; the session options come from
+	// the frozen revision's draft (the seeded default: soft deletion).
 	w = reqWithIdempotencyAndIfMatch(
 		t,
 		h,
 		http.MethodPost,
 		execPath,
 		testToken,
-		map[string]any{},
+		nil,
 		"exec-http-1",
 		strconv.Itoa(version),
 	)
@@ -179,21 +133,26 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &startResp); err != nil {
 		t.Fatalf("decode start: %v", err)
 	}
+	var startOptions struct {
+		DeleteMode string `json:"delete_mode"`
+	}
+	if err := json.Unmarshal(startResp.Execution.Options, &startOptions); err != nil {
+		t.Fatalf("decode session options: %v", err)
+	}
 	if !startResp.Created || startResp.Execution.Status != "queued" ||
-		startResp.Execution.DeleteMode != "soft" || startResp.Execution.PlanID != "plan-http" {
-		t.Fatalf("start resp = %+v", startResp)
+		startOptions.DeleteMode != "soft" || startResp.Execution.PlanID != "plan-http" {
+		t.Fatalf("start resp = %+v (options %q)", startResp, startOptions.DeleteMode)
 	}
 	execID := startResp.Execution.ExecutionID
 
-	// The key replays the same session; a different revision or delete mode is a
-	// conflict.
+	// The key replays the same session.
 	w = reqWithIdempotencyAndIfMatch(
 		t,
 		h,
 		http.MethodPost,
 		execPath,
 		testToken,
-		map[string]any{},
+		nil,
 		"exec-http-1",
 		strconv.Itoa(version),
 	)
@@ -210,13 +169,6 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	if replay.Created || replay.Execution.ExecutionID != execID {
 		t.Fatalf("replay = %+v", replay)
 	}
-	w = reqWithIdempotencyAndIfMatch(
-		t, h, http.MethodPost, execPath, testToken, map[string]any{"delete_mode": "hard"},
-		"exec-http-1", strconv.Itoa(version),
-	)
-	if w.Code != http.StatusConflict || !containsCode(w.Body.Bytes(), "IDEMPOTENCY_KEY_REUSED") {
-		t.Fatalf("key reuse with a different mode = %d %s", w.Code, w.Body.String())
-	}
 
 	// A second session for the same operation is refused while one is active.
 	w = reqWithIdempotencyAndIfMatch(
@@ -225,7 +177,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 		http.MethodPost,
 		execPath,
 		testToken,
-		map[string]any{},
+		nil,
 		"exec-http-2",
 		strconv.Itoa(version),
 	)

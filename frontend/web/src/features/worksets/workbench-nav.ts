@@ -55,6 +55,7 @@ export type WorkbenchRouteName =
   | 'conversion-member'
   | 'conversion-member-edit'
   | 'conversion-batch-edit'
+  | 'conversion-execution'
 
 export interface WorkbenchNavPosition {
   /** The entry that IS the current page. */
@@ -70,11 +71,13 @@ const POSITION_BY_ROUTE_NAME: Record<WorkbenchRouteName, WorkbenchNavPosition> =
   'workset-overview': { current: 'overview' },
   conversion: { current: 'conversion' },
   'conversion-settings': { current: 'conversion-settings', parent: 'conversion' },
-  // The detail and batch entries are carriers of the conversion list, so the
-  // list stays the current entry and 转换全局设置 is never faked as current.
+  // The detail, batch and execution entries are carriers of the conversion
+  // list, so the list stays the current entry and 转换全局设置 is never faked
+  // as current.
   'conversion-member': { current: 'conversion' },
   'conversion-member-edit': { current: 'conversion' },
   'conversion-batch-edit': { current: 'conversion' },
+  'conversion-execution': { current: 'conversion' },
 }
 
 export function workbenchNavPosition(routeName: unknown): WorkbenchNavPosition | null {

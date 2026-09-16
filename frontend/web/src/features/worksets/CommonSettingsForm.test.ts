@@ -120,4 +120,23 @@ describe('CommonSettingsForm', () => {
     await nextTick()
     expect(useWorksetEditorStore().pendingDocument?.members).toEqual([])
   })
+
+  it('edits the obsolete-audio handling as a whole-operation choice', async () => {
+    const wrapper = mountForm(draft())
+    // Soft deletion is the seeded default: no warning, restore is a no-op.
+    expect((wrapper.get('[data-testid="common-delete-mode-soft"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-testid="common-hard-delete-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="common-delete_mode-restore"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="common-delete-mode-hard"]').setValue(true)
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="common-hard-delete-warning"]').text()).toContain('不可恢复')
+    expect(useWorksetEditorStore().session?.intent.deleteMode).toEqual({ intent: 'set', value: 'hard' })
+    expect(useWorksetEditorStore().pendingDocument?.delete_mode).toBe('hard')
+
+    await wrapper.get('[data-testid="common-delete_mode-restore"]').trigger('click')
+    await nextTick()
+    expect(useWorksetEditorStore().session?.intent.deleteMode).toEqual({ intent: 'set', value: 'soft' })
+  })
 })

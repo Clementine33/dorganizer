@@ -5,8 +5,9 @@ Accepted; consolidated on 2026-09-14 against the squash feature commits through
 commit `172c1c5404e8ce7ea5170088d339137c96e91e7e`. Number 0004 is retained
 for existing references; earlier numbered decisions remain in Git history.
 The backend operation model, Vue workbench and responsive navigation are
-implemented. Filesystem execution of confirmed revisions landed later (see
-ADR 0005 for the task seam that carries it).
+implemented. Filesystem execution of the operation's current revision landed
+later (see ADR 0005 for the task seam that carries it); the former
+confirmation step was retired on 2026-09-16 — see §4.
 
 Domain language lives in [CONTEXT.md](../../CONTEXT.md); request and response
 contracts live in [api.md](../api.md).
@@ -58,21 +59,21 @@ members. Each member has a stable server-generated `member_id`; scan folder
 IDs, member indexes and paths are not editing identities.
 
 Each `(workset, operation type)` owns its sparse draft, current revision,
-revision ordering, generation sessions and confirmations. `conversion` is the
+revision ordering and generation sessions. `conversion` is the
 only public type. Workset metadata and each operation have separate versions:
-rename guards the metadata version; draft save, generation and confirmation
+rename guards the metadata version; draft save and generation
 guard the operation version. Draft save and successful publication advance
 that operation's version. There is no additional draft counter.
 
 At most one queued/running generation exists per operation. Its frozen inputs
 must not race draft replacement, so that operation's draft is locked during
-generation. Renaming the Workset does not dirty its operation or revoke a
-confirmation. Idempotency, session ownership and query cache keys include the
+generation. Renaming the Workset does not dirty its operation.
+Idempotency, session ownership and query cache keys include the
 operation identity.
 
 Library deletion is blocked while any owned operation has active generation.
 Otherwise it retains Workset snapshots as read-only orphans, including review
-history; orphaned operations cannot save, generate or confirm. A linked
+history; orphaned operations cannot save, generate or execute. A linked
 Library's root cannot be changed while it has Worksets.
 
 ## 3. Sparse inheritance and explicit editing
@@ -99,7 +100,7 @@ does not choose an edit target. A batch session freezes its member list and
 updates only intentionally changed groups; other groups retain their values
 and inheritance. Restoring inheritance is distinct from setting a value.
 
-## 4. Immutable revisions, generation and confirmation
+## 4. Immutable revisions, generation and execution
 
 Generation freezes the sparse draft, ordered members and participation,
 effective settings and sources, paths and input fingerprints. Historical
@@ -123,14 +124,20 @@ authoritative reads, rather than scanning every root for every list row.
 Missing member roots remain explicit missing outcomes. Changed, unmet-target,
 blocked and unchanged counts are independent facts, not an exclusive status.
 
-Confirmation accepts the current operation's complete revision, not selected
+Execution accepts the current operation's complete revision, not selected
 members. The server checks version, current-revision identity, matching draft,
 no active generation, valid inputs and no blocked Components. Unmet targets
-and zero-operation proposals do not themselves block confirmation; their
-counts and excluded scope remain visible. The confirmation record is separate
-from immutable results and repeat confirmation is idempotent while eligible.
-New revisions never inherit it. Saving does not generate; generating does not
-confirm; confirming does not execute.
+and zero-operation proposals do not themselves block execution; their
+counts and excluded scope remain visible. Saving does not generate; generating
+does not execute; executing is its own explicit step, and a revision runs at
+most once. The obsolete-audio handling (soft or hard deletion) is a draft
+setting: the plan freezes it into the session options and the run uses the
+frozen value — the client sends no such option at execution time. An earlier
+confirmation step between generation and execution was
+retired on 2026-09-16: it pinned the plan without adding a gate the executor
+did not already re-check at run time, and it forced a regeneration for every
+plan tweak. Its re-checks (version, current revision, draft hash, inputs,
+blocked components) live on the execution start.
 
 Version guards protect persistence, not the filesystem. A future executor must
 revalidate inputs immediately before changing files.
@@ -168,8 +175,8 @@ modal behavior consistent across layouts.
   migration or dual-schema reader. Existing development databases and media
   are not cleared by that choice; isolated data is used for fresh testing.
 - The standalone workflow and executable `single_action` paths were retired;
-  the only write path is executing a confirmed revision (M1/M2). Confirmation
-  itself still executes nothing. Member-set editing and concurrent
+  the only write path is executing the operation's current revision (M1/M2).
+  Member-set editing and concurrent
   cross-operation filesystem scheduling remain outside the delivered scope;
   the operation-type seam that admits further tasks is recorded in ADR 0005.
 - The Flutter/gRPC client line and the protobuf schema were removed; the Vue

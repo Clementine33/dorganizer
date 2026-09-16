@@ -20,7 +20,7 @@ An album folder's stable identity within a Workset. Its path and position descri
 _Avoid_: Scan folder ID, list index or path as member identity.
 
 **Workset Operation**:
-An independent business activity on Workset members, owning its draft, participation scope, planning sessions, revisions and confirmations. Conversion is the currently available activity.
+An independent business activity on Workset members, owning its draft, participation scope, planning sessions and revisions. Conversion is the currently available activity.
 _Avoid_: Workflow step; filesystem Operation when referring to this activity.
 
 **Operation Draft**:
@@ -74,14 +74,15 @@ What a plan was made from: per Planning Root, the identity, inventory fingerprin
 _Avoid_: Snapshot token, ETag.
 
 **Execution Session**:
-The asynchronous, durable run of one confirmed Plan Revision: globally serialized, cooperatively cancelable at unit boundaries, with a per-unit report that survives a crash and no automatic retry.
+The asynchronous, durable run of one Plan Revision: globally serialized, cooperatively cancelable at unit boundaries, with a per-unit report that survives a crash and no automatic retry.
 _Avoid_: Run, job.
+
+**Obsolete Audio Handling**:
+The whole-operation choice of what happens to replaced and obsolete audio at execution: soft (moved under `Delete/`, recoverable) or hard (removed). It is a draft setting, never a per-member override; the plan freezes it and the run uses the frozen value.
+_Avoid_: Delete mode as a per-run option.
 
 **Input Validity**:
 Whether a revision's recorded inputs still agree with the current observed inventory: valid, stale or unavailable.
-
-**Confirmation**:
-The user's acceptance of one complete current Plan Revision after eligibility checks. It neither executes files nor transfers to a new revision.
 
 **Orphaned Workset**:
 A Workset whose Library has been deleted, retaining its members and historical proposals for read-only review.
@@ -121,7 +122,7 @@ Observed lossless audio from which a requested output can be generated. Lossy au
 An observed encoded file whose bitrate cannot be established, so it cannot be assumed to satisfy the target quality.
 
 **Unmet Target**:
-A desired output that cannot be supplied from available qualified sources in `available_sources` mode, with existing media preserved. It is disclosed separately from blocking conflicts and does not by itself prevent confirmation.
+A desired output that cannot be supplied from available qualified sources in `available_sources` mode, with existing media preserved. It is disclosed separately from blocking conflicts and does not by itself prevent execution.
 
 **Decision**:
 A reviewable conclusion such as keep, delete or encode, with its reason. A keep decision requires no filesystem change.

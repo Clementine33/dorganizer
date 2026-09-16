@@ -81,7 +81,6 @@ function componentTone(status: string): 'success' | 'danger' | 'neutral' {
       <Badge v-if="inputStatus?.root_status === 'missing'" tone="danger">输入缺失</Badge>
       <Badge v-else-if="inputStatus?.stale" tone="warning">输入已变化</Badge>
       <Badge v-else-if="inputStatus" tone="success">输入有效</Badge>
-      <Badge v-if="revision.confirmation.confirmed" tone="success">版本已确认</Badge>
     </div>
 
     <section aria-label="冻结的有效设置">

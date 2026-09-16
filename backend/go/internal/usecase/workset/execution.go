@@ -9,23 +9,15 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// Execution delete modes. The session freezes one at creation; soft deletion is
-// the default and keeps the <root>/Delete/<relative path> recovery convention.
-const (
-	ExecutionDeleteModeSoft = "soft"
-	ExecutionDeleteModeHard = "hard"
-)
-
 // Execution eligibility reasons returned with PLAN_NOT_EXECUTABLE. They are
 // stable contract values the UI can branch on.
 const (
-	ExecBlockedNotCurrent   = "NOT_CURRENT_REVISION"
-	ExecBlockedNotConfirmed = "NOT_CONFIRMED"
-	ExecBlockedDraft        = "DRAFT_CHANGED"
-	ExecBlockedGeneration   = "GENERATION_IN_PROGRESS"
-	ExecBlockedComponents   = "BLOCKED_COMPONENTS"
-	ExecBlockedInput        = "INPUT_CHANGED"
-	ExecBlockedAlreadyRan   = "ALREADY_EXECUTED"
+	ExecBlockedNotCurrent = "NOT_CURRENT_REVISION"
+	ExecBlockedDraft      = "DRAFT_CHANGED"
+	ExecBlockedGeneration = "GENERATION_IN_PROGRESS"
+	ExecBlockedComponents = "BLOCKED_COMPONENTS"
+	ExecBlockedInput      = "INPUT_CHANGED"
+	ExecBlockedAlreadyRan = "ALREADY_EXECUTED"
 )
 
 // Execution event names streamed by Subscribe.
@@ -38,13 +30,12 @@ const (
 	ExecutionEventInterrupted = "interrupted"
 )
 
-// StartExecutionRequest is the POST .../revisions/{planId}/executions payload.
-// The body only carries the execution choice: the file worklist is the frozen
-// revision's, never the client's.
+// StartExecutionRequest is the POST .../revisions/{planId}/executions request.
+// The body is empty: the file worklist and the session options (such as the
+// obsolete-audio handling) are the frozen revision's, never the client's.
 type StartExecutionRequest struct {
 	IfMatchVersion int
 	IdempotencyKey string
-	DeleteMode     string
 }
 
 // StartExecutionResult distinguishes a fresh session from an idempotent replay.
@@ -83,7 +74,7 @@ type ExecutionView struct {
 	OperationType       string                   `json:"operation_type"`
 	PlanID              string                   `json:"plan_id"`
 	Status              string                   `json:"status"`
-	DeleteMode          string                   `json:"delete_mode"`
+	Options             json.RawMessage          `json:"options,omitempty"`
 	TotalComponents     int                      `json:"total_components"`
 	CompletedComponents int                      `json:"completed_components"`
 	TotalOperations     int                      `json:"total_operations"`
@@ -113,31 +104,31 @@ type ExecutionRef struct {
 // ExecutionProgress is the active-session progress attached to the operation
 // view.
 type ExecutionProgress struct {
-	ExecutionID         string `json:"execution_id"`
-	PlanID              string `json:"plan_id"`
-	Status              string `json:"status"`
-	DeleteMode          string `json:"delete_mode"`
-	TotalComponents     int    `json:"total_components"`
-	CompletedComponents int    `json:"completed_components"`
-	TotalOperations     int    `json:"total_operations"`
-	CompletedOperations int    `json:"completed_operations"`
-	CurrentRoot         string `json:"current_root"`
-	CurrentComponentID  string `json:"current_component_id"`
-	CurrentPhase        string `json:"current_phase"`
+	ExecutionID         string          `json:"execution_id"`
+	PlanID              string          `json:"plan_id"`
+	Status              string          `json:"status"`
+	Options             json.RawMessage `json:"options,omitempty"`
+	TotalComponents     int             `json:"total_components"`
+	CompletedComponents int             `json:"completed_components"`
+	TotalOperations     int             `json:"total_operations"`
+	CompletedOperations int             `json:"completed_operations"`
+	CurrentRoot         string          `json:"current_root"`
+	CurrentComponentID  string          `json:"current_component_id"`
+	CurrentPhase        string          `json:"current_phase"`
 }
 
 // executionRequest is the frozen session input persisted on the row: the
-// frozen option and the ordered execution units (generic identity plus the
-// task's opaque payload).
+// task-owned options payload and the ordered execution units (generic identity
+// plus the task's opaque payload).
 type executionRequest struct {
-	DeleteMode string          `json:"delete_mode"`
-	Units      []ExecutionUnit `json:"units"`
+	Options json.RawMessage `json:"options,omitempty"`
+	Units   []ExecutionUnit `json:"units"`
 }
 
-// StartExecution enqueues one execution of the operation's current, confirmed
-// revision. The frozen revision, its confirmation and the operation version are
-// the whole authority: a revision is executed at most once, and success never
-// authorizes a replay of the same revision.
+// StartExecution enqueues one execution of the operation's current revision.
+// The frozen revision and the operation version are the whole authority: a
+// revision is executed at most once, and success never authorizes a replay of
+// the same revision.
 func (s *serviceImpl) StartExecution(
 	ctx context.Context,
 	worksetID, operationType, planID string,
@@ -149,18 +140,6 @@ func (s *serviceImpl) StartExecution(
 	if err := validateIdemKey(req.IdempotencyKey); err != nil {
 		return nil, err
 	}
-	deleteMode := req.DeleteMode
-	if deleteMode == "" {
-		deleteMode = ExecutionDeleteModeSoft
-	}
-	if deleteMode != ExecutionDeleteModeSoft && deleteMode != ExecutionDeleteModeHard {
-		return nil, NewError(
-			ErrKindInvalidArgument,
-			"INVALID_DELETE_MODE",
-			"delete_mode must be soft or hard",
-			nil,
-		)
-	}
 	if err := s.rejectOrphaned(worksetID); err != nil {
 		return nil, err
 	}
@@ -169,8 +148,8 @@ func (s *serviceImpl) StartExecution(
 		return nil, err
 	}
 	// Replays answer before the version and eligibility gates: a retried request
-	// must observe what it already asked for.
-	requestHash := hashJSON([]byte(planID + "|" + deleteMode))
+	// must observe what it already asked for. The request is its revision.
+	requestHash := hashJSON([]byte(planID))
 	if result, replayed, replayErr := s.replayExecution(
 		op,
 		req.IdempotencyKey,
@@ -179,7 +158,7 @@ func (s *serviceImpl) StartExecution(
 		replayed {
 		return result, replayErr
 	}
-	reasons, frozen, gateErr := s.executionEligibility(op, planID, req.IfMatchVersion, deleteMode)
+	reasons, frozen, gateErr := s.executionEligibility(op, planID, req.IfMatchVersion)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -190,12 +169,12 @@ func (s *serviceImpl) StartExecution(
 	if revErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", revErr)
 	}
-	return s.persistExecution(op, planID, deleteMode, req.IdempotencyKey, requestHash, rev.DraftHash, frozen)
+	return s.persistExecution(op, planID, req.IdempotencyKey, requestHash, rev.DraftHash, frozen)
 }
 
 // replayExecution answers an idempotent retry with the session the key already
-// created, whatever its status. A key reused for a different revision or delete
-// mode is a conflict, never a second session.
+// created, whatever its status. A key reused for a different revision is a
+// conflict, never a second session.
 func (s *serviceImpl) replayExecution(
 	op *sqlite.Operation, key, requestHash string,
 ) (*StartExecutionResult, bool, error) {
@@ -224,7 +203,7 @@ func (s *serviceImpl) replayExecution(
 // order and returns the fail-forward reasons plus the frozen execution units.
 // Reasons are accumulated so one response names all the disqualifiers.
 func (s *serviceImpl) executionEligibility(
-	op *sqlite.Operation, planID string, ifMatchVersion int, deleteMode string,
+	op *sqlite.Operation, planID string, ifMatchVersion int,
 ) ([]string, FrozenExecution, error) {
 	if op.CurrentRevisionID == "" || op.CurrentRevisionID != planID {
 		return []string{ExecBlockedNotCurrent}, FrozenExecution{}, nil
@@ -259,7 +238,7 @@ func (s *serviceImpl) executionEligibility(
 	if len(reasons) > 0 {
 		return reasons, FrozenExecution{}, nil
 	}
-	frozen, freezeErr := s.freezeExecution(op, detail, rev, deleteMode)
+	frozen, freezeErr := s.freezeExecution(op, detail, rev)
 	if freezeErr != nil {
 		return nil, FrozenExecution{}, freezeErr
 	}
@@ -282,10 +261,10 @@ func (s *serviceImpl) executionEligibility(
 	return nil, frozen, nil
 }
 
-// executionBlockReasons collects every disqualifier of a confirmed revision:
-// session history, confirmation, draft drift, a running generation, blocked
-// components and input freshness. Terminating errors are returned separately
-// from the fail-forward reasons.
+// executionBlockReasons collects every disqualifier of the current revision:
+// session history, draft drift, a running generation, blocked components and
+// input freshness. Terminating errors are returned separately from the
+// fail-forward reasons.
 func (s *serviceImpl) executionBlockReasons(
 	op *sqlite.Operation, planID string, rev *sqlite.OperationRevision,
 ) (*sqlite.PlanDetail, []string, error) {
@@ -296,12 +275,6 @@ func (s *serviceImpl) executionBlockReasons(
 	}
 	if done != nil {
 		reasons = append(reasons, ExecBlockedAlreadyRan)
-	}
-	if _, confErr := s.repo.GetOperationConfirmation(planID); confErr != nil {
-		if !errors.Is(confErr, sqlite.ErrConfirmationNotFound) {
-			return nil, nil, NewError(ErrKindInternal, "INTERNAL", "failed to load confirmation", confErr)
-		}
-		reasons = append(reasons, ExecBlockedNotConfirmed)
 	}
 	draft, err := s.repo.GetOperationDraft(op.WorksetID, op.OperationType)
 	if err != nil || draft == nil {
@@ -337,11 +310,13 @@ func (s *serviceImpl) executionBlockReasons(
 // freezeExecution asks the operation's task to validate that the revision can
 // run and to freeze its ordered execution units. Business block reasons are
 // fail-forward values, not errors.
+// freezeExecution asks the operation's task to validate that the revision can
+// run and to freeze its ordered execution units and session options. Business
+// block reasons are fail-forward values, not errors.
 func (s *serviceImpl) freezeExecution(
 	op *sqlite.Operation,
 	detail *sqlite.PlanDetail,
 	rev *sqlite.OperationRevision,
-	deleteMode string,
 ) (FrozenExecution, error) {
 	task, err := s.requireTask(op.OperationType)
 	if err != nil {
@@ -355,7 +330,7 @@ func (s *serviceImpl) freezeExecution(
 		DraftSnapshot: []byte(rev.DraftSnapshot),
 		Members:       members,
 		Detail:        detail,
-	}, deleteMode)
+	})
 	if err != nil {
 		return FrozenExecution{}, err
 	}
@@ -365,21 +340,21 @@ func (s *serviceImpl) freezeExecution(
 	return frozen, nil
 }
 
-// persistExecution writes the queued session and pokes the worker.
-// executionDeleteModeOf reads the frozen session option back out of the
-// session's own request payload: the option is stored once, with the frozen
-// units, and never mirrored into a column.
-func executionDeleteModeOf(e *sqlite.PlanExecution) string {
+// executionOptionsOf reads the frozen session options back out of the
+// session's own request payload: the options are stored once, with the frozen
+// units, and never mirrored into a column. The payload itself is task-owned
+// and opaque here.
+func executionOptionsOf(e *sqlite.PlanExecution) json.RawMessage {
 	req, err := parseExecutionRequest(e.RequestJSON)
 	if err != nil {
-		return ""
+		return nil
 	}
-	return req.DeleteMode
+	return req.Options
 }
 
 func (s *serviceImpl) persistExecution(
 	op *sqlite.Operation,
-	planID, deleteMode, key, requestHash, revisionDraftHash string,
+	planID, key, requestHash, revisionDraftHash string,
 	frozen FrozenExecution,
 ) (*StartExecutionResult, error) {
 	report := initialComponentReport(frozen.Units)
@@ -393,8 +368,8 @@ func (s *serviceImpl) persistExecution(
 		RequestHash:              requestHash,
 		ExpectedOperationVersion: op.Version,
 		RequestJSON: mustJSON(executionRequest{
-			DeleteMode: deleteMode,
-			Units:      frozen.Units,
+			Options: frozen.Options,
+			Units:   frozen.Units,
 		}),
 		TotalComponents: len(frozen.Units),
 		TotalOperations: frozen.TotalOperations,
@@ -405,7 +380,6 @@ func (s *serviceImpl) persistExecution(
 		ExpectedOperationVersion: op.Version,
 		ExpectedCurrentRevision:  planID,
 		ExpectedDraftHash:        revisionDraftHash,
-		RequireConfirmation:      true,
 	})
 	if err := createErr; err != nil {
 		if errors.Is(err, sqlite.ErrExecutionIdemConflict) {
@@ -434,8 +408,6 @@ func (s *serviceImpl) persistExecution(
 			return nil, notExecutable([]string{ExecBlockedNotCurrent})
 		case errors.Is(err, sqlite.ErrDraftChanged):
 			return nil, notExecutable([]string{ExecBlockedDraft})
-		case errors.Is(err, sqlite.ErrConfirmationNotFound):
-			return nil, notExecutable([]string{ExecBlockedNotConfirmed})
 		case errors.Is(err, sqlite.ErrGenerationInProgress):
 			return nil, notExecutable([]string{ExecBlockedGeneration})
 		case errors.Is(err, sqlite.ErrExecutionInProgress):
@@ -558,7 +530,7 @@ func executionViewOf(e *sqlite.PlanExecution) *ExecutionView {
 		OperationType:       e.OperationType,
 		PlanID:              e.PlanID,
 		Status:              e.Status,
-		DeleteMode:          executionDeleteModeOf(e),
+		Options:             executionOptionsOf(e),
 		TotalComponents:     e.TotalComponents,
 		CompletedComponents: e.CompletedComponents,
 		TotalOperations:     e.TotalOperations,
@@ -597,7 +569,7 @@ func executionProgressOf(e *sqlite.PlanExecution) *ExecutionProgress {
 		ExecutionID:         e.ExecutionID,
 		PlanID:              e.PlanID,
 		Status:              e.Status,
-		DeleteMode:          executionDeleteModeOf(e),
+		Options:             executionOptionsOf(e),
 		TotalComponents:     e.TotalComponents,
 		CompletedComponents: e.CompletedComponents,
 		TotalOperations:     e.TotalOperations,

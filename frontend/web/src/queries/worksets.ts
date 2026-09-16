@@ -1,7 +1,7 @@
 import { infiniteQueryOptions, queryOptions, type QueryClient } from '@tanstack/vue-query'
 import type {
   ApiClientContract,
-  ConfirmationState,
+  ExecutionView,
   Operation,
   CreateWorksetInput,
   ListWorksetsParams,
@@ -9,6 +9,7 @@ import type {
   OperationType,
   ResolvedPolicy,
   RevisionListResponse,
+  StartExecutionResponse,
   Workset,
   WorksetListResponse,
 } from '@/lib/api/types'
@@ -240,24 +241,131 @@ export function cancelGenerationMutationOptions(api: ApiClientContract) {
   }
 }
 
-export function confirmRevisionMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
+// ==================== Execution sessions ====================
+
+// One session's authoritative report. The SSE stream seeds this same entry
+// with snapshots and progress; the GET stays the fallback (a missed terminal
+// event) and the way to pick up the full per-component report after a terminal
+// event, because progress events carry counts only.
+export function executionQueryOptions(
+  api: ApiClientContract,
+  worksetId: string | null | undefined,
+  operation: OperationType,
+  executionId: string | null | undefined,
+) {
+  return queryOptions({
+    queryKey: queryKeys.worksets.execution(worksetId ?? '', operation, executionId ?? ''),
+    enabled: Boolean(worksetId && executionId),
+    staleTime: 0,
+    queryFn: ({ signal }: { signal?: AbortSignal }) =>
+      api.getExecution(worksetId as string, operation, executionId as string, signal),
+  })
+}
+
+/**
+ * Enqueue the execution of the current revision. The server re-checks every
+ * eligibility fact inside the request; a refusal is explained, never retried
+ * with a fresh key (a different key would be a second run attempt).
+ */
+export function startExecutionMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
   return {
     mutationFn: (input: {
       worksetId: string
       operation: OperationType
       planId: string
       ifMatchVersion: number
-    }) => api.confirmRevision(input.worksetId, input.operation, input.planId, input.ifMatchVersion),
-    onSuccess: (_state: ConfirmationState, input: { worksetId: string; operation: OperationType; planId: string }) => {
+      idempotencyKey: string
+    }) =>
+      api.startExecution(input.worksetId, input.operation, input.planId, {
+        ifMatchVersion: input.ifMatchVersion,
+        idempotencyKey: input.idempotencyKey,
+      }),
+    onSuccess: (
+      result: StartExecutionResponse,
+      input: { worksetId: string; operation: OperationType; planId: string },
+    ) => {
+      queryClient.setQueryData(
+        queryKeys.worksets.execution(input.worksetId, input.operation, result.execution.execution_id),
+        result.execution,
+      )
       void Promise.all([
+        refreshOrRemoveQueries(queryClient, queryKeys.worksets.operation(input.worksetId, input.operation)),
         refreshOrRemoveQueries(
           queryClient,
           queryKeys.worksets.revision(input.worksetId, input.operation, input.planId),
         ),
-        refreshOrRemoveQueries(queryClient, queryKeys.worksets.operation(input.worksetId, input.operation)),
       ])
     },
   }
+}
+
+// The cancel response is the authoritative outcome (the server answers with
+// the session either way): it seeds the report entry so a client whose SSE
+// died still ends on the real state.
+export function cancelExecutionMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
+  return {
+    mutationFn: (input: { worksetId: string; operation: OperationType; executionId: string }) =>
+      api.cancelExecution(input.worksetId, input.operation, input.executionId),
+    onSuccess: (view: ExecutionView) => {
+      queryClient.setQueryData(
+        queryKeys.worksets.execution(view.workset_id, view.operation_type, view.execution_id),
+        view,
+      )
+    },
+  }
+}
+
+// Execution terminal: refresh everything the outcome can have changed. The
+// inventory sync moved entries under the owning library (folder trees read the
+// live inventory; list counts change on the next scan), and the operation and
+// revision views carry the session refs.
+export async function syncAfterExecutionTerminal(
+  queryClient: QueryClient,
+  worksetId: string,
+  operation: OperationType,
+): Promise<void> {
+  const detail = queryClient.getQueryData<Workset>(queryKeys.worksets.detail(worksetId))
+  const libraryId = detail?.library?.library_id ?? null
+  await Promise.all([
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.listPrefix()),
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.detail(worksetId)),
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.operation(worksetId, operation)),
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.revisionsPrefix(worksetId, operation)),
+    // Progress events carry counts only; the refreshed GET brings the full
+    // per-component report (committed/removed/recovery) into the open panel.
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.executionsPrefix(worksetId, operation)),
+    ...(libraryId
+      ? [
+          refreshOrRemoveQueries(queryClient, queryKeys.libraries.foldersPrefix(libraryId)),
+          refreshOrRemoveQueries(queryClient, queryKeys.libraries.treesPrefix(libraryId)),
+        ]
+      : []),
+  ])
+}
+
+// A refused start (an eligibility conflict or a stale version) is answered
+// with fresh state: the operation and its revisions are re-read so the UI can
+// explain against the truth. The request is never retried with a fresh key —
+// that would be a second run attempt against the same revision.
+export async function syncAfterExecutionRefusal(
+  queryClient: QueryClient,
+  worksetId: string,
+  operation: OperationType,
+): Promise<void> {
+  await Promise.all([
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.operation(worksetId, operation)),
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.revisionsPrefix(worksetId, operation)),
+  ])
+}
+
+// Conservative sweep after an unclear transport end: an execution writes to
+// disk whenever it ran, so both the workset view and the library inventory may
+// have moved.
+export async function sweepAfterExecution(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    refreshOrRemoveQueries(queryClient, queryKeys.worksets.all()),
+    refreshOrRemoveQueries(queryClient, queryKeys.libraries.all()),
+  ])
 }
 
 // Generation terminal (completed/failed/canceled/interrupted, or a transport

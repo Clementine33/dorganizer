@@ -38,11 +38,8 @@ const editor = useWorksetEditorStore()
 
 const worksetId = computed(() => (route.params.worksetId as string) || null)
 const revisionPlanId = computed(() => (route.query.revision as string) || null)
-const { workspace, generation, applySession, startGeneration, confirm } = useOperationContext(
-  worksetId,
-  'conversion',
-  revisionPlanId,
-)
+const { workspace, generation, execution, executionView, applySession, startGeneration } =
+  useOperationContext(worksetId, 'conversion', revisionPlanId)
 
 const workset = workspace.workset
 const operation = workspace.operation
@@ -136,41 +133,117 @@ const sessionMemberCount = computed(() => {
 
 const canGenerate = computed(() => Boolean(draft.value && operation.value && !operation.value.active_generation))
 const counts = computed(() => revision.value?.counts ?? operation.value?.current_revision?.counts ?? null)
+/** Any live session for this operation, or a start in flight: its own actions
+ *  are the only ones offered, and a double click cannot fire two starts. */
+const busy = computed(
+  () =>
+    generation.store.status === 'streaming' ||
+    Boolean(operation.value?.active_execution) ||
+    execution.startMutation.isPending.value,
+)
 
-/** Why confirmation is unavailable, in the user's words (T14). */
-const confirmBlocked = computed(() => {
-  const op = operation.value
-  // No revision, no confirm button: nothing to explain.
-  if (!op?.current_revision) return null
-  if (op.planning_state === 'needs_planning') return '草稿已改变，需重新生成计划版本'
-  if (op.active_generation || op.planning_state === 'planning') return '生成中，完成后才能确认'
-  if (op.current_revision.validation_state === 'stale') return '输入已变化，需重新生成计划版本'
-  if (op.current_revision.validation_state === 'unavailable') return '媒体库不可用，无法校验该版本'
-  if ((counts.value?.blocked ?? 0) > 0) return '存在阻塞项，确认前需要先处理'
-  return null
-})
-/** Server-side refusal reasons, so a race never ends in a silent console error. */
-const CONFIRM_REASONS: Record<string, string> = {
+/**
+ * A planned revision is directly executable — generating the plan was the
+ * gate, and nothing here writes files until the user starts a run. Eligibility
+ * and the session options (the obsolete-audio handling the settings chose) are
+ * the server's; the local rule only decides whether the button may open.
+ */
+const executeError = ref<string | null>(null)
+
+const EXECUTION_STATES: Record<string, string> = {
+  queued: '排队中',
+  running: '执行中',
+  succeeded: '已完成',
+  failed: '失败',
+  canceled: '已取消',
+  interrupted: '已中断',
+}
+/** Why the execution entry is unavailable, in the user's words. */
+const EXECUTE_REASONS: Record<string, string> = {
   NOT_CURRENT_REVISION: '该版本已不是当前版本，请刷新后重试',
   DRAFT_CHANGED: '草稿在该版本生成后已改变，需重新生成计划版本',
-  GENERATION_IN_PROGRESS: '该操作正在生成计划版本，完成后才能确认',
   INPUT_CHANGED: '文件夹输入已变化，需重新生成计划版本',
-  BLOCKED_COMPONENTS: '存在阻塞项，处理后才能确认',
+  BLOCKED_COMPONENTS: '存在阻塞项，处理后才能执行',
+  ALREADY_EXECUTED: '该版本已执行过，需重新生成新版本',
 }
-const confirmError = ref<string | null>(null)
+const EXECUTE_CODES: Record<string, string> = {
+  PLAN_NOT_EXECUTABLE: '该版本当前不可执行',
+  EXECUTION_IN_PROGRESS: '该操作已有执行在进行中',
+  SCAN_IN_PROGRESS: '媒体库正在扫描，稍后再执行',
+  VERSION_CONFLICT: '操作版本已变化，请刷新后重试',
+  IDEMPOTENCY_KEY_REUSED: '该请求与之前的执行冲突，请刷新后重试',
+  ORPHANED_WORKSET: '媒体库已删除：该工作集只读',
+  INVALID_DELETE_MODE: '删除模式无效',
+}
 
-async function confirmRevision() {
-  const planId = operation.value?.current_revision?.plan_id
-  if (!planId) return
-  confirmError.value = null
+/** Why 执行当前版本 is disabled right now; null when it may start. */
+const executeBlocked = computed(() => {
+  const op = operation.value
+  if (!op?.current_revision || op.active_execution) return null
+  // The terminal fact outranks the derived ones: once a revision ran, that is
+  // the reason it cannot run again, whatever else moved since.
+  const ran = revision.value?.execution
+  if (ran) return `该版本已执行（${EXECUTION_STATES[ran.status] ?? ran.status}），需重新生成新版本`
+  if (op.planning_state === 'orphaned') return '媒体库已删除：该工作集只读'
+  if (op.active_generation || op.planning_state === 'planning') return '生成中，完成后才能执行'
+  if (op.planning_state === 'needs_planning') return '草稿已改变，需重新生成计划版本'
+  if (op.current_revision.validation_state === 'stale') return '输入已变化，需重新生成计划版本'
+  if (op.current_revision.validation_state === 'unavailable') return '媒体库不可用，无法校验该版本'
+  if ((counts.value?.blocked ?? 0) > 0) return '存在阻塞项，处理后才能执行'
+  return null
+})
+
+async function startExecution() {
+  const op = operation.value
+  const planId = op?.current_revision?.plan_id
+  if (!worksetId.value || !op || !planId) return
+  executeError.value = null
   try {
-    await confirm(planId)
+    await execution.start({
+      worksetId: worksetId.value,
+      operation: 'conversion',
+      planId,
+      ifMatchVersion: op.version,
+      idempotencyKey: crypto.randomUUID(),
+    })
+    // The run just started: open its detail carrier (inline on wide, sheet on
+    // mid, full page on narrow) instead of crowding the member list.
+    await openExecution()
   } catch (error) {
-    const apiError = error as { details?: string[]; message?: string }
-    const reasons = (apiError.details ?? []).map((reason) => CONFIRM_REASONS[reason] ?? reason)
-    confirmError.value = reasons.length > 0 ? `无法确认：${reasons.join('；')}` : `无法确认：${apiError.message ?? '未知错误'}`
+    // The refusal is explained against refreshed state; the request is never
+    // retried with a fresh key (that would be a second run attempt).
+    const apiError = error as { code?: string; details?: string[]; message?: string }
+    const reasons = (apiError.details ?? []).map((reason) => EXECUTE_REASONS[reason] ?? reason)
+    const head = apiError.code ? EXECUTE_REASONS[apiError.code] ?? EXECUTE_CODES[apiError.code] : undefined
+    executeError.value =
+      reasons.length > 0
+        ? `无法执行：${reasons.join('；')}`
+        : `无法执行：${head ?? apiError.message ?? '未知错误'}`
   }
 }
+
+async function openExecution() {
+  await router.push({ path: `${listPath.value}/execution`, query: route.query })
+}
+
+async function cancelExecution() {
+  const active = operation.value?.active_execution
+  if (!worksetId.value || !active) return
+  await execution.cancel(worksetId.value, 'conversion', active.execution_id)
+}
+
+// Reload and route-return recovery: re-attach the live session's stream. The
+// store refuses an attach while it already streams the same session, so the
+// initial start and this effect never double-stream.
+watch(
+  () => operation.value?.active_execution?.execution_id ?? null,
+  (executionId) => {
+    if (!executionId || !worksetId.value) return
+    if (execution.store.status === 'streaming' && execution.store.executionId === executionId) return
+    execution.attach(worksetId.value, 'conversion', executionId)
+  },
+  { immediate: true },
+)
 
 const OPERATION_STATES: Record<PlanningState, { tone: 'neutral' | 'brand' | 'success' | 'warning' | 'danger'; label: string }> = {
   unplanned: { tone: 'neutral', label: '待规划' },
@@ -323,17 +396,30 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             :counts="counts"
             :validation-state="revision ? null : operation?.current_revision?.validation_state ?? null"
             :revision-label="revisionPlanId ? `历史版本 #${revision?.revision_index ?? ''}` : null"
-            :confirmed="revision?.confirmation.confirmed ?? false"
             :generating="generation.store.status === 'streaming'"
             :can-generate="canGenerate"
-            :confirm-blocked="confirmBlocked"
-            :error="confirmError"
-            :busy="generation.store.status === 'streaming'"
+            :execute-blocked="executeBlocked"
+            :show-execution="Boolean(executionView)"
+            :canceling="execution.store.canceling"
+            :busy="busy"
             @generate="startGeneration()"
             @cancel="operation?.active_generation && generation.cancel(worksetId!, 'conversion', operation.active_generation.generation_id)"
-            @confirm="confirmRevision()"
+            @execute="startExecution()"
+            @open-execution="openExecution()"
+            @cancel-execution="cancelExecution()"
             @restore-current="revisionPlanId ? router.push({ path: listPath, query: {} }) : undefined"
           />
+
+          <!-- A refused start is stated in place; the request is never
+               retried with a fresh key. -->
+          <p
+            v-if="executeError"
+            class="border-b border-border bg-card px-3 py-1.5 text-[11px] text-[var(--danger-ink)]"
+            role="alert"
+            data-testid="execute-error"
+          >
+            {{ executeError }}
+          </p>
 
           <div
             v-if="ui.selectionCount > 0"

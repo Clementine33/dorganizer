@@ -22,8 +22,8 @@ async function pickUnitOption(page: Page, testId: string, option: string) {
  *   3. select a folder and create a workset (title dialog → workspace),
  *   4. edit the common settings in place (direct fields, 恢复默认) and apply,
  *   5. generate a plan revision and read the five summary facts,
- *   6. confirm the current revision, generate again, and confirm that the new
- *      revision is not inherited as confirmed,
+ *   6. generate again on a changed draft and confirm the new revision
+ *      supersedes the old one,
  *   7. return to the workset list and see the operation state.
  *
  * Skipped unless ONSEI_E2E=1 so CI can run it optionally and local `vitest`
@@ -35,7 +35,7 @@ const e2eEnabled = process.env.ONSEI_E2E === '1'
 test.describe('workset operation smoke', () => {
   test.skip(!e2eEnabled, 'e2e smoke runs only with ONSEI_E2E=1')
 
-  test('create library, scan, create workset, configure, generate and confirm', async ({ page }) => {
+  test('create library, scan, create workset, configure, generate and review', async ({ page }) => {
     const { fixtureRoot } = readStackState()
     const fixturePosix = fixtureRoot.replaceAll('\\', '/')
 
@@ -214,16 +214,17 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('member-override-state').first()).toHaveText('已修改', { timeout: 15_000 })
     await page.keyboard.press('Escape')
 
-    // 6. Regenerate on the changed draft, then confirm: the new revision is a
-    //    different version and its review reports the member's own setting.
+    // 6. Regenerate on the changed draft: the new revision is a different
+    //    version and its review reports the member's own setting.
     await page.getByTestId('start-generation').click()
     await expect(page.getByTestId('operation-counts')).toBeVisible({ timeout: 30_000 })
     await page.getByTestId('member-open').first().click()
     await expect(page.getByTestId('member-review')).toContainText('独立设置', { timeout: 15_000 })
     await expect(page.getByTestId('member-review')).toContainText('无音效目标')
     await page.keyboard.press('Escape')
-    await page.getByTestId('confirm-revision').click()
-    await expect(page.getByTestId('operation-header')).toContainText('已确认', { timeout: 15_000 })
+
+    // A planned revision is directly executable — no confirmation step.
+    await expect(page.getByTestId('start-execution')).toBeEnabled()
 
     // The settings entry lives in the workbench navigation, so its group is
     // unfolded first (it was folded back in the drawer above).
@@ -233,7 +234,7 @@ test.describe('workset operation smoke', () => {
     await page.getByTestId('apply-common').click()
     await page.getByRole('link', { name: '← 转换列表' }).click()
     await page.getByTestId('start-generation').click()
-    await expect(page.getByTestId('operation-header')).not.toContainText('已确认', { timeout: 30_000 })
+    await expect(page.getByTestId('operation-counts')).toBeVisible({ timeout: 30_000 })
 
     // 7. Back to the workset list through the global rail: the global entry is
     //    reachable inside the workbench and always targets /worksets (G01,

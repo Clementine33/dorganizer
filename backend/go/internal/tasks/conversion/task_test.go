@@ -1,29 +1,54 @@
 package conversion_test
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/execute"
+	"github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// TestDeleteModeConstantsAgree pins the bridge between the two constant sets:
-// the generic side freezes the session option string, the execute service owns
-// the file behavior, and the conversion task maps one onto the other. If the
-// values ever drift apart, the mapping silently degrades — so assert it here.
-func TestDeleteModeConstantsAgree(t *testing.T) {
-	if string(execute.DeleteModeSoft) != worksetusecase.ExecutionDeleteModeSoft {
-		t.Fatalf(
-			"soft mode: execute=%q session option=%q",
-			execute.DeleteModeSoft,
-			worksetusecase.ExecutionDeleteModeSoft,
-		)
+// draftJSON builds a minimal structurally valid draft with the given
+// obsolete-audio handling (empty omits the field entirely).
+func draftJSON(deleteMode string) []byte {
+	base := `{"schema_version":1,"classifier_tags":[],"matched":{},"unmatched":{}}`
+	if deleteMode == "" {
+		return []byte(base)
 	}
-	if string(execute.DeleteModeHard) != worksetusecase.ExecutionDeleteModeHard {
-		t.Fatalf(
-			"hard mode: execute=%q session option=%q",
-			execute.DeleteModeHard,
-			worksetusecase.ExecutionDeleteModeHard,
-		)
+	return []byte(strings.TrimSuffix(base, "}") + `,"delete_mode":"` + deleteMode + `"}`)
+}
+
+// TestDraftDeleteModeValidation pins the draft's obsolete-audio field: the two
+// accepted values, the soft default (an absent field), and a rejection for
+// anything else.
+func TestDraftDeleteModeValidation(t *testing.T) {
+	task := conversion.New(t.TempDir())
+
+	for _, accepted := range []string{"", "soft", "hard"} {
+		if err := task.ValidateDraft(draftJSON(accepted), nil); err != nil {
+			t.Fatalf("delete_mode=%q must validate: %v", accepted, err)
+		}
+	}
+	err := task.ValidateDraft(draftJSON("medium"), nil)
+	if werr, ok := worksetusecase.AsError(err); !ok || werr.Code != "INVALID_DRAFT" {
+		t.Fatalf("err = %v, want INVALID_DRAFT", err)
+	}
+}
+
+// TestNormalizeDraftKeepsDeleteMode proves the setting survives the sparse
+// round trip, so a saved choice reaches every later revision snapshot.
+func TestNormalizeDraftKeepsDeleteMode(t *testing.T) {
+	task := conversion.New(t.TempDir())
+
+	canonical, _, _, err := task.NormalizeDraft(draftJSON("hard"), nil)
+	if err != nil {
+		t.Fatalf("NormalizeDraft: %v", err)
+	}
+	doc, err := conversion.ParseDraft(string(canonical))
+	if err != nil {
+		t.Fatalf("ParseDraft: %v", err)
+	}
+	if doc.DeleteMode != "hard" {
+		t.Fatalf("delete mode = %q, want hard", doc.DeleteMode)
 	}
 }

@@ -331,24 +331,6 @@ type RootValidation struct {
 	EntryCount           int
 }
 
-// ConfirmRequest carries the If-Match version for a confirmation.
-type ConfirmRequest struct {
-	IfMatchVersion int
-}
-
-// ConfirmResult distinguishes a first confirmation from an idempotent repeat.
-type ConfirmResult struct {
-	Confirmation ConfirmationView
-	Created      bool
-}
-
-// ConfirmationView is the confirmation state of one revision.
-type ConfirmationView struct {
-	Confirmed        bool   `json:"confirmed"`
-	ConfirmedVersion int    `json:"confirmed_version,omitempty"`
-	ConfirmedAt      string `json:"confirmed_at,omitempty"`
-}
-
 // Dispatcher is the background FIFO generation scheduler handle for main
 // wiring (Start once at process startup, Stop at graceful shutdown).
 type Dispatcher interface {
@@ -386,12 +368,6 @@ type Service interface {
 		beforeIndex, limit int,
 	) (*RevisionListResult, error)
 	GetRevision(ctx context.Context, worksetID, operationType, planID string) (*RevisionView, error)
-	ConfirmRevision(
-		ctx context.Context,
-		worksetID, operationType, planID string,
-		req ConfirmRequest,
-	) (*ConfirmResult, error)
-	GetConfirmation(ctx context.Context, worksetID, operationType, planID string) (*ConfirmationView, error)
 	StartExecution(
 		ctx context.Context,
 		worksetID, operationType, planID string,

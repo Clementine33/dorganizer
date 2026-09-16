@@ -16,6 +16,7 @@ import (
 type draftDocumentRequest struct {
 	SchemaVersion  int                      `json:"schema_version"`
 	Mode           string                   `json:"mode"`
+	DeleteMode     string                   `json:"delete_mode,omitempty"`
 	ClassifierTags []string                 `json:"classifier_tags"`
 	Matched        reconcile.DesiredProfile `json:"matched"`
 	Unmatched      reconcile.DesiredProfile `json:"unmatched"`
@@ -203,16 +204,6 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 	if componentRoots == nil {
 		componentRoots = []worksetusecase.ComponentRootRef{}
 	}
-	confirmation, confErr := svc.GetConfirmation(
-		r.Context(),
-		r.PathValue("id"),
-		r.PathValue("type"),
-		r.PathValue("planId"),
-	)
-	if confErr != nil {
-		writeWorksetError(w, confErr)
-		return
-	}
 	members := make([]revisionMemberResponse, 0, len(rv.Members))
 	for _, m := range rv.Members {
 		members = append(members, revisionMemberResponse{
@@ -237,7 +228,6 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		Members        []revisionMemberResponse          `json:"members"`
 		Roots          []rootValidationResponse          `json:"roots"`
 		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
-		Confirmation   worksetusecase.ConfirmationView   `json:"confirmation"`
 		Execution      *worksetusecase.ExecutionRef      `json:"execution"`
 	}{
 		PlanID:        rv.PlanID,
@@ -262,40 +252,6 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		Members:        members,
 		Roots:          toRoots(rv.Roots),
 		ComponentRoots: componentRoots,
-		Confirmation:   *confirmation,
 		Execution:      rv.Execution,
 	})
-}
-
-// confirmRevision handles
-// POST /api/v1/worksets/{id}/operations/{type}/revisions/{planId}/confirmation.
-// If-Match guards the authoritative checks; 201 = first confirmation, 200 =
-// idempotent repeat.
-func (s *Server) confirmRevision(w http.ResponseWriter, r *http.Request) {
-	svc, err := s.worksetService()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
-		return
-	}
-	version, valid := ifMatchVersion(r)
-	if !valid {
-		writeError(
-			w,
-			http.StatusBadRequest,
-			"VERSION_REQUIRED",
-			"If-Match header with the operation version is required",
-		)
-		return
-	}
-	res, err := svc.ConfirmRevision(r.Context(), r.PathValue("id"), r.PathValue("type"), r.PathValue("planId"),
-		worksetusecase.ConfirmRequest{IfMatchVersion: version})
-	if err != nil {
-		writeWorksetError(w, err)
-		return
-	}
-	status := http.StatusCreated
-	if !res.Created {
-		status = http.StatusOK
-	}
-	writeJSON(w, status, res.Confirmation)
 }

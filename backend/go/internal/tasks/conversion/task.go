@@ -215,11 +215,12 @@ func (*Task) EvaluateRevision(
 
 // FreezeExecution validates that the revision can run and freezes its ordered
 // units: each component's root path plus the effective target profile its
-// partition resolves to in the revision's own draft snapshot.
+// partition resolves to in the revision's own draft snapshot. The session
+// options — the obsolete-audio handling the draft declared — are frozen here
+// too, so a run always uses what the plan was made with.
 func (t *Task) FreezeExecution(
 	repo *sqlite.Repository,
 	in worksetusecase.RevisionFacts,
-	_ string,
 ) (worksetusecase.FrozenExecution, []string, error) {
 	frozen := worksetusecase.FrozenExecution{}
 	if in.Detail == nil {
@@ -233,6 +234,11 @@ func (t *Task) FreezeExecution(
 			worksetusecase.ErrKindInternal, "INTERNAL", "stored revision snapshot is invalid", err,
 		)
 	}
+	options, optionsErr := executionOptionsOf(doc)
+	if optionsErr != nil {
+		return frozen, nil, optionsErr
+	}
+	frozen.Options = options
 	effective, err := ResolveEffective(doc, in.Members)
 	if err != nil {
 		return frozen, nil, worksetusecase.NewError(
@@ -294,7 +300,7 @@ func (t *Task) RunUnit(
 			worksetusecase.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
 		)
 	}
-	mode, modeErr := deleteModeOf(in.DeleteMode)
+	mode, modeErr := deleteModeFromOptions(in.Options)
 	if modeErr != nil {
 		return result, modeErr
 	}
@@ -433,15 +439,14 @@ func componentErrorOf(err error) (stage, code, message string) {
 	return cerr.Stage, cerr.Code, msg
 }
 
-// deleteModeOf maps the frozen session option onto the execute service's
-// mode. The two constant sets are separate on purpose — the generic side owns
-// the option string on the wire and in storage, the execute service owns the
-// file behavior — and this switch is their single bridge.
-func deleteModeOf(option string) (execute.DeleteMode, error) {
-	switch option {
-	case worksetusecase.ExecutionDeleteModeSoft:
+// deleteModeOf maps the draft's declared obsolete-audio handling onto the
+// execute service's mode. The draft value names the choice the user made in
+// the global settings; an absent value is the soft default.
+func deleteModeOf(declared string) (execute.DeleteMode, error) {
+	switch declared {
+	case "", string(execute.DeleteModeSoft):
 		return execute.DeleteModeSoft, nil
-	case worksetusecase.ExecutionDeleteModeHard:
+	case string(execute.DeleteModeHard):
 		return execute.DeleteModeHard, nil
 	}
 	return "", worksetusecase.NewError(
@@ -450,6 +455,36 @@ func deleteModeOf(option string) (execute.DeleteMode, error) {
 		"delete_mode must be soft or hard",
 		nil,
 	)
+}
+
+// executionOptionsOf freezes the session options the draft declares: the
+// delete mode every unit run must use.
+func executionOptionsOf(doc *DraftDoc) (json.RawMessage, error) {
+	mode, err := deleteModeOf(doc.DeleteMode)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(mustJSON(struct {
+		DeleteMode string `json:"delete_mode"`
+	}{DeleteMode: string(mode)})), nil
+}
+
+// deleteModeFromOptions reads the frozen session options back.
+func deleteModeFromOptions(options json.RawMessage) (execute.DeleteMode, error) {
+	var opts struct {
+		DeleteMode string `json:"delete_mode"`
+	}
+	if len(options) > 0 {
+		if err := json.Unmarshal(options, &opts); err != nil {
+			return "", worksetusecase.NewError(
+				worksetusecase.ErrKindInternal,
+				"REQUEST_LOAD_FAILED",
+				"frozen session options are unreadable",
+				err,
+			)
+		}
+	}
+	return deleteModeOf(opts.DeleteMode)
 }
 
 // underRecoveryDir reports whether a persisted path is inside the member root's

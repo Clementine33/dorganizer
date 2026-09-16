@@ -37,7 +37,10 @@ export function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientCo
     streamGenerationEvents: vi.fn(),
     listRevisions: vi.fn().mockResolvedValue([]),
     getRevision: vi.fn(),
-    confirmRevision: vi.fn(),
+    startExecution: vi.fn(),
+    getExecution: vi.fn(),
+    cancelExecution: vi.fn(),
+    streamExecutionEvents: vi.fn(),
   } as ApiClientContract
   return Object.assign(base, overrides)
 }

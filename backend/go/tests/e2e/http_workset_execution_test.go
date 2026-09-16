@@ -26,10 +26,12 @@ func mustFFmpegEncode(t *testing.T, args ...string) {
 
 // executionView mirrors the execution detail payload for the assertions.
 type executionView struct {
-	ExecutionID         string `json:"execution_id"`
-	Status              string `json:"status"`
-	PlanID              string `json:"plan_id"`
-	DeleteMode          string `json:"delete_mode"`
+	ExecutionID string `json:"execution_id"`
+	Status      string `json:"status"`
+	PlanID      string `json:"plan_id"`
+	Options     struct {
+		DeleteMode string `json:"delete_mode"`
+	} `json:"options"`
 	TotalComponents     int    `json:"total_components"`
 	CompletedComponents int    `json:"completed_components"`
 	TotalOperations     int    `json:"total_operations"`
@@ -74,6 +76,51 @@ func waitForTerminalExecution(
 			t.Fatalf("execution %s did not finish in time (status %s)", execID, view.Status)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// waitForLatestRevision waits for the operation's generation to complete and
+// returns the published revision id.
+func waitForLatestRevision(
+	t *testing.T,
+	client *http.Client,
+	ctx context.Context,
+	base, token, wsPath, opPath string,
+) string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var wsDetail struct {
+			Operations []struct {
+				LatestGeneration *struct {
+					GenerationID string `json:"generation_id"`
+				} `json:"latest_generation"`
+			} `json:"operations"`
+		}
+		_ = doJSON(t, client, ctx, base, http.MethodGet, wsPath, token, nil, &wsDetail)
+		if len(wsDetail.Operations) == 1 && wsDetail.Operations[0].LatestGeneration != nil {
+			var genDetail struct {
+				Status     string `json:"status"`
+				RevisionID string `json:"revision_id"`
+				ErrorCode  string `json:"error_code"`
+			}
+			if code := doJSON(
+				t, client, ctx, base, http.MethodGet,
+				opPath+"/planning-sessions/"+wsDetail.Operations[0].LatestGeneration.GenerationID,
+				token, nil, &genDetail,
+			); code == http.StatusOK {
+				if genDetail.Status == "completed" {
+					return genDetail.RevisionID
+				}
+				if genDetail.Status == "failed" || genDetail.Status == "canceled" {
+					t.Fatalf("generation terminal: %+v", genDetail)
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("generation not completed in time")
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
@@ -214,29 +261,6 @@ func setupScannedWorkset(
 	}
 }
 
-func (f *execFixtureHTTP) confirm(t *testing.T) int {
-	t.Helper()
-	// A fresh revision is refused until it is confirmed.
-	code := doJSONWithHeaders(
-		t, f.client, f.ctx, f.base, http.MethodPost,
-		f.opPath+"/revisions/"+f.revision+"/executions", f.token,
-		map[string]string{"Idempotency-Key": "exec-early", "If-Match": strconv.Itoa(f.opVersion)},
-		map[string]any{}, nil,
-	)
-	if code != http.StatusConflict {
-		t.Fatalf("execution of an unconfirmed revision = %d, want 409", code)
-	}
-	code = doJSONWithHeaders(
-		t, f.client, f.ctx, f.base, http.MethodPost,
-		f.opPath+"/revisions/"+f.revision+"/confirmation", f.token,
-		map[string]string{"If-Match": strconv.Itoa(f.opVersion)}, map[string]any{}, nil,
-	)
-	if code != http.StatusCreated {
-		t.Fatalf("confirm: %d", code)
-	}
-	return f.opVersion
-}
-
 //nolint:funlen,gocognit,gocyclo,cyclop // e2e scenario
 func TestHTTPWorksetExecutionLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
@@ -275,7 +299,7 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 	// The default seeded draft (available_sources, wav + mp3@320) is the plan
 	// under test: no draft edit happens here.
 	f := setupScannedWorkset(t, binPath, dataDir, rootPath, []string{"albumA", "albumB"}, nil)
-	version := f.confirm(t)
+	version := f.opVersion
 
 	// Start the session, then let the SSE connection drop: the worker must keep
 	// going, and the reconnect (here: the detail GET) must show the truth.
@@ -292,7 +316,7 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 		t.Fatalf("start execution: %d", code)
 	}
 	execID := started.Execution.ExecutionID
-	if started.Execution.Status != "queued" || started.Execution.DeleteMode != "soft" {
+	if started.Execution.Status != "queued" || started.Execution.Options.DeleteMode != "soft" {
 		t.Fatalf("started session = %+v", started.Execution)
 	}
 	eventsCtx, stopEvents := context.WithCancel(f.ctx)
@@ -383,7 +407,7 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 		t.Fatalf("recovery must disclose every preserved file: %v", recovery)
 	}
 
-	// The observed inventory was synced to the disk: the confirmed revision no
+	// The observed inventory was synced to the disk: the executed revision no
 	// longer matches it (a rescan would be needed to re-plan), and the revision
 	// detail names the session that ran.
 	var revDetail struct {
@@ -472,7 +496,7 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 }
 
 // TestHTTPWorksetExecutionRejectsChangedDisk proves the real disk precheck: a
-// file that changed after confirmation (and before any rescan) fails the
+// file that changed after planning (and before any rescan) fails the
 // component before anything is written.
 func TestHTTPWorksetExecutionRejectsChangedDisk(t *testing.T) {
 	binPath := buildBackendBinary(t)
@@ -491,9 +515,9 @@ func TestHTTPWorksetExecutionRejectsChangedDisk(t *testing.T) {
 		t.Fatalf("stat mp3: %v", err)
 	}
 	f := setupScannedWorkset(t, binPath, dataDir, rootPath, []string{"albumA"}, nil)
-	version := f.confirm(t)
+	version := f.opVersion
 
-	// The wav is rewritten after the confirmation: same path, new content, and
+	// The wav is rewritten after the plan was frozen: same path, new content, and
 	// the DB still holds the scanned facts (no rescan happened).
 	if writeErr := os.WriteFile(
 		filepath.Join(album, "00.wav"), []byte("not-the-scanned-bytes-anymore"), 0o644,

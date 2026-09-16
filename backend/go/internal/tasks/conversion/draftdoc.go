@@ -7,6 +7,7 @@ import (
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
@@ -32,9 +33,13 @@ const (
 // common setting groups are the base; a member overrides only the units it
 // explicitly replaces. Absence means inheritance — never truthiness — so an
 // explicitly empty tag list is a real override while null is not.
+// DeleteMode is the obsolete-audio handling of the whole operation (soft or
+// hard; empty means soft) — it is one global choice, frozen into every
+// revision and never overridable per member.
 type DraftDoc struct {
 	SchemaVersion  int                      `json:"schema_version"`
 	Mode           string                   `json:"mode,omitempty"`
+	DeleteMode     string                   `json:"delete_mode,omitempty"`
 	ClassifierTags []string                 `json:"classifier_tags"`
 	Matched        reconcile.DesiredProfile `json:"matched"`
 	Unmatched      reconcile.DesiredProfile `json:"unmatched"`
@@ -123,6 +128,7 @@ func normalizeDraft(doc *DraftDoc, members []*sqlite.WorksetMember) *DraftDoc {
 	out := &DraftDoc{
 		SchemaVersion: doc.SchemaVersion,
 		Mode:          doc.Mode,
+		DeleteMode:    doc.DeleteMode,
 		Matched:       doc.Matched,
 		Unmatched:     doc.Unmatched,
 	}
@@ -160,6 +166,9 @@ func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 		)
 	}
 	if err := validateMode(doc.Mode); err != nil {
+		return err
+	}
+	if err := validateDeleteMode(doc.DeleteMode); err != nil {
 		return err
 	}
 	if err := validateProfile("matched", doc.Matched); err != nil {
@@ -215,6 +224,21 @@ func validateMode(mode string) error {
 		worksetusecase.ErrKindInvalidArgument,
 		"INVALID_DRAFT",
 		"unsupported conversion mode "+mode,
+		nil,
+	)
+}
+
+// validateDeleteMode accepts the two obsolete-audio handlings; absence is the
+// soft default.
+func validateDeleteMode(mode string) error {
+	switch mode {
+	case "", string(execute.DeleteModeSoft), string(execute.DeleteModeHard):
+		return nil
+	}
+	return worksetusecase.NewError(
+		worksetusecase.ErrKindInvalidArgument,
+		"INVALID_DRAFT",
+		"unsupported delete mode "+mode,
 		nil,
 	)
 }

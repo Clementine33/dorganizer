@@ -7,25 +7,15 @@ import (
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// executionStartRequest is the POST .../revisions/{planId}/executions payload.
-// The client chooses only the delete mode; the file worklist is the frozen
-// revision's.
-type executionStartRequest struct {
-	DeleteMode string `json:"delete_mode"`
-}
-
 // startExecution handles POST
 // /api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions.
-// If-Match (operation version) and Idempotency-Key are both required.
+// If-Match (operation version) and Idempotency-Key are both required; the
+// request carries no body — the frozen revision holds the worklist and the
+// session options.
 func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 	svc, err := s.worksetService()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
-		return
-	}
-	var req executionStartRequest
-	if decodeErr := decodeJSONAllowEmpty(w, r, &req); decodeErr != nil {
-		writeDecodeError(w, decodeErr, "invalid execution payload")
 		return
 	}
 	idemKey := r.Header.Get("Idempotency-Key")
@@ -51,7 +41,6 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 		worksetusecase.StartExecutionRequest{
 			IfMatchVersion: version,
 			IdempotencyKey: idemKey,
-			DeleteMode:     req.DeleteMode,
 		},
 	)
 	if err != nil {

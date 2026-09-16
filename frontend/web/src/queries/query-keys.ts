@@ -3,6 +3,7 @@
 // protection all depend on these exact tuple shapes.
 export const queryKeys = {
   libraries: {
+    all: () => ['libraries'] as const,
     list: () => ['libraries', 'list'] as const,
     foldersPrefix: (libraryId: string) => ['libraries', 'folders', libraryId] as const,
     folders: (libraryId: string, rootIdentity: string) =>
@@ -42,5 +43,9 @@ export const queryKeys = {
       ['worksets', 'revisions', worksetId, operation, 'list'] as const,
     revision: (worksetId: string, operation: string, planId: string) =>
       ['worksets', 'revisions', worksetId, operation, planId] as const,
+    executionsPrefix: (worksetId: string, operation: string) =>
+      ['worksets', 'executions', worksetId, operation] as const,
+    execution: (worksetId: string, operation: string, executionId: string) =>
+      ['worksets', 'executions', worksetId, operation, executionId] as const,
   },
 } as const

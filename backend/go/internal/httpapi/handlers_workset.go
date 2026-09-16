@@ -313,7 +313,7 @@ func (s *Server) getWorkset(w http.ResponseWriter, r *http.Request) {
 
 // patchWorkset handles PATCH /api/v1/worksets/{id} (rename). Renaming is
 // guarded by the workset metadata version and never by an operation version,
-// so it cannot invalidate an operation draft or confirmation.
+// so it cannot invalidate an operation draft.
 func (s *Server) patchWorkset(w http.ResponseWriter, r *http.Request) {
 	svc, err := s.worksetService()
 	if err != nil {

@@ -1,16 +1,17 @@
 import type { InjectionKey } from 'vue'
 import { inject } from 'vue'
-import { parseSSEStream } from './sse'
+import { parseSSEStream, type SSEEvent } from './sse'
 import type {
   ApiClientContract,
   ApiConfig,
   ClassifierCustomTag,
   ClassifierTagLibraryResponse,
-  ConfirmationState,
   CreateLibraryInput,
   CreateWorksetInput,
   DraftEnvelopeResponse,
   DraftResponse,
+  ExecutionEvent,
+  ExecutionView,
   Folder,
   GenerationEvent,
   GenerationView,
@@ -25,6 +26,7 @@ import type {
   RevisionListResponse,
   SavePolicySlotInput,
   ScanEvent,
+  StartExecutionResponse,
   StartGenerationResponse,
   TreeNode,
   UpdateLibraryInput,
@@ -276,16 +278,48 @@ export class ApiClient implements ApiClientContract {
     )
   }
 
-  /** Formal whole-revision confirmation. If-Match guards the server-side checks. */
-  confirmRevision(
+  /**
+   * Enqueue the execution of the operation's current revision. The request
+   * carries no body — the file worklist and the session options are the frozen
+   * revision's, never the client's. Disconnecting never cancels the session —
+   * only cancelExecution or the backend process lifecycle does.
+   */
+  startExecution(
     worksetId: string,
     operation: OperationType,
     planId: string,
-    ifMatchVersion: number,
-  ): Promise<ConfirmationState> {
+    input: { ifMatchVersion: number; idempotencyKey: string },
+  ): Promise<StartExecutionResponse> {
     return this.request(
-      `${this.operationPath(worksetId, operation)}/revisions/${encodeURIComponent(planId)}/confirmation`,
-      { method: 'POST', headers: { 'If-Match': String(ifMatchVersion) } },
+      `${this.operationPath(worksetId, operation)}/revisions/${encodeURIComponent(planId)}/executions`,
+      {
+        method: 'POST',
+        headers: { 'If-Match': String(input.ifMatchVersion), 'Idempotency-Key': input.idempotencyKey },
+      },
+    )
+  }
+
+  getExecution(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<ExecutionView> {
+    return this.request(
+      `${this.operationPath(worksetId, operation)}/executions/${encodeURIComponent(executionId)}`,
+      { signal },
+    )
+  }
+
+  /** Cooperative cancel; idempotent on terminal sessions (200 either way). */
+  cancelExecution(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+  ): Promise<ExecutionView> {
+    return this.request(
+      `${this.operationPath(worksetId, operation)}/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: 'POST', body: {} },
     )
   }
 
@@ -294,23 +328,40 @@ export class ApiClient implements ApiClientContract {
     return `/worksets/${encodeURIComponent(worksetId)}/operations/${encodeURIComponent(operation)}`
   }
 
-  async *streamGenerationEvents(
+  streamGenerationEvents(
     worksetId: string,
     operation: OperationType,
     generationId: string,
     signal: AbortSignal,
   ): AsyncGenerator<GenerationEvent> {
-    const response = await fetch(
-      this.url(
-        `${this.operationPath(worksetId, operation)}/planning-sessions/${encodeURIComponent(generationId)}/events`,
-      ),
-      { headers: this.headers(false), signal },
+    return this.streamEvents<GenerationEvent>(
+      `${this.operationPath(worksetId, operation)}/planning-sessions/${encodeURIComponent(generationId)}/events`,
+      signal,
+      'Generation events',
     )
+  }
+
+  streamExecutionEvents(
+    worksetId: string,
+    operation: OperationType,
+    executionId: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<ExecutionEvent> {
+    return this.streamEvents<ExecutionEvent>(
+      `${this.operationPath(worksetId, operation)}/executions/${encodeURIComponent(executionId)}/events`,
+      signal,
+      'Execution events',
+    )
+  }
+
+  /** Shared GET-SSE lifecycle: fetch, error envelope, then the parsed stream. */
+  private async *streamEvents<T extends SSEEvent>(path: string, signal: AbortSignal, surface: string): AsyncGenerator<T> {
+    const response = await fetch(this.url(path), { headers: this.headers(false), signal })
     if (!response.ok) throw await this.toApiError(response)
     if (!response.body) {
-      throw new ApiError(response.status, 'STREAM_UNAVAILABLE', 'Generation events response did not include a stream')
+      throw new ApiError(response.status, 'STREAM_UNAVAILABLE', `${surface} response did not include a stream`)
     }
-    yield* parseSSEStream<GenerationEvent>(response.body)
+    yield* parseSSEStream<T>(response.body)
   }
 
   private url(path: string): string {

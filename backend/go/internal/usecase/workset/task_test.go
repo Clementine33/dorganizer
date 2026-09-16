@@ -86,9 +86,9 @@ func (s stubTask) EvaluateRevision(
 }
 
 func (stubTask) FreezeExecution(
-	_ *sqlite.Repository, in worksetusecase.RevisionFacts, _ string,
+	_ *sqlite.Repository, in worksetusecase.RevisionFacts,
 ) (worksetusecase.FrozenExecution, []string, error) {
-	frozen := worksetusecase.FrozenExecution{}
+	frozen := worksetusecase.FrozenExecution{Options: json.RawMessage(`{}`)}
 	if in.Detail != nil {
 		for _, c := range in.Detail.Components {
 			frozen.Units = append(frozen.Units, worksetusecase.ExecutionUnit{
@@ -247,8 +247,8 @@ func (f *fixture) saveRenameDraft(worksetID string) {
 }
 
 // TestSecondTaskRunsTheFullChain drives the generic paths with a second task
-// that shares nothing with conversion: draft → generation → confirmation →
-// execution, all through the workset seam.
+// that shares nothing with conversion: draft → generation → execution, all
+// through the workset seam.
 func TestSecondTaskRunsTheFullChain(t *testing.T) {
 	f := newFixture(t)
 	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
@@ -263,14 +263,6 @@ func TestSecondTaskRunsTheFullChain(t *testing.T) {
 	gen := f.runGenerationFor(ws.WorksetID, "rename", "k-chain", op.Version)
 	if gen.Status != sqlite.GenStatusCompleted || gen.RevisionID == "" {
 		t.Fatalf("generation = %+v", gen)
-	}
-
-	op = f.operationFor(ws.WorksetID, "rename")
-	if _, err := f.svc.ConfirmRevision(
-		f.ctx, ws.WorksetID, "rename", gen.RevisionID,
-		worksetusecase.ConfirmRequest{IfMatchVersion: op.Version},
-	); err != nil {
-		t.Fatalf("ConfirmRevision: %v", err)
 	}
 
 	op = f.operationFor(ws.WorksetID, "rename")
@@ -298,10 +290,10 @@ func TestSecondTaskRunsTheFullChain(t *testing.T) {
 	}
 }
 
-// TestSecondTaskMovedInputRefusesConfirmAndExecute covers the admission
-// contract through the generic gates: the task reports the business reason,
-// the generic side names it.
-func TestSecondTaskMovedInputRefusesConfirmAndExecute(t *testing.T) {
+// TestSecondTaskMovedInputRefusesExecute covers the admission contract
+// through the generic gates: the task reports the business reason, the
+// generic side names it.
+func TestSecondTaskMovedInputRefusesExecute(t *testing.T) {
 	f := newFixture(t)
 	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
 		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`},
@@ -316,40 +308,12 @@ func TestSecondTaskMovedInputRefusesConfirmAndExecute(t *testing.T) {
 		t.Fatalf("generation = %+v", gen)
 	}
 
-	// The input facts move before confirmation: the revision cannot be
-	// confirmed.
+	// The input facts move after the plan was frozen: the revision cannot run.
 	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
 		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`, moved: true},
 	})
 	op = f.operationFor(ws.WorksetID, "rename")
-	_, err := f.svc.ConfirmRevision(
-		f.ctx, ws.WorksetID, "rename", gen.RevisionID,
-		worksetusecase.ConfirmRequest{IfMatchVersion: op.Version},
-	)
-	if err == nil {
-		t.Fatal("moved input must refuse confirmation")
-	}
-	if werr, ok := worksetusecase.AsError(err); !ok || werr.Code != "PLAN_NOT_CONFIRMABLE" ||
-		len(werr.Details) != 1 || werr.Details[0] != "INPUT_CHANGED" {
-		t.Fatalf("want PLAN_NOT_CONFIRMABLE INPUT_CHANGED, got %v", err)
-	}
-
-	// Healthy again: confirm, then let the input move before execution.
-	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
-		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`},
-	})
-	op = f.operationFor(ws.WorksetID, "rename")
-	if _, confirmErr := f.svc.ConfirmRevision(
-		f.ctx, ws.WorksetID, "rename", gen.RevisionID,
-		worksetusecase.ConfirmRequest{IfMatchVersion: op.Version},
-	); confirmErr != nil {
-		t.Fatalf("ConfirmRevision: %v", confirmErr)
-	}
-	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
-		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`, moved: true},
-	})
-	op = f.operationFor(ws.WorksetID, "rename")
-	_, err = f.svc.StartExecution(f.ctx, ws.WorksetID, "rename", gen.RevisionID, worksetusecase.StartExecutionRequest{
+	_, err := f.svc.StartExecution(f.ctx, ws.WorksetID, "rename", gen.RevisionID, worksetusecase.StartExecutionRequest{
 		IfMatchVersion: op.Version, IdempotencyKey: "k-refuse-exec",
 	})
 	if err == nil {

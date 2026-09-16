@@ -4,14 +4,16 @@ import { Button } from '@/components/ui/button'
 import { OVERRIDE_UNITS } from '@/features/worksets/draft-intents'
 import { defaultDraftValues } from '@/features/worksets/draft-defaults'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
-import type { OperationDraftDocument, OverrideUnit } from '@/lib/api/types'
+import type { DeleteMode, OperationDraftDocument, OverrideUnit } from '@/lib/api/types'
 import UnitFields from './UnitFields.vue'
 
 /**
  * Common conversion settings: the four groups are edited directly, because a
  * common value has nothing to inherit from — the three-intent model belongs to
  * the member and batch entry points. 恢复默认 puts a group back to the value a
- * new operation is seeded with.
+ * new operation is seeded with. 旧音频处理 is a fifth, whole-operation choice:
+ * it is never a member override and freezes into every revision the draft
+ * produces.
  */
 const props = defineProps<{
   draft: OperationDraftDocument
@@ -59,8 +61,24 @@ function isDefault(unit: OverrideUnit): boolean {
   return JSON.stringify(valueOf(unit) ?? null) === JSON.stringify(defaults.value[unit] ?? null)
 }
 
+/** The obsolete-audio handling: pending edit, else the persisted choice. */
+const deleteModeValue = computed<DeleteMode>({
+  get: () => {
+    const pending = editor.session?.intent.deleteMode
+    if (pending?.intent === 'set') return pending.value
+    return props.draft.delete_mode ?? 'soft'
+  },
+  set: (value) => editor.setDeleteMode(value),
+})
+const deleteModeDirty = computed(() => deleteModeValue.value !== defaults.value.delete_mode)
+
+function restoreDeleteMode() {
+  editor.setDeleteMode(defaults.value.delete_mode)
+}
+
 function restoreAll() {
   for (const unit of OVERRIDE_UNITS) restoreDefault(unit)
+  restoreDeleteMode()
 }
 
 const dirtyUnits = computed(() => OVERRIDE_UNITS.filter((unit) => editor.session?.intent.units[unit]?.intent === 'set'))
@@ -73,7 +91,7 @@ const dirtyUnits = computed(() => OVERRIDE_UNITS.filter((unit) => editor.session
         全局设置是所有继承它的文件夹的基准；此处修改只写全局值，不会给任何文件夹写入独立设置。
       </p>
       <Button
-        v-if="dirtyUnits.length > 0"
+        v-if="dirtyUnits.length > 0 || deleteModeDirty"
         size="xs"
         variant="ghost"
         class="ml-auto"
@@ -112,6 +130,71 @@ const dirtyUnits = computed(() => OVERRIDE_UNITS.filter((unit) => editor.session
           :disabled="isDefault(unit)"
           :data-testid="`common-${unit}-restore`"
           @click="restoreDefault(unit)"
+        >
+          恢复默认
+        </Button>
+      </div>
+    </fieldset>
+
+    <fieldset class="rounded-lg border border-border p-3" data-testid="common-group-delete_mode">
+      <legend class="flex items-center gap-2 px-1 text-xs font-medium">
+        旧音频处理
+        <span v-if="deleteModeDirty" class="font-normal text-[var(--brand-ink)]">已修改</span>
+      </legend>
+      <p class="mb-2 text-[11px] text-[var(--text-muted)]">
+        执行时如何处置被替换和不再需要的旧音频；该设置随草稿冻结进每个计划版本。
+      </p>
+      <div class="space-y-1.5">
+        <label
+          class="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-[var(--brand-border)] has-[:checked]:bg-[var(--brand-weak)]"
+        >
+          <input
+            v-model="deleteModeValue"
+            type="radio"
+            name="common-delete-mode"
+            value="soft"
+            class="mt-0.5"
+            :disabled="editor.session?.applying ?? false"
+            data-testid="common-delete-mode-soft"
+          />
+          <span>
+            <span class="font-medium">软删除（默认）</span>
+            <span class="block text-[11px] text-[var(--text-muted)]">旧文件移动到对应文件夹的 Delete/ 目录保留，可手动恢复。</span>
+          </span>
+        </label>
+        <label
+          class="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-[var(--danger-border)] has-[:checked]:bg-[var(--danger-weak)]"
+        >
+          <input
+            v-model="deleteModeValue"
+            type="radio"
+            name="common-delete-mode"
+            value="hard"
+            class="mt-0.5"
+            :disabled="editor.session?.applying ?? false"
+            data-testid="common-delete-mode-hard"
+          />
+          <span>
+            <span class="font-medium">硬删除</span>
+            <span class="block text-[11px] text-[var(--text-muted)]">旧文件直接从磁盘移除，本应用无法恢复。</span>
+          </span>
+        </label>
+      </div>
+      <p
+        v-if="deleteModeValue === 'hard'"
+        class="mt-1.5 text-[11px] text-[var(--danger-ink)]"
+        role="alert"
+        data-testid="common-hard-delete-warning"
+      >
+        硬删除不可恢复：被替换和被清理的旧音频文件将被永久移除。
+      </p>
+      <div class="mt-2">
+        <Button
+          size="xs"
+          variant="ghost"
+          :disabled="!deleteModeDirty"
+          data-testid="common-delete_mode-restore"
+          @click="restoreDeleteMode"
         >
           恢复默认
         </Button>

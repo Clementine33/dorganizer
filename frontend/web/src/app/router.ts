@@ -7,6 +7,7 @@ import ConversionSettingsPage from '@/pages/ConversionSettingsPage.vue'
 import MemberDetailPage from '@/pages/MemberDetailPage.vue'
 import MemberEditPage from '@/pages/MemberEditPage.vue'
 import BatchEditPage from '@/pages/BatchEditPage.vue'
+import ExecutionDetailPage from '@/pages/ExecutionDetailPage.vue'
 
 /**
  * Route table (design §5.1). Desktop and mobile use the same routes: layout
@@ -67,6 +68,12 @@ export const router = createRouter({
           name: 'conversion-settings',
           component: ConversionSettingsPage,
           meta: { carrier: true, title: '转换全局设置' },
+        },
+        {
+          path: 'execution',
+          name: 'conversion-execution',
+          component: ExecutionDetailPage,
+          meta: { carrier: true, title: '执行结果' },
         },
         {
           path: 'batch-edit',
