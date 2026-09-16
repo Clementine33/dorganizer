@@ -132,9 +132,14 @@ Workset revisions are exempt from standalone plan retention.
 
 Planning state, input validity and result facts are separate axes. Input
 validation compares frozen fingerprints with current scanned inventory on
-authoritative reads, rather than scanning every root for every list row.
-Missing member roots remain explicit missing outcomes. Changed, unmet-target,
-blocked and unchanged counts are independent facts, not an exclusive status.
+authoritative reads, rather than scanning every root for every list row — and a
+session refreshes its participating folders through the scanner before it plans
+and before it writes, so those comparisons are against what is on disk now
+rather than against whenever the last scan happened to run. A refresh that
+cannot complete fails the session rather than letting it act on unverified
+facts. Missing member roots remain explicit missing outcomes. Changed,
+unmet-target, blocked and unchanged counts are independent facts, not an
+exclusive status.
 
 Execution accepts the current operation's complete revision, not selected
 members. The server checks version, current-revision identity, matching draft,
@@ -151,8 +156,11 @@ did not already re-check at run time, and it forced a regeneration for every
 plan tweak. Its re-checks (version, current revision, draft hash, inputs,
 blocked components) live on the execution start.
 
-Version guards protect persistence, not the filesystem. A future executor must
-revalidate inputs immediately before changing files.
+Version guards protect persistence, not the filesystem. The executor therefore
+revalidates its inputs immediately before the first write: it refreshes the
+scanned inventory of the roots it is about to change and refuses the run with
+`INPUT_CHANGED` when a fingerprint moved, leaving every file untouched instead
+of failing component by component once it is already writing.
 
 ## 5. Workbench navigation and state ownership
 

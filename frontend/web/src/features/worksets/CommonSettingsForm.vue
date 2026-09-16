@@ -159,7 +159,7 @@ const dirtyUnits = computed(() => OVERRIDE_UNITS.filter((unit) => editor.session
           />
           <span>
             <span class="font-medium">软删除（默认）</span>
-            <span class="block text-[11px] text-[var(--text-muted)]">旧文件移动到对应文件夹的 Delete/ 目录保留，可手动恢复。</span>
+            <span class="block text-[11px] text-[var(--text-muted)]">旧文件移动到库根目录下的 Delete/（保留各文件夹的原相对路径），可手动恢复。</span>
           </span>
         </label>
         <label

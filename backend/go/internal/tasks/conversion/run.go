@@ -168,6 +168,7 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 		aggregated.BlockedCount += o.result.Summary.BlockedCount
 		aggregated.OperationCount += o.result.Summary.OperationCount
 		aggregated.ErrorCount += o.result.Summary.ErrorCount
+		aggregated.UnmetTargets += o.result.Summary.UnmetTargets
 		if o.missing {
 			// A missing member is not a blocked Component; it is a root-level
 			// failure that still forces the revision conclusion to BLOCKED/PARTIAL.
@@ -226,13 +227,16 @@ func planStatus(summary reconcile.StepSummary) string {
 	return "ok"
 }
 
-// aggregateSummaryReason derives the summary reason from the aggregated facts.
+// aggregateSummaryReason derives the summary reason from the aggregated facts,
+// with the same precedence one root uses (reconcile.Reconcile).
 func aggregateSummaryReason(s reconcile.StepSummary) string {
 	switch {
 	case s.BlockedCount > 0 && s.OperationCount > 0:
 		return reconcile.ReasonPartial
 	case s.BlockedCount > 0:
 		return reconcile.ReasonBlocked
+	case s.UnmetTargets > 0:
+		return reconcile.ReasonUnmetTargets
 	case s.OperationCount > 0:
 		return reconcile.ReasonActionable
 	default:

@@ -38,8 +38,11 @@ type plannedRemove struct {
 type plannedComponent struct {
 	absRoot  string
 	realRoot string
-	encodes  []plannedEncode
-	removes  []plannedRemove
+	// recoveryRoot is the base soft removals are made relative to; it may be
+	// above absRoot (the library root), never below it.
+	recoveryRoot string
+	encodes      []plannedEncode
+	removes      []plannedRemove
 }
 
 // nativePath returns the filesystem form of a path as persisted.
@@ -120,10 +123,44 @@ func newPlannedComponent(req ComponentRunRequest) (*plannedComponent, *Component
 			"member root is not a directory", nil)
 	}
 	plan := &plannedComponent{absRoot: absRoot, realRoot: realRoot}
+	recoveryRoot, rerr := resolveRecoveryRoot(req, absRoot)
+	if rerr != nil {
+		return nil, rerr
+	}
+	plan.recoveryRoot = recoveryRoot
 	if cerr := plan.validateComponent(req.Component); cerr != nil {
 		return nil, cerr
 	}
 	return plan, nil
+}
+
+// resolveRecoveryRoot resolves the base soft removals are made relative to. It
+// defaults to the member root and must be an existing directory: a recovery
+// copy is never written through a path that cannot be resolved.
+func resolveRecoveryRoot(req ComponentRunRequest, absRoot string) (string, *ComponentError) {
+	if req.RecoveryRoot == "" {
+		return absRoot, nil
+	}
+	recoveryRoot := filepath.Clean(filepath.FromSlash(req.RecoveryRoot))
+	if !filepath.IsAbs(recoveryRoot) {
+		return "", componentError(ComponentStagePrecheck, ComponentCodeInvalidRequest, "",
+			fmt.Sprintf("recovery root must be absolute: %s", req.RecoveryRoot), nil)
+	}
+	resolved, err := filepath.EvalSymlinks(recoveryRoot)
+	if err != nil {
+		return "", componentError(ComponentStagePrecheck, ComponentCodeInvalidRequest, "",
+			"recovery root does not resolve", err)
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", componentError(ComponentStagePrecheck, ComponentCodeInvalidRequest, "",
+			"cannot inspect recovery root", err)
+	}
+	if !info.IsDir() {
+		return "", componentError(ComponentStagePrecheck, ComponentCodeInvalidRequest, "",
+			"recovery root is not a directory", nil)
+	}
+	return recoveryRoot, nil
 }
 
 // validateComponent refuses blocked or malformed components.
@@ -246,7 +283,14 @@ func (p *plannedComponent) collectRemove(op reconcile.Operation, index int) *Com
 }
 
 // validateConflicts refuses duplicate targets, operation sources that are also
-// targets, and removals that collide with planned outputs or sources.
+// targets, obsolete files that are also materialize targets, and duplicate
+// removals.
+//
+// A removal of an encode source is deliberately allowed: materialization reads
+// every source before the removal stage runs, and each removal carries the
+// component's materialized targets as dependencies, so the file is only
+// removed once its replacement has landed. That is the shape the planner emits
+// when a declared output replaces the lossless source it was encoded from.
 func (p *plannedComponent) validateConflicts() *ComponentError {
 	targets := make(map[string]bool, len(p.encodes))
 	for _, enc := range p.encodes {
@@ -257,14 +301,12 @@ func (p *plannedComponent) validateConflicts() *ComponentError {
 		}
 		targets[target] = true
 	}
-	encodeSources := make(map[string]bool, len(p.encodes))
 	for _, enc := range p.encodes {
 		source := posixForm(enc.source)
 		if targets[source] {
 			return componentError(ComponentStagePrecheck, ComponentCodeConflict, source,
 				"an operation source is also a materialize target", nil)
 		}
-		encodeSources[source] = true
 	}
 	removed := make(map[string]bool, len(p.removes))
 	for _, rem := range p.removes {
@@ -272,10 +314,6 @@ func (p *plannedComponent) validateConflicts() *ComponentError {
 		if targets[source] {
 			return componentError(ComponentStagePrecheck, ComponentCodeConflict, source,
 				"an obsolete file is also a materialize target", nil)
-		}
-		if encodeSources[source] {
-			return componentError(ComponentStagePrecheck, ComponentCodeConflict, source,
-				"an obsolete file is also an encode source", nil)
 		}
 		if removed[source] {
 			return componentError(ComponentStagePrecheck, ComponentCodeConflict, source,

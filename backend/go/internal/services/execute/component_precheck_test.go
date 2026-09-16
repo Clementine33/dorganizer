@@ -208,23 +208,6 @@ func TestComponentRun_PrecheckRejections(t *testing.T) {
 			},
 		},
 		{
-			name: "removal collides with a source",
-			want: execute.ComponentCodeConflict,
-			build: func(t *testing.T) execute.ComponentRunRequest {
-				root, source, target := base(t)
-				return runRequest(
-					root,
-					componentFixture(
-						[]reconcile.FileTuple{freezeFile(t, source)},
-						encodeOp("cmp-1", source, target),
-						removeOp("cmp-1", source),
-					),
-					mp3Profile,
-					execute.DeleteModeSoft,
-				)
-			},
-		},
-		{
 			name: "duplicate removal",
 			want: execute.ComponentCodeConflict,
 			build: func(t *testing.T) execute.ComponentRunRequest {

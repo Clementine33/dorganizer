@@ -33,7 +33,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	}
 	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
 		tasksconversion.New(tmp),
-	})
+	}, nil)
 	handler := NewServer(Dependencies{
 		Repo:           repo,
 		ConfigDir:      tmp,

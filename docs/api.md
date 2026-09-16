@@ -236,6 +236,15 @@ starts have exactly one winner. Failures, partial completions and interrupted
 sessions do not auto-retry: refresh the inputs (rescan), then generate a new
 revision — a revision never runs twice.
 
+**Fresh facts before writing.** A session refreshes the scanned inventory of
+its roots through the scanner before its first write and re-judges the
+revision's recorded inputs against what is on disk now. A drifted folder stops
+the session as `failed` with `INPUT_CHANGED` and every file untouched — the
+drift is caught at the start, never component by component halfway through. A
+refresh that cannot complete (`SCAN_FAILED`) also leaves the disk alone.
+Generation works the same way: its session scans the participating member
+folders before planning, so a plan is never made from a stale inventory.
+
 **Lifecycle.** Statuses `queued` → `running` → `succeeded` | `failed` |
 `canceled` | `interrupted`; a terminal status never regresses. Sessions run
 serially (one worker) in frozen root/component order; the first component
@@ -281,7 +290,10 @@ copy is never destroyed halfway). Cancellation is idempotent.
 **Inventory sync.** After each component the observed disk changes are applied
 to the entries inventory for the affected paths only (removed sources lose
 their row, committed outputs and `Delete/…` recovery files are refreshed with
-the scan merge's `content_rev` semantics). A sync failure is disclosed per
+the scan merge's `content_rev` semantics). A soft removal lands under the
+library root (`<library root>/Delete/<member path>/…`), beside the member
+folder rather than inside it, so recovered media never re-enters a member's own
+inventory. A sync failure is disclosed per
 component (`inventory_synced:false`, `inventory_sync_error`) instead of being
 reported as "unchanged"; the library folder counts still only change on the
 next scan. The executed revision keeps its frozen fingerprints, so it reports

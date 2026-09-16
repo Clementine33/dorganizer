@@ -310,6 +310,9 @@ func (t *Task) RunUnit(
 		Specs:      profile,
 		DeleteMode: mode,
 		Tools:      t.tools(),
+		// Recovery copies land under <workset root>/Delete/..., beside the
+		// member folders, so they never re-enter the member's own inventory.
+		RecoveryRoot: in.WorksetRoot,
 	})
 	result.Committed = nonNil(res.Committed)
 	result.Removed = nonNil(res.Removed)
@@ -334,7 +337,7 @@ func (*Task) fillInventoryFacts(result *worksetusecase.UnitResult, in worksetuse
 	paths := make([]string, 0, len(result.Committed)+len(result.Recovery))
 	paths = append(paths, result.Committed...)
 	for _, p := range result.Recovery {
-		if underRecoveryDir(in.Unit.RootPath, p) {
+		if underRecoveryDir(in.WorksetRoot, p) {
 			paths = append(paths, p)
 		}
 	}

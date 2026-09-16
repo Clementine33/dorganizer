@@ -477,6 +477,81 @@ func TestComponentRun_SoftDeletePreservesRelativePath(t *testing.T) {
 	}
 }
 
+// TestComponentRun_RecoversBesideTheMemberFolder covers the workset layout: the
+// recovery base is the library root, so a recovered file lands in the
+// library-level Delete/ under the member's own name instead of being nested
+// inside the member folder (where the next scan would see it as live media).
+func TestComponentRun_RecoversBesideTheMemberFolder(t *testing.T) {
+	library := t.TempDir()
+	root := filepath.Join(library, "album")
+	obsolete := filepath.Join(root, "disc", "obs.mp3")
+	if err := os.MkdirAll(filepath.Dir(obsolete), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBytes(t, obsolete, []byte("obsolete"))
+
+	req := runRequest(
+		root,
+		componentFixture([]reconcile.FileTuple{freezeFile(t, obsolete)}, removeOp("cmp-1", obsolete)),
+		reconcile.DesiredProfile{},
+		execute.DeleteModeSoft,
+	)
+	req.RecoveryRoot = library
+	result, err := execute.RunComponent(t.Context(), req)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := filepath.Join(library, "Delete", "album", "disc", "obs.mp3")
+	if !slices.Equal(result.Recovery, []string{filepath.ToSlash(want)}) {
+		t.Fatalf("recovery = %v, want %s", result.Recovery, want)
+	}
+	if string(readBytes(t, want)) != "obsolete" {
+		t.Fatal("recovered content lost")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "Delete")); statErr == nil {
+		t.Fatal("recovery must not be nested inside the member folder")
+	}
+}
+
+// TestComponentRun_RemovesTheSourceOfItsReplacement covers the shape the
+// planner emits when a declared output replaces the lossless source it was
+// encoded from: materialization reads the source, the removal depends on the
+// committed replacement, and the source leaves after the output has landed.
+func TestComponentRun_RemovesTheSourceOfItsReplacement(t *testing.T) {
+	root, source := newAudioRoot(t)
+	target := filepath.Join(root, "track.flac")
+	spec := reconcile.AudioOutputSpec{Codec: reconcile.CodecFlac}
+	component := componentFixture(
+		[]reconcile.FileTuple{freezeFile(t, source)},
+		encodeOp("cmp-1", source, target),
+		removeOp("cmp-1", source, filepath.ToSlash(target)),
+	)
+	result, err := execute.RunComponent(t.Context(), runRequest(
+		root, component, reconcile.DesiredProfile{Lossless: &spec}, execute.DeleteModeSoft,
+	))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Status != execute.ComponentStatusSucceeded || result.Stage != "" {
+		t.Fatalf("status = %s, stage = %s", result.Status, result.Stage)
+	}
+	if !slices.Equal(result.Committed, []string{filepath.ToSlash(target)}) {
+		t.Fatalf("committed = %v", result.Committed)
+	}
+	if !slices.Equal(result.Removed, []string{filepath.ToSlash(source)}) {
+		t.Fatalf("removed = %v", result.Removed)
+	}
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Fatalf("the replacement must exist: %v", statErr)
+	}
+	if _, statErr := os.Stat(source); !os.IsNotExist(statErr) {
+		t.Fatal("the replaced source must have left its place")
+	}
+	if leftovers := tempFiles(t, root); len(leftovers) != 0 {
+		t.Fatalf("staging leftovers: %v", leftovers)
+	}
+}
+
 func TestComponentRun_CanceledBeforeStart(t *testing.T) {
 	root, source := newAudioRoot(t)
 	target := filepath.Join(root, "track.mp3")

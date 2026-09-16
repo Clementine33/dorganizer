@@ -123,13 +123,33 @@ func (d *dispatcher) execute(gen *sqlite.PlanGeneration) {
 		return
 	}
 
+	checkCancel := func() {
+		if c, _ := d.svc.repo.GetGeneration(gen.GenerationID); c != nil && c.CancelRequested {
+			cancel()
+		}
+	}
+
+	// Fresh facts first: the inventory is only as current as the last scan, and
+	// a plan made from a stale one is the drift the executor refuses later.
+	memberFolders, rootsErr := d.svc.participatingRoots(gen.OperationType, req.Draft, members)
+	if rootsErr != nil {
+		d.fail(gen, "MEMBERS_LOAD_FAILED", "failed to resolve the participating members")
+		return
+	}
+	if scanErr := d.svc.refreshRoots(ctx, memberFolders, w.RootPath, checkCancel); scanErr != nil {
+		if ctx.Err() != nil {
+			_ = d.svc.repo.CompleteGenerationCanceled(gen.GenerationID)
+			return
+		}
+		d.fail(gen, "SCAN_FAILED", "failed to refresh the scanned inventory before planning")
+		return
+	}
+
 	// Progress callback updates the session row with root counts and observes
 	// the cooperative cancel flag at root boundaries.
 	progress := func(p PlanProgress) {
 		_ = d.svc.repo.UpdateGenerationProgress(gen.GenerationID, p.CompletedRoots, 0, p.CurrentRoot)
-		if c, _ := d.svc.repo.GetGeneration(gen.GenerationID); c != nil && c.CancelRequested {
-			cancel()
-		}
+		checkCancel()
 	}
 
 	snap, runErr := d.svc.runGeneration(ctx, gen.OperationType, req, members, progress)

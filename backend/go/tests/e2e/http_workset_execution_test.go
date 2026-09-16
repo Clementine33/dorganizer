@@ -366,8 +366,9 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 	}
 
 	// Disk facts: the satisfied album is untouched, the obsolete variant and
-	// the replaced mp3 are preserved under Delete/, and the mp3 now holds the
-	// frozen target quality.
+	// the replaced mp3 are preserved under the library-level Delete/ (beside
+	// the album folder, not inside it), and the mp3 now holds the frozen target
+	// quality.
 	if kept, keptErr := os.Stat(filepath.Join(albumA, "00.mp3")); keptErr != nil || kept.Size() != satisfiedA.Size() {
 		t.Fatalf("albumA must stay untouched: %v", keptErr)
 	}
@@ -375,10 +376,13 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 		t.Fatal("albumB/00.m4a must have left its place")
 	}
 	for _, preserved := range []string{"00.m4a", "00.mp3"} {
-		recovered, statErr := os.Stat(filepath.Join(albumB, "Delete", preserved))
+		recovered, statErr := os.Stat(filepath.Join(rootPath, "Delete", "albumB", preserved))
 		if statErr != nil || recovered.Size() == 0 {
-			t.Fatalf("albumB/Delete/%s missing: %v", preserved, statErr)
+			t.Fatalf("Delete/albumB/%s missing: %v", preserved, statErr)
 		}
+	}
+	if _, statErr := os.Stat(filepath.Join(albumB, "Delete")); statErr == nil {
+		t.Fatal("recovery must not be nested inside the member folder")
 	}
 	if _, statErr := os.Stat(filepath.Join(albumB, "00.wav")); statErr != nil {
 		t.Fatalf("the qualified wav source stays in place in relaxed mode: %v", statErr)
@@ -537,14 +541,16 @@ func TestHTTPWorksetExecutionRejectsChangedDisk(t *testing.T) {
 		t.Fatalf("start execution: %d", code)
 	}
 	done := waitForTerminalExecution(t, f.client, f.ctx, f.base, f.opPath, started.Execution.ExecutionID, f.token)
-	if done.Status != "failed" || done.ErrorCode != "COMPONENT_FILE_CHANGED" {
+	// The run rescans its roots before the first write and re-judges the
+	// revision's recorded inputs: the drift stops the session up front.
+	if done.Status != "failed" || done.ErrorCode != "INPUT_CHANGED" {
 		t.Fatalf("changed-disk execution = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
 	}
-	if len(done.Components) != 1 || done.Components[0].Status != "failed" || done.Components[0].Stage != "precheck" {
+	if len(done.Components) != 1 || done.Components[0].Status != "pending" {
 		t.Fatalf("component report = %+v", done.Components)
 	}
 	if len(done.Components[0].Removed) != 0 || len(done.Components[0].Committed) != 0 {
-		t.Fatalf("a precheck refusal must not change files: %+v", done.Components[0])
+		t.Fatalf("a refusal must not change files: %+v", done.Components[0])
 	}
 	if _, statErr := os.Stat(filepath.Join(album, "00.wav")); statErr != nil {
 		t.Fatalf("the changed file must stay where it is: %v", statErr)

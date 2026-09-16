@@ -20,6 +20,7 @@ import (
 	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/scanner"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -168,8 +169,16 @@ func runServer(
 	}
 	// Task registration: every kind a workset operation can carry. Creation
 	// materializes one operation and seed draft per entry, in this order.
+	//
+	// Sessions refresh their member folders through the scanner before planning
+	// and before writing: the stored inventory is the only input fact a plan
+	// reads, and it is only as current as the last scan.
+	memberScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
 	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, []worksetusecase.Task{
 		tasksconversion.New(configDir),
+	}, func(scanCtx context.Context, folderPath, rootPath string) error {
+		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
+		return scanErr
 	})
 
 	// Startup recovery: any session left queued/running by a previous process

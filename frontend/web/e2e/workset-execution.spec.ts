@@ -136,12 +136,14 @@ test.describe('workset execution', () => {
 
     // Disk truth: the mp3 was rebuilt at the frozen target quality, the wav
     // source stays, and both the obsolete aac and the replaced mp3 are kept
-    // under Delete/.
+    // under the library-level Delete/, beside the album folder rather than
+    // nested inside it.
     expect(mp3Bitrate(path.join(album, '00.mp3'))).toBeGreaterThanOrEqual(319_000)
     expect(existsSync(path.join(album, '00.wav'))).toBe(true)
     expect(existsSync(path.join(album, '00.m4a'))).toBe(false)
-    expect(existsSync(path.join(album, 'Delete', '00.m4a'))).toBe(true)
-    expect(existsSync(path.join(album, 'Delete', '00.mp3'))).toBe(true)
+    expect(existsSync(path.join(root, 'Delete', 'soft-album', '00.m4a'))).toBe(true)
+    expect(existsSync(path.join(root, 'Delete', 'soft-album', '00.mp3'))).toBe(true)
+    expect(existsSync(path.join(album, 'Delete'))).toBe(false)
 
     // A reload restores the terminal session from the server (no live stream
     // survives it) on the same report page, and the revision can never run
@@ -171,6 +173,7 @@ test.describe('workset execution', () => {
     expect(existsSync(path.join(album, '00.wav'))).toBe(true)
     expect(existsSync(path.join(album, '00.m4a'))).toBe(false)
     expect(existsSync(path.join(album, 'Delete'))).toBe(false)
+    expect(existsSync(path.join(root, 'Delete'))).toBe(false)
   })
 
   test('a source drifting after planning fails the run and preserves every file', async ({ page }) => {
@@ -182,7 +185,8 @@ test.describe('workset execution', () => {
     await generatePlan(page)
 
     // The wav changes on disk after the plan was frozen and before the run: the
-    // execution must refuse the component at precheck and leave everything.
+    // session rescans, refuses with INPUT_CHANGED before its first write and
+    // leaves everything.
     writeFileSync(path.join(album, '00.wav'), 'drifted-bytes', 'utf8')
     const mp3Before = statSync(path.join(album, '00.mp3')).size
 
@@ -194,6 +198,7 @@ test.describe('workset execution', () => {
     expect(statSync(path.join(album, '00.mp3')).size).toBe(mp3Before)
     expect(mp3Bitrate(path.join(album, '00.mp3'))).toBeLessThan(319_000)
     expect(existsSync(path.join(album, 'Delete'))).toBe(false)
+    expect(existsSync(path.join(root, 'Delete'))).toBe(false)
   })
 
   test('canceling a running session stops it and reports the unrun range', async ({ page }) => {

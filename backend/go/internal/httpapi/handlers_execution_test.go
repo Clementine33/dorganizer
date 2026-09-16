@@ -87,7 +87,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	wsID := created.Workset.WorksetID
 	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
 		tasksconversion.New(t.TempDir()),
-	})
+	}, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
 

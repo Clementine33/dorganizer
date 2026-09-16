@@ -78,7 +78,7 @@ The asynchronous, durable run of one Plan Revision: globally serialized, coopera
 _Avoid_: Run, job.
 
 **Obsolete Audio Handling**:
-The whole-operation choice of what happens to replaced and obsolete audio at execution: soft (moved under `Delete/`, recoverable) or hard (removed). It is a draft setting, never a per-member override; the plan freezes it and the run uses the frozen value.
+The whole-operation choice of what happens to replaced and obsolete audio at execution: soft (moved to the library-level `Delete/`, under the member's own path — beside the member folder, never inside it — and recoverable) or hard (removed). It is a draft setting, never a per-member override; the plan freezes it and the run uses the frozen value.
 _Avoid_: Delete mode as a per-run option.
 
 **Input Validity**:

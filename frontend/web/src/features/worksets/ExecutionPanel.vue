@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
+import { sessionFailureText } from '@/features/worksets/session-failure'
 import type { ExecutionComponent, ExecutionStatus, ExecutionView } from '@/lib/api/types'
 
 /**
@@ -62,7 +63,7 @@ function shortPath(path: string): string {
     </div>
 
     <p v-if="view.error_code" class="mt-1 text-[11px] text-[var(--danger-ink)]" role="alert" data-testid="execution-error">
-      执行失败：{{ view.error_message || view.error_code }}
+      执行失败：{{ sessionFailureText(view.error_code, view.error_message) }}
     </p>
     <p v-if="view.status === 'interrupted'" class="mt-1 text-[11px] text-[var(--danger-ink)]">
       执行被后端中断（进程重启）：已完成的组件结果保留，未执行的操作保持磁盘原样。需重新生成并确认新版本才能继续。

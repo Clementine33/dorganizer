@@ -36,6 +36,13 @@ type execFixture struct {
 
 func newExecFixture(t *testing.T) *execFixture {
 	t.Helper()
+	return newExecFixtureWithScan(t, nil)
+}
+
+// newExecFixtureWithScan wires the session-time folder refresh seam; a nil scan
+// keeps the stored inventory as the only input facts.
+func newExecFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *execFixture {
+	t.Helper()
 	tmp := t.TempDir()
 	repo, err := sqlite.NewRepository(filepath.Join(tmp, "test.db"))
 	if err != nil {
@@ -52,7 +59,7 @@ func newExecFixture(t *testing.T) *execFixture {
 		repo: repo,
 		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
 			tasksconversion.New(tmp),
-		}),
+		}, scan),
 		root:      root,
 		libraryID: "lib-1",
 		members:   map[string]worksetusecase.MemberView{},
@@ -534,8 +541,8 @@ func TestExecutionSoftDeleteMovesAndSyncsInventory(t *testing.T) {
 	if entry.Status != "succeeded" || len(entry.Removed) != 1 || entry.Removed[0] != source {
 		t.Fatalf("component report = %+v", entry)
 	}
-	if len(entry.Recovery) != 1 || !strings.HasSuffix(entry.Recovery[0], "/albumA/Delete/00.mp3") {
-		t.Fatalf("soft delete must report the recovery path: %+v", entry.Recovery)
+	if len(entry.Recovery) != 1 || !strings.HasSuffix(entry.Recovery[0], "/Delete/albumA/00.mp3") {
+		t.Fatalf("soft delete must report the recovery path beside the member folder: %+v", entry.Recovery)
 	}
 	if !entry.InventorySynced || entry.InventorySyncError != "" {
 		t.Fatalf("inventory sync = %v %q", entry.InventorySynced, entry.InventorySyncError)
@@ -543,7 +550,7 @@ func TestExecutionSoftDeleteMovesAndSyncsInventory(t *testing.T) {
 	if _, err := os.Stat(filepath.FromSlash(source)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("obsolete file must leave its place: %v", err)
 	}
-	recovered := filepath.Join(f.root, "albumA", "Delete", "00.mp3")
+	recovered := filepath.Join(f.root, "Delete", "albumA", "00.mp3")
 	content, err := os.ReadFile(recovered)
 	if err != nil || string(content) != "obsolete-audio" {
 		t.Fatalf("recovery copy = %q, %v", content, err)

@@ -13,9 +13,10 @@ import (
 )
 
 // RecoveryDirName is the in-root recovery folder of the soft-delete
-// convention: removed media is preserved at <root>/Delete/<relative path>.
-// It is the single definition of the folder name; the conversion task reads
-// it to tell real media in their scanned place from temp leftovers.
+// The recovery directory name is the legacy convention: soft-removed media is
+// preserved at <recoveryRoot>/Delete/<relative path>. It is the single
+// definition of the folder name; the conversion task reads it to tell real
+// media in their scanned place from temp leftovers.
 const RecoveryDirName = "Delete"
 
 // maxRecoveryNameAttempts bounds unique-name generation below Delete/.
@@ -23,35 +24,37 @@ const maxRecoveryNameAttempts = 100
 
 // removeObsolete removes one obsolete file per the selected mode. Soft removal
 // reports the recovery location in persisted form; hard removal reports none.
-func removeObsolete(tk *componentToolkit, absRoot, source string, soft bool) (string, error) {
+func removeObsolete(tk *componentToolkit, recoveryRoot, source string, soft bool) (string, error) {
 	if !soft {
 		if err := tk.remove(source); err != nil {
 			return "", fmt.Errorf("hard delete %s: %w", posixForm(source), err)
 		}
 		return "", nil
 	}
-	dest, err := softRemove(tk, absRoot, source)
+	dest, err := softRemove(tk, recoveryRoot, source)
 	if err != nil {
 		return "", err
 	}
 	return posixForm(dest), nil
 }
 
-// softRemove moves a file into <root>/Delete/<relative path>, preserving the
-// legacy recovery convention. An existing recovery file is never overwritten:
-// a collision gets the first free "<stem>.N<ext>" name. The destination is
-// returned so callers can report where the media can be recovered.
-func softRemove(tk *componentToolkit, absRoot, source string) (string, error) {
-	rel, err := filepath.Rel(absRoot, source)
+// softRemove moves a file into <recoveryRoot>/Delete/<path relative to it>,
+// preserving the legacy recovery convention: a member's media is recovered
+// beside the member folder, never nested inside it. An existing recovery file
+// is never overwritten: a collision gets the first free "<stem>.N<ext>" name.
+// The destination is returned so callers can report where the media can be
+// recovered.
+func softRemove(tk *componentToolkit, recoveryRoot, source string) (string, error) {
+	rel, err := filepath.Rel(recoveryRoot, source)
 	if err != nil || rel == "." || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("compute recovery path for %s: not inside the member root", posixForm(source))
+		return "", fmt.Errorf("compute recovery path for %s: not inside the recovery root", posixForm(source))
 	}
 	relDir := filepath.Dir(rel)
-	if pathnorm.IsWindowsUNCPath(absRoot) {
+	if pathnorm.IsWindowsUNCPath(recoveryRoot) {
 		relDir = pathnorm.TruncatePathComponentsToBytes(relDir, 214)
 	}
-	deleteDir := filepath.Join(absRoot, RecoveryDirName, relDir)
+	deleteDir := filepath.Join(recoveryRoot, RecoveryDirName, relDir)
 	if mkdirErr := os.MkdirAll(deleteDir, 0o755); mkdirErr != nil {
 		return "", fmt.Errorf("create recovery directory: %w", mkdirErr)
 	}

@@ -31,6 +31,14 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureWithScan(t, nil)
+}
+
+// newFixtureWithScan wires the session-time folder refresh seam (the disk →
+// inventory path every session uses); a nil scan keeps the stored inventory as
+// the only input facts, which most tests want.
+func newFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *fixture {
+	t.Helper()
 	tmp := t.TempDir()
 	repo, err := sqlite.NewRepository(filepath.Join(tmp, "test.db"))
 	if err != nil {
@@ -46,7 +54,7 @@ func newFixture(t *testing.T) *fixture {
 		repo: repo,
 		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
 			tasksconversion.New(tmp),
-		}),
+		}, scan),
 		ctx: context.Background(),
 	}
 }

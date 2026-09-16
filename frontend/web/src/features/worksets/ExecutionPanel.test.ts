@@ -29,6 +29,21 @@ function view(overrides: Partial<ExecutionView> = {}): ExecutionView {
 }
 
 describe('ExecutionPanel', () => {
+  it('states a session-level failure in the user\'s words', () => {
+    const wrapper = mount(ExecutionPanel, {
+      props: {
+        view: view({
+          status: 'failed',
+          error_code: 'INPUT_CHANGED',
+          error_message: 'the scanned inventory no longer matches the revision\'s recorded inputs; regenerate the plan',
+        }),
+      },
+    })
+
+    expect(wrapper.get('[data-testid="execution-error"]').text()).toContain('文件夹输入已变化')
+    expect(wrapper.get('[data-testid="execution-error"]').text()).not.toContain('regenerate the plan')
+  })
+
   it('reports real counts while running, never a fabricated percentage', () => {
     const wrapper = mount(ExecutionPanel, { props: { view: view() } })
 

@@ -71,6 +71,11 @@ type ComponentRunRequest struct {
 	Specs      reconcile.DesiredProfile
 	DeleteMode DeleteMode
 	Tools      ToolsConfig
+	// RecoveryRoot is the root soft removals are made relative to — the
+	// workset's library root, so a recovered file lands under
+	// <RecoveryRoot>/Delete/<path relative to it>, beside the member folder
+	// rather than nested inside it. Empty falls back to Root.
+	RecoveryRoot string
 }
 
 // ComponentRunResult reports what actually happened to one Component. On a
@@ -208,7 +213,7 @@ func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToo
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return stopCanceled(plan, tk, result, ComponentStageCommit, ctxErr)
 		}
-		recovery, committed, err := commitOutput(tk, plan.absRoot, enc, soft)
+		recovery, committed, err := commitOutput(tk, plan.recoveryRoot, enc, soft)
 		result.Recovery = append(result.Recovery, recovery...)
 		if committed {
 			result.Committed = append(result.Committed, posixForm(enc.target))
@@ -230,7 +235,7 @@ func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToo
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return stopCanceled(plan, tk, result, ComponentStageRemove, ctxErr)
 		}
-		recoveryPath, err := removeObsolete(tk, plan.absRoot, rem.source, soft)
+		recoveryPath, err := removeObsolete(tk, plan.recoveryRoot, rem.source, soft)
 		if err != nil {
 			return stopRun(plan, tk, result, ComponentStatusFailed, ComponentStageRemove, &ComponentError{
 				Stage:   ComponentStageRemove,

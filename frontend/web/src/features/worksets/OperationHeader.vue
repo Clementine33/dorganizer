@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { sessionFailureText } from '@/features/worksets/session-failure'
 import type { Operation, PlanningState, RevisionCounts } from '@/lib/api/types'
 
 /**
@@ -135,7 +136,7 @@ const validationWarning = computed(() => {
       {{ validationWarning }}
     </p>
     <p v-if="operation?.latest_generation?.status === 'failed'" class="mt-1 text-[11px] text-[var(--danger-ink)]">
-      上次生成失败：{{ operation.latest_generation.error_message || operation.latest_generation.error_code }}
+      上次生成失败：{{ sessionFailureText(operation.latest_generation.error_code, operation.latest_generation.error_message) }}
     </p>
     <p v-if="operation?.active_generation" class="mt-1 text-[11px] text-[var(--text-secondary)]">
       生成中：{{ operation.active_generation.completed_roots }}/{{ operation.active_generation.total_roots }}

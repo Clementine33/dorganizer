@@ -58,6 +58,7 @@ type executionRun struct {
 	report   []ExecutionComponentView
 	rootPath string
 	outcomes map[int]json.RawMessage
+	plan     *sqlite.PlanDetail
 }
 
 // prepareExecution loads the frozen units, the persisted report and the
@@ -100,7 +101,7 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 	for _, c := range plan.Components {
 		outcomes[c.ComponentIndex] = json.RawMessage(c.OutcomeJSON)
 	}
-	return &executionRun{req: req, report: report, rootPath: w.RootPath, outcomes: outcomes}, true
+	return &executionRun{req: req, report: report, rootPath: w.RootPath, outcomes: outcomes, plan: plan}, true
 }
 
 // executeRun runs one claimed session: units in frozen order, first failure
@@ -129,6 +130,19 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	stopWatch := make(chan struct{})
 	go watchExecutionCancel(ctx, cancel, stopWatch, d.svc.repo, ex.ExecutionID)
 	defer close(stopWatch)
+
+	// The run revalidates the revision's recorded inputs against the disk before
+	// the first write: a folder that drifted after planning stops the session
+	// here, with every file untouched, instead of failing component by component
+	// halfway through (ADR 0004 §4).
+	if code, message, verified := d.verifyInputs(ctx, ex, run); !verified {
+		status := sqlite.ExecStatusFailed
+		if code == "CANCELED" {
+			status = sqlite.ExecStatusCanceled
+		}
+		d.finishExecution(ex, status, code, message, report)
+		return
+	}
 
 	completed, doneOps := ex.CompletedComponents, ex.CompletedOperations
 
@@ -198,6 +212,33 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	}
 	d.persistProgress(ex.ExecutionID, completed, doneOps, ExecutionUnit{}, report)
 	d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
+}
+
+// verifyInputs refreshes the scanned inventory of the session's roots and
+// re-judges the revision's recorded inputs against it. A session that cannot
+// verify the disk does not write to it: it answers the terminal status the run
+// must end on, or verified = true to proceed.
+func (d *dispatcher) verifyInputs(
+	ctx context.Context,
+	ex *sqlite.PlanExecution,
+	run *executionRun,
+) (code, message string, verified bool) {
+	if scanErr := d.svc.refreshRoots(ctx, unitRoots(run.req.Units), run.rootPath, nil); scanErr != nil {
+		if ctx.Err() != nil {
+			return "CANCELED", "execution canceled", false
+		}
+		return "SCAN_FAILED", "failed to refresh the scanned inventory before executing", false
+	}
+	health, healthErr := d.svc.revisionHealth(ex.OperationType, run.plan)
+	if healthErr != nil {
+		return "REVISION_LOAD_FAILED", "failed to evaluate the revision's inputs", false
+	}
+	if health.InputMoved {
+		return ExecBlockedInput,
+			"the scanned inventory no longer matches the revision's recorded inputs; regenerate the plan",
+			false
+	}
+	return "", "", true
 }
 
 // applyUnitResult records one unit run's observed facts on its report entry:
