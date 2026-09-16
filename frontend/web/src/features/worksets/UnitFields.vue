@@ -26,13 +26,15 @@ const MODES = [
   { value: 'strict', label: '严格（strict）' },
 ]
 
+// An absent lane is not "do not generate": the declared profile is the
+// partition's final shape, so an undeclared output is removed where one exists.
 const LOSSLESS_CODECS = [
-  { value: '', label: '不生成' },
+  { value: '', label: '不需要' },
   { value: 'wav', label: 'WAV' },
   { value: 'flac', label: 'FLAC' },
 ]
 const ENCODED_CODECS = [
-  { value: '', label: '不生成' },
+  { value: '', label: '不需要' },
   { value: 'mp3', label: 'MP3' },
   { value: 'aac', label: 'AAC' },
 ]
@@ -56,8 +58,17 @@ function setTags(raw: string) {
 
 function setCodec(lane: 'lossless' | 'encoded', codec: string) {
   const next = cloneProfile(props.value)
-  if (codec === '') delete next[lane]
-  else next[lane] = { ...(next[lane] ?? { codec: '' }), codec }
+  if (codec === '') {
+    delete next[lane]
+  } else {
+    const seeded = { ...(next[lane] ?? { codec: '' }), codec }
+    // An encoded output is only valid with its bitrate; seeding the displayed
+    // one keeps a fresh selection from being saved without quality.
+    if (lane === 'encoded' && !seeded.quality) {
+      seeded.quality = { kind: 'bitrate', bitrate: bitrate.value }
+    }
+    next[lane] = seeded
+  }
   emit('change', next)
 }
 
@@ -137,5 +148,12 @@ const bitrate = computed(() => profile.value.encoded?.quality?.bitrate ?? 320)
         kbps
       </label>
     </div>
+    <p
+      v-if="(unit === 'matched' || unit === 'unmatched') && !profile.lossless && !profile.encoded"
+      class="text-[11px] text-[var(--warning-ink)]"
+      data-testid="empty-profile-warning"
+    >
+      两者都不需要：该分类下的音频将被移除，去向由「旧音频处理」决定。
+    </p>
   </div>
 </template>

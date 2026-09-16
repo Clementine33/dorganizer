@@ -142,7 +142,7 @@ func TestLenientDesignMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("satisfied MP3 only: keep, wav unmet", func(t *testing.T) {
+	t.Run("satisfied MP3 only, no source for the wav: the stem is left as it is", func(t *testing.T) {
 		res, err := Reconcile(ReconcileInput{
 			RootPath: rjRoot,
 			Entries:  []AudioEntry{rjEntry("SEなし/mp3/00.mp3", 1, 320000)},
@@ -152,12 +152,15 @@ func TestLenientDesignMatrix(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := singleComponent(t, res, 1)
+		// The declared wav cannot be made, so the stem keeps what it has —
+		// including the mp3 that does satisfy its own lane — and reports the
+		// unmet target.
 		d, ok := findDecision(c, rjRoot+"/SEなし/mp3/00.mp3")
-		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepEncodedSatisfied {
+		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
 			t.Fatalf("mp3 decision: %+v ok=%v", d, ok)
 		}
-		if opCount(c, OpKindEncode) != 0 {
-			t.Fatalf("no encode expected, got %+v", c.Operations)
+		if opCount(c, OpKindEncode) != 0 || opCount(c, OpKindRemoveObsolete) != 0 {
+			t.Fatalf("an unreachable shape must plan no ops, got %+v", c.Operations)
 		}
 		if res.Summary.UnmetTargets == 0 {
 			t.Fatal("unmet wav target must be counted")
@@ -189,7 +192,7 @@ func TestLenientDesignMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("AAC only: kept but never satisfied", func(t *testing.T) {
+	t.Run("foreign codec only: kept, the declared target stays unmet", func(t *testing.T) {
 		res, err := Reconcile(ReconcileInput{
 			RootPath: rjRoot,
 			Entries:  []AudioEntry{rjEntry("SEなし/aac/00.m4a", 1, 256000)},
@@ -199,12 +202,14 @@ func TestLenientDesignMatrix(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := singleComponent(t, res, 1)
+		// Declared wav+mp3: neither can be made without a lossless source, so
+		// the aac stays where it is and the stem counts as an unmet target.
 		d, ok := findDecision(c, rjRoot+"/SEなし/aac/00.m4a")
-		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepUnverifiable {
+		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
 			t.Fatalf("aac decision: %+v ok=%v", d, ok)
 		}
 		if res.Summary.UnmetTargets == 0 {
-			t.Fatal("unmet target must be counted for unverifiable keep")
+			t.Fatal("unmet target must be counted")
 		}
 	})
 
@@ -296,6 +301,173 @@ func TestLenientDesignMatrix(t *testing.T) {
 		}
 		_ = entries
 		t.Skip("path-conflict plumbing is covered by the strict suite; lenient shares the occupied check")
+	})
+}
+
+// loneProfile returns the wav+mp3 policy with both partitions reduced to one
+// declared lane: the declared profile is the partition's final shape.
+func loneProfile(profile DesiredProfile) Policy {
+	p := lenientPolicyFrom(wavMp3Profile())
+	p.Matched, p.Unmatched = profile, profile
+	return p
+}
+
+func losslessOnly(codec Codec) DesiredProfile {
+	return DesiredProfile{Lossless: &AudioOutputSpec{Codec: codec}}
+}
+
+func encodedOnly(codec Codec, bitrate int) DesiredProfile {
+	return DesiredProfile{
+		Encoded: &AudioOutputSpec{Codec: codec, Quality: &Quality{Kind: QualityBitrate, Bitrate: bitrate}},
+	}
+}
+
+// assertRemovalsDependOnReplacement asserts every removal of the component
+// carries the encoded replacement it depends on (no deletion without it).
+func assertRemovalsDependOnReplacement(t *testing.T, c ComponentOutcome, wantTargets int) {
+	t.Helper()
+	removals := 0
+	for _, op := range c.Operations {
+		if op.Kind != OpKindRemoveObsolete {
+			continue
+		}
+		removals++
+		if len(op.DependsOn) != wantTargets {
+			t.Fatalf("removal %s depends on %v, want %d target(s)", op.SourcePath, op.DependsOn, wantTargets)
+		}
+	}
+	if removals == 0 {
+		t.Fatalf("no removal planned: %+v", c.Operations)
+	}
+}
+
+// TestLenientFinalShape walks the semantics the user states as the product
+// rule: what is selected is the final audio set of the partition. Everything
+// else in the stem is obsolete once the replacements commit, and a stem whose
+// declared shape cannot be reached is left untouched (see the design matrix
+// above for the unmet cases).
+func TestLenientFinalShape(t *testing.T) {
+	t.Run("only FLAC declared: wav converts, then wav and mp3 are obsolete", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 200000000, 0),
+			rjEntry("SEなし/mp3/00.mp3", 20000000, 192000),
+		}, loneProfile(losslessOnly(CodecFlac)))
+
+		c := singleComponent(t, res, 1)
+		if c.Status == StatusBlocked {
+			t.Fatalf("completable stem must not block: %+v", c)
+		}
+		if got := opCount(c, OpKindEncode); got != 1 {
+			t.Fatalf("encode ops = %d, want 1 (wav -> flac)", got)
+		}
+		if d, ok := findDecision(c, rjRoot+"/SEなし/wav/00.wav"); !ok ||
+			d.Resolution != ResolutionDelete || d.ReasonCode != ReasonObsoleteLossless {
+			t.Fatalf("wav decision: %+v ok=%v", d, ok)
+		}
+		if d, ok := findDecision(c, rjRoot+"/SEなし/mp3/00.mp3"); !ok ||
+			d.Resolution != ResolutionDelete || d.ReasonCode != ReasonObsoleteEncoded {
+			t.Fatalf("mp3 decision: %+v ok=%v", d, ok)
+		}
+		assertRemovalsDependOnReplacement(t, c, 1)
+		if want := []string{rjRoot + "/SEなし/wav/00.flac"}; !slices.Equal(c.ProjectedInventory, want) {
+			t.Fatalf("projected = %v, want %v", c.ProjectedInventory, want)
+		}
+	})
+
+	t.Run("only AAC declared: the wav is the source, both originals obsolete", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 200000000, 0),
+			rjEntry("SEなし/mp3/00.mp3", 20000000, 192000),
+		}, loneProfile(encodedOnly(CodecAac, 256)))
+
+		c := singleComponent(t, res, 1)
+		if c.Status == StatusBlocked {
+			t.Fatalf("completable stem must not block: %+v", c)
+		}
+		if got := opCount(c, OpKindEncode); got != 1 {
+			t.Fatalf("encode ops = %d, want 1 (wav -> m4a)", got)
+		}
+		for _, p := range []string{rjRoot + "/SEなし/wav/00.wav", rjRoot + "/SEなし/mp3/00.mp3"} {
+			if d, ok := findDecision(c, p); !ok || d.Resolution != ResolutionDelete {
+				t.Fatalf("decision for %s: %+v ok=%v", p, d, ok)
+			}
+		}
+		assertRemovalsDependOnReplacement(t, c, 1)
+		if want := []string{rjRoot + "/SEなし/wav/00.m4a"}; !slices.Equal(c.ProjectedInventory, want) {
+			t.Fatalf("projected = %v, want %v", c.ProjectedInventory, want)
+		}
+	})
+
+	t.Run("only WAV declared: the other lossless codec is obsolete", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/wav/00.wav", 200000000, 0),
+			rjEntry("SEなし/flac/00.flac", 100000000, 0),
+		}, loneProfile(losslessOnly(CodecWav)))
+
+		c := singleComponent(t, res, 1)
+		if d, ok := findDecision(c, rjRoot+"/SEなし/wav/00.wav"); !ok ||
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepLosslessTarget {
+			t.Fatalf("wav decision: %+v ok=%v", d, ok)
+		}
+		if d, ok := findDecision(c, rjRoot+"/SEなし/flac/00.flac"); !ok ||
+			d.Resolution != ResolutionDelete || d.ReasonCode != ReasonObsoleteLossless {
+			t.Fatalf("flac decision: %+v ok=%v", d, ok)
+		}
+		if got := opCount(c, OpKindEncode); got != 0 {
+			t.Fatalf("encode ops = %d, want 0", got)
+		}
+	})
+}
+
+// TestLenientEncodedSatisfaction pins what counts as a satisfied encoded
+// output now that AAC bitrates are probed like MP3's.
+func TestLenientEncodedSatisfaction(t *testing.T) {
+	t.Run("probed AAC at the target quality is satisfied and untouched", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/m4a/00.m4a", 20000000, 256000),
+		}, loneProfile(encodedOnly(CodecAac, 256)))
+
+		c := singleComponent(t, res, 1)
+		if d, ok := findDecision(c, rjRoot+"/SEなし/m4a/00.m4a"); !ok ||
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepEncodedSatisfied {
+			t.Fatalf("aac decision: %+v ok=%v", d, ok)
+		}
+		if len(c.Operations) != 0 {
+			t.Fatalf("satisfied aac must plan nothing: %+v", c.Operations)
+		}
+		if res.Summary.UnmetTargets != 0 {
+			t.Fatalf("unmet = %d, want 0", res.Summary.UnmetTargets)
+		}
+	})
+
+	t.Run("unprobed AAC is never assumed adequate", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/m4a/00.m4a", 20000000, 0),
+		}, loneProfile(encodedOnly(CodecAac, 256)))
+
+		c := singleComponent(t, res, 1)
+		if d, ok := findDecision(c, rjRoot+"/SEなし/m4a/00.m4a"); !ok ||
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
+			t.Fatalf("aac decision: %+v ok=%v", d, ok)
+		}
+		if res.Summary.UnmetTargets == 0 {
+			t.Fatal("an unprobed aac bitrate must leave the target unmet")
+		}
+	})
+
+	t.Run("a lossy file is no source for another codec", func(t *testing.T) {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/mp3/00.mp3", 20000000, 256000),
+		}, loneProfile(encodedOnly(CodecAac, 256)))
+
+		c := singleComponent(t, res, 1)
+		if got := opCount(c, OpKindEncode); got != 0 {
+			t.Fatalf("encode ops = %d, want 0 (lossy is never re-encoded)", got)
+		}
+		if d, ok := findDecision(c, rjRoot+"/SEなし/mp3/00.mp3"); !ok ||
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
+			t.Fatalf("mp3 decision: %+v ok=%v", d, ok)
+		}
 	})
 }
 

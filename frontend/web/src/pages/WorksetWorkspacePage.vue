@@ -148,6 +148,17 @@ const busy = computed(
  * the server's; the local rule only decides whether the button may open.
  */
 const executeError = ref<string | null>(null)
+const generateError = ref<string | null>(null)
+
+const GENERATE_CODES: Record<string, string> = {
+  INVALID_POLICY: '设置不完整，无法生成：检查分类标签（至少一个非空标签）与目标输出（编码目标必须填码率）',
+  NO_ACTIVE_MEMBERS: '所有文件夹都被排除，至少要恢复一个才能生成',
+  SCAN_IN_PROGRESS: '媒体库正在扫描，等扫描结束后再生成',
+  EXECUTION_IN_PROGRESS: '该操作已有执行在进行中，等它结束后再生成',
+  VERSION_CONFLICT: '操作版本已变化，请刷新后重试',
+  ORPHANED_WORKSET: '媒体库已删除：该工作集只读',
+  DRAFT_NOT_FOUND: '草稿不存在，请重新加载',
+}
 
 const EXECUTION_STATES: Record<string, string> = {
   queued: '排队中',
@@ -192,8 +203,19 @@ const executeBlocked = computed(() => {
   return null
 })
 
-async function startExecution() {
-  const op = operation.value
+/** A refused generation start is stated in place, never swallowed. */
+async function onGenerate() {
+  generateError.value = null
+  try {
+    await startGeneration()
+  } catch (error) {
+    const apiError = error as { code?: string; message?: string }
+    const reason = (apiError.code ? GENERATE_CODES[apiError.code] : undefined) ?? apiError.message ?? '未知错误'
+    generateError.value = `无法生成：${reason}`
+  }
+}
+
+async function startExecution() {  const op = operation.value
   const planId = op?.current_revision?.plan_id
   if (!worksetId.value || !op || !planId) return
   executeError.value = null
@@ -401,7 +423,7 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             :show-execution="Boolean(executionView)"
             :canceling="execution.store.canceling"
             :busy="busy"
-            @generate="startGeneration()"
+            @generate="onGenerate()"
             @cancel="operation?.active_generation && generation.cancel(worksetId!, 'conversion', operation.active_generation.generation_id)"
             @execute="startExecution()"
             @open-execution="openExecution()"
@@ -418,6 +440,14 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             data-testid="execute-error"
           >
             {{ executeError }}
+          </p>
+          <p
+            v-if="generateError"
+            class="border-b border-border bg-card px-3 py-1.5 text-[11px] text-[var(--danger-ink)]"
+            role="alert"
+            data-testid="generate-error"
+          >
+            {{ generateError }}
           </p>
 
           <div

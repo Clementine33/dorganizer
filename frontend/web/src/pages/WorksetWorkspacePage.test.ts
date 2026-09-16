@@ -304,10 +304,24 @@ describe('WorksetWorkspacePage execution entry', () => {
     await flushPromises()
     expect(router.currentRoute.value.path).toMatch(/\/conversion\/execution$/)
   })
+  it('states a refused generation start in place instead of leaving it in the console', async () => {
+    const startGeneration = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(400, 'INVALID_POLICY', 'effective settings for member m-1: policy requires at least one non-empty classifier tag'),
+      )
+    const api = pageApi({ startGeneration })
+    const { wrapper } = await mountPage(api)
+
+    await wrapper.get('[data-testid="start-generation"]').trigger('click')
+    await flushPromises()
+
+    expect(startGeneration).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="generate-error"]').text()).toContain('分类标签')
+  })
 })
 
-describe('WorksetWorkspacePage draft reconciliation', () => {
-  beforeEach(() => vi.restoreAllMocks())
+describe('WorksetWorkspacePage draft reconciliation', () => {  beforeEach(() => vi.restoreAllMocks())
 
   it('re-bases the edit session when the draft refetch only advanced the version', async () => {
     const getOperationDraft = vi.fn().mockResolvedValueOnce(draft).mockResolvedValue({ ...draft, version: 6 })

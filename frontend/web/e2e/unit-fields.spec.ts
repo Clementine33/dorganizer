@@ -64,11 +64,11 @@ for (const isMobile of [false, true]) {
       const encoded = page.getByTestId('test-matched-encoded')
       if (isMobile) await encoded.tap()
       else await encoded.click()
-      await page.getByRole('option', { name: '不生成', exact: true }).click()
-      await expect(encoded).toHaveText(/不生成/)
+      await page.getByRole('option', { name: '不需要', exact: true }).click()
+      await expect(encoded).toHaveText(/不需要/)
       await expect(page.getByTestId('test-matched-bitrate')).toBeDisabled()
       await encoded.press('Enter')
-      await expect(page.getByRole('option', { name: '不生成', exact: true })).toBeFocused()
+      await expect(page.getByRole('option', { name: '不需要', exact: true })).toBeFocused()
       await page.keyboard.press('End')
       await expect(page.getByRole('option', { name: 'AAC', exact: true })).toBeFocused()
       await page.keyboard.press('Enter')
@@ -77,8 +77,8 @@ for (const isMobile of [false, true]) {
 
       const lossless = page.getByTestId('test-matched-lossless')
       await lossless.click()
-      await page.getByRole('option', { name: '不生成', exact: true }).click()
-      await expect(lossless).toHaveText(/不生成/)
+      await page.getByRole('option', { name: '不需要', exact: true }).click()
+      await expect(lossless).toHaveText(/不需要/)
       await expect(encoded).toHaveText(/AAC/)
 
       await page.locator('#panel').evaluate(el => {

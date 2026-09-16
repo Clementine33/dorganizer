@@ -27,17 +27,29 @@ Desired Audio Profile → Decisions → Operations → Projected Inventory.
 - Component discovery retains transitive same-parent OR same-stem association
   so tracks can pair across wav/mp3 directories without crossing content classes.
 - Each profile specifies at most one lossless output (WAV/FLAC) and one encoded
-  output (MP3/AAC with bitrate quality), with at least one output required.
+  output (MP3/AAC with bitrate quality). The declared profile is the
+  partition's final audio set: a declared output that is missing is
+  materialized from a qualified source, and media of an output the profile
+  does not declare — including the source a declared output was encoded from —
+  is removed once those replacements commit. A profile may declare no output at
+  all, which states that the partition holds no managed audio: every observed
+  file in it is obsolete.
 - `strict` keeps an adequate encoded lane or rebuilds the entire lane from
   qualified observed lossless sources; an unsatisfied or unsafe Component is
   blocked. A missing policy mode retains strict semantics.
-- `available_sources` works per Variant Group: keep satisfied outputs, generate
-  targets from qualified sources, and preserve source-less tracks with unmet
-  targets. Ambiguity and path conflicts still block; relaxed planning is not
-  permission for unsafe conversion or deletion.
+- `available_sources` works per Variant Group under the same final-shape rule,
+  but a Variant Group whose declared outputs cannot all be reached is left
+  exactly as it is and recorded as an unmet target: no generation, no cleanup.
+  Replacing media it cannot replace would leave the Group with less than it
+  has, not with what was asked for. Ambiguity and path conflicts still block;
+  relaxed planning is not permission for unsafe conversion or deletion.
 - Only observed lossless sources qualify for conversion. No lossy upgrades,
-  encoded-to-lossless conversion or reuse of the current plan's projected
-  outputs as observed sources is allowed.
+  encoded-to-lossless conversion, lossy-to-lossy codec change or reuse of the
+  current plan's projected outputs as observed sources is allowed.
+- An encoded output counts as satisfied when the target codec is present at or
+  above the target bitrate (a 1 kbps tolerance covers probe under-reporting).
+  MP3 and AAC are compared the same way on their probed bitrates; an unprobed
+  bitrate never counts as satisfying a target.
 - Blocked Components produce no executable operations but retain decisions
   for review. Other Components can remain actionable. Non-audio files are
   outside reconciliation; removal depends on replacement outputs committing.

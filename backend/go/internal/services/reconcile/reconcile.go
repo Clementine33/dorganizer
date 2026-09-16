@@ -18,26 +18,23 @@ const (
 	ReasonReplacedEncoded      = "REPLACED_ENCODED"
 )
 
-// mp3SatisfactionTolerance mirrors the historical threshold semantics: a 320
-// kbps target accepts an observed bitrate >= 319 kbps (319000 bps), because
-// header-level probes can under-report VBR averages slightly.
-const mp3SatisfactionTolerance = 1000
+// bitrateSatisfactionTolerance mirrors the historical threshold semantics: a
+// 320 kbps target accepts an observed bitrate >= 319 kbps (319000 bps), because
+// header-level probes can under-report VBR averages slightly. It applies to
+// every encoded codec: MP3 and AAC are both compared on their probed bitrate.
+const bitrateSatisfactionTolerance = 1000
 
 // satisfiedEncoded reports whether an observed encoded variant satisfies the
-// target spec using observable facts only. MP3 quality is verifiable via the
-// probed bitrate; AAC/M4A quality cannot be probed with the v1 tooling, so an
-// AAC file is never assumed adequate — the encoded lane must rebuild from a
-// qualified lossless source or block (never silently keep an unverifiable
-// file as satisfying a quality target).
+// target spec using observable facts only: the target codec at or above the
+// target bitrate. The planner enriches what the scan left unknown (MP3, AAC
+// and their containers), so an unprobed bitrate is never assumed adequate —
+// an unknown one fails the comparison and, without a source to rebuild from,
+// keeps the stem as an unmet target instead of a silently satisfied one.
 func satisfiedEncoded(f GroupedFile, spec *AudioOutputSpec) bool {
 	if f.Codec != spec.Codec {
 		return false
 	}
-	if spec.Codec == CodecAac {
-		return false
-	}
-	// CodecMp3
-	return f.Bitrate >= int64(spec.Quality.Bitrate)*1000-mp3SatisfactionTolerance
+	return f.Bitrate >= int64(spec.Quality.Bitrate)*1000-bitrateSatisfactionTolerance
 }
 
 // sameStemPath derives a target path beside the given source path, preserving
@@ -276,7 +273,7 @@ func reconcileComponent(
 					p.encodedKeep = append(p.encodedKeep, f)
 				} else {
 					below = append(below, f)
-					if f.Codec == CodecMp3 && f.Bitrate == 0 {
+					if f.Bitrate == 0 {
 						p.encodedQualityUnknown = true
 					}
 				}

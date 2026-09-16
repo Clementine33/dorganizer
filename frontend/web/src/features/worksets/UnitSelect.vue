@@ -12,7 +12,7 @@ defineProps<{
 }>()
 const emit = defineEmits<{ change: [value: string] }>()
 // Reka reserves the empty string for its placeholder; our codec fields use it
-// for the selectable “不生成” value. Keep that UI sentinel out of the draft.
+// for the selectable “不需要” value. Keep that UI sentinel out of the draft.
 const NONE = '__none'
 </script>
 

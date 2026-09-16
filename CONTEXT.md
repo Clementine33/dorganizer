@@ -97,7 +97,7 @@ _Avoid_: Slim/prune mode, user-composed conversion and cleanup steps.
 Whether an audio file's Planning Root-relative path contains a classifier tag, ignoring case. The partitions are `matched` (UI “无音效”) and `unmatched` (UI “有音效”); these labels describe rule matching, not proof of audio effects.
 
 **Desired Audio Profile**:
-The exact managed audio outputs wanted for one classifier partition: at most one lossless output and one encoded output, with at least one present.
+The exact managed audio outputs wanted for one classifier partition: at most one lossless output and one encoded output. It is the partition's final shape — media of an output it does not declare is obsolete once the declared set is reached, and a profile that declares nothing means the partition holds no managed audio at all.
 _Avoid_: User-facing generation policy such as always or if missing.
 
 **Target Encode Specification**:
@@ -113,7 +113,7 @@ A transitive association of audio files sharing a parent directory or track stem
 The files representing the same logical track within a Component, grouped by stem.
 
 **Qualified Source**:
-Observed lossless audio from which a requested output can be generated. Lossy audio is not a source for lossless reconstruction or a claimed quality upgrade.
+Observed lossless audio from which a requested output can be generated. Lossy audio is never a conversion source: not for a lossless output, and not for a codec change either, so a 256 kbps MP3 is no source for a 256 kbps AAC target.
 
 **Conversion Mode**:
 `strict` enforces Component-wide encoded consistency; `available_sources` preserves satisfied outputs and generates unsatisfied targets where qualified sources exist. Source ambiguity and safety conflicts remain blocking in either mode.
@@ -122,7 +122,7 @@ Observed lossless audio from which a requested output can be generated. Lossy au
 An observed encoded file whose bitrate cannot be established, so it cannot be assumed to satisfy the target quality.
 
 **Unmet Target**:
-A desired output that cannot be supplied from available qualified sources in `available_sources` mode, with existing media preserved. It is disclosed separately from blocking conflicts and does not by itself prevent execution.
+A desired output that cannot be supplied from available qualified sources in `available_sources` mode. The Variant Group it belongs to is left exactly as it is — existing media preserved, nothing removed — and the fact is disclosed separately from blocking conflicts; it does not by itself prevent execution.
 
 **Decision**:
 A reviewable conclusion such as keep, delete or encode, with its reason. A keep decision requires no filesystem change.

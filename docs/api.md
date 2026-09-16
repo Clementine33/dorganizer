@@ -348,11 +348,21 @@ overlap; no exclusive status label is derived from them.
 
 Conversion modes (policy `mode`, applies to both partitions): `strict` (the
 historical rules; missing mode = strict) and `available_sources` (relaxed per
-Variant Group: satisfied outputs kept, unique qualified lossless source
-generates missing/below targets, sourceless stems kept with `UNMET_TARGET`
-records, ambiguity/path conflicts still block). `StepSummary.unmet_targets`
-counts kept-but-unsatisfied stems; `summary_reason` may be `UNMET_TARGETS`.
-New operation drafts seed `mode: "available_sources"`.
+Variant Group). A partition's declared profile is its final audio set in either
+mode: missing declared outputs are materialized from the stem's qualified
+lossless source, and files the profile does not declare — including the source
+a declared output was encoded from — are removed once those replacements
+commit. A profile that declares no output means the partition holds no managed
+audio: every observed file in it is removed. `available_sources` differs in
+`strict`'s failure behavior: a stem whose declared shape cannot be reached is
+left exactly as it is and recorded as `UNMET_TARGET` (no generation, no
+cleanup), where strict blocks the whole Component with zero operations.
+Ambiguity and path conflicts block in both.
+An encoded output is satisfied by the target codec at or above the target
+bitrate (1 kbps tolerance for probe under-reporting); MP3 and AAC are both
+compared on the probed bitrate, and an unprobed one never counts as satisfying.
+`StepSummary.unmet_targets` counts kept-but-unsatisfied stems; `summary_reason`
+may be `UNMET_TARGETS`. New operation drafts seed `mode: "available_sources"`.
 
 Workset creation is not re-scannable here: `folder_ids` must come from
 `GET /api/v1/libraries/:id/folders` of the owning library.

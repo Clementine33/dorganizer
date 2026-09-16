@@ -83,9 +83,9 @@ func ValidatePolicy(p Policy) error {
 		"matched":   p.Matched,
 		"unmatched": p.Unmatched,
 	} {
-		if profile.Lossless == nil && profile.Encoded == nil {
-			return fmt.Errorf("policy %s profile must declare at least one output", name)
-		}
+		// A profile that declares no output is a declaration, not an omission:
+		// the partition must hold no managed audio, so every observed file in it
+		// is obsolete once the plan runs.
 		if err := validateProfileOutput(profile.Lossless); err != nil {
 			return fmt.Errorf("policy %s lossless output: %w", name, err)
 		}

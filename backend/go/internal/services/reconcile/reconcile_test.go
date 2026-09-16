@@ -651,9 +651,9 @@ func TestReconcile_LosslessToFlacDeletesOnlyNonTargetLossless(t *testing.T) {
 	}
 }
 
-func TestReconcile_AacUnverifiableQualityRebuildsOrBlocks(t *testing.T) {
-	// AAC/M4A quality cannot be probed in v1: an aac target never keeps an
-	// unverifiable aac file as satisfied. With a lossless source the lane
+func TestReconcile_AacUnknownBitrateRebuildsOrBlocks(t *testing.T) {
+	// The planner probes MP3 and AAC bitrates alike, so a file whose bitrate is
+	// still unknown is never assumed adequate. With a lossless source the lane
 	// rebuilds; without one the component blocks.
 	policy := wavMp3Profile()
 	target := &AudioOutputSpec{Codec: CodecAac, Quality: &Quality{Kind: QualityBitrate, Bitrate: 128}}
@@ -691,4 +691,71 @@ func TestReconcile_AacUnverifiableQualityRebuildsOrBlocks(t *testing.T) {
 	if len(blocked.Components[0].Operations) != 0 {
 		t.Fatalf("blocked component must have zero operations")
 	}
+}
+
+func TestReconcile_EmptyProfileRemovesThePartition(t *testing.T) {
+	// Declaring no output is a declaration, not an omission: the partition must
+	// hold no managed audio, so every observed file of it is obsolete. Both
+	// modes agree — there is nothing to reach, hence nothing to fail.
+	policy := wavMp3Profile()
+	policy.Matched, policy.Unmatched = DesiredProfile{}, DesiredProfile{}
+	entries := []AudioEntry{
+		rjEntry("SEなし/wav/00.wav", 100, 0),
+		rjEntry("SEなし/mp3/00.mp3", 20, 320000),
+	}
+	for _, mode := range []string{"", ModeAvailableSources} {
+		p := policy
+		p.Mode = mode
+		res := reconcileRJ(t, entries, p)
+		c := singleComponent(t, res, 1)
+		if c.Status != StatusOK || len(c.Operations) != 2 {
+			t.Fatalf("mode %q: want two removals, got %+v", mode, c.Operations)
+		}
+		for _, op := range c.Operations {
+			if op.Kind != OpKindRemoveObsolete {
+				t.Fatalf("mode %q: unexpected op %+v", mode, op)
+			}
+			if len(op.DependsOn) != 0 {
+				t.Fatalf("mode %q: removal %s has no replacement to wait for: %v", mode, op.SourcePath, op.DependsOn)
+			}
+		}
+		if len(c.ProjectedInventory) != 0 {
+			t.Fatalf("mode %q: projected = %v, want empty", mode, c.ProjectedInventory)
+		}
+	}
+}
+
+func TestReconcile_AacProbedBitrateSatisfiesTarget(t *testing.T) {
+	// The inventory decides: a probed 256 kbps AAC is the declared output, so
+	// nothing is rebuilt. The undeclared lossless lane is still obsolete.
+	policy := wavMp3Profile()
+	policy.Matched = DesiredProfile{Encoded: encodedTarget(CodecAac, 256)}
+	policy.Unmatched = policy.Matched
+	entries := []AudioEntry{
+		rjEntry("SEあり/wav/00.wav", 100, 0),
+		rjEntry("SEあり/m4a/00.m4a", 20, 256000),
+	}
+	res := reconcileRJ(t, entries, policy)
+
+	if len(res.Components) != 1 || res.Components[0].Status != StatusOK {
+		t.Fatalf("satisfied aac must plan cleanly: %+v", res.Components)
+	}
+	c := res.Components[0]
+	if len(c.Operations) != 1 || c.Operations[0].Kind != OpKindRemoveObsolete ||
+		c.Operations[0].SourcePath != rjRoot+"/SEあり/wav/00.wav" {
+		t.Fatalf("want exactly the wav removal, got %+v", c.Operations)
+	}
+	for _, v := range c.Variants {
+		for _, d := range v.Decisions {
+			if d.Path == rjRoot+"/SEあり/m4a/00.m4a" &&
+				(d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepEncodedSatisfied) {
+				t.Fatalf("aac decision: %+v", d)
+			}
+		}
+	}
+}
+
+// encodedTarget builds one encoded output spec.
+func encodedTarget(codec Codec, bitrate int) *AudioOutputSpec {
+	return &AudioOutputSpec{Codec: codec, Quality: &Quality{Kind: QualityBitrate, Bitrate: bitrate}}
 }

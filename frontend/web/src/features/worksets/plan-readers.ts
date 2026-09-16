@@ -202,10 +202,13 @@ function laneText(spec: AudioOutputSpec | undefined): string | null {
 
 /** A desired profile in one line: the exact output set the revision asks for. */
 export function profileText(profile: DesiredProfile | undefined): string {
-  const parts = [laneText(profile?.lossless), laneText(profile?.encoded)].filter(
+  if (!profile) return '未设置'
+  const parts = [laneText(profile.lossless), laneText(profile.encoded)].filter(
     (part): part is string => part !== null,
   )
-  return parts.length > 0 ? parts.join(' + ') : '未设置'
+  // A profile that declares nothing is a declaration, not a gap: the partition
+  // keeps no managed audio.
+  return parts.length > 0 ? parts.join(' + ') : '不需要'
 }
 
 const MODE_TEXT: Record<string, string> = { strict: '严格', available_sources: '可用源' }

@@ -168,8 +168,7 @@ function saveFailureMessage(error: { code?: string; message?: string }): string 
   return mapped ?? error.message ?? '保存草稿失败'
 }
 
-function sameTarget(a: EditTarget, b: EditTarget): boolean {
-  if (a.kind !== b.kind) return false
+function sameTarget(a: EditTarget, b: EditTarget): boolean {  if (a.kind !== b.kind) return false
   if (a.kind === 'member' && b.kind === 'member') return a.memberId === b.memberId
   if (a.kind === 'batch' && b.kind === 'batch') {
     return a.memberIds.length === b.memberIds.length && a.memberIds.every((id, i) => id === b.memberIds[i])

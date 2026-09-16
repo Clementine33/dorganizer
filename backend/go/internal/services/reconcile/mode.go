@@ -2,18 +2,14 @@ package reconcile
 
 import "fmt"
 
-// Reason codes exclusive to the available_sources (relaxed) mode. They mark
-// acceptable outcomes that strict planning can never produce: existing files
-// kept because a target cannot be completed (unmet targets), not blocked.
-const (
-	ReasonUnmetTarget      = "UNMET_TARGET"
-	ReasonKeepUnverifiable = "KEEP_QUALITY_UNVERIFIABLE"
-	ReasonKeepNoSource     = "KEEP_NO_QUALIFIED_SOURCE"
-)
+// Reason code exclusive to the available_sources (relaxed) mode: an existing
+// file kept because the declared shape of its stem cannot be reached. Strict
+// planning turns the same input into a block instead.
+const ReasonUnmetTarget = "UNMET_TARGET"
 
 // Summary reason for relaxed outcomes: a plan can complete with unmet targets
-// and still be reviewable/confirmable, so it is ACTIONABLE-like, but the
-// count distinguishes it from full satisfaction.
+// and still be reviewable/actionable, but the count distinguishes it from full
+// satisfaction.
 const ReasonUnmetTargets = "UNMET_TARGETS"
 
 // stemDecision is one stem's relaxed plan: reviewable decisions plus the
@@ -64,19 +60,21 @@ func countUnmetTargets(c ComponentOutcome) int {
 // lenientComponent plans one component with the available_sources (relaxed)
 // decision table (design 4.2), evaluated per Variant Group:
 //
-//  1. Satisfied outputs are kept, never rebuilt because another stem lacks a
-//     source (per-group decisions, no component-wide REBUILD_ALL).
-//  2. A unique qualified lossless source generates missing/below-target
-//     encoded outputs.
-//  3. No qualified source: the whole stem's existing files are kept, no
-//     generation or cleanup operations for that stem, and the unmet target is
-//     recorded.
-//  4. Files whose quality cannot be verified (AAC, unknown-bitrate MP3) are
-//     kept but never marked satisfied.
-//  5. No fake upgrades: lossless is never generated from lossy media.
-//  6. Source ambiguity and target-path conflicts still block the affected
+//  1. The declared profile is the stem's final shape: satisfied outputs are
+//     kept, missing ones are materialized from the stem's source, and every
+//     other observed file — including the source a declared output was encoded
+//     from, and any output of a lane the profile does not declare — is
+//     obsolete once those replacements commit.
+//  2. A stem that cannot reach the declared shape is left exactly as it is and
+//     recorded as an unmet target: no generation, no cleanup. Neither mode
+//     weakens the rule that nothing is removed without a replacement.
+//  3. Files whose quality cannot be verified (an unprobed bitrate) are never
+//     counted as satisfying a target; where a source exists they are rebuilt.
+//  4. No fake upgrades: lossless is never generated from lossy media, and a
+//     codec change is never a lossy-to-lossy re-encode.
+//  5. Source ambiguity and target-path conflicts still block the affected
 //     component; relaxed mode never weakens these safety checks.
-//  7. A partition with no files produces no component (unchanged) — that is
+//  6. A partition with no files produces no component (unchanged) — that is
 //     "no applicable files", not a source-missing block.
 //
 // The surrounding skeleton (validation, partitioning, component building,
@@ -134,7 +132,9 @@ func lenientComponent(
 	return out
 }
 
-// lenientStem applies the relaxed decision table to one Variant Group.
+// lenientStem applies the relaxed decision table to one Variant Group. The
+// declared profile is what the stem must end up holding, or the stem is left
+// untouched and reported as unmet.
 func lenientStem(g StemGroup, profile DesiredProfile, occupied map[string]struct{}) stemDecision {
 	d := stemDecision{stem: g.Stem}
 	var losslessFiles, encodedFiles []GroupedFile
@@ -146,38 +146,126 @@ func lenientStem(g StemGroup, profile DesiredProfile, occupied map[string]struct
 		}
 	}
 
-	source := qualifiedSource(losslessFiles, profile)
+	losslessKeep := declaredLossless(profile.Lossless, losslessFiles)
+	encodedKeep, encodedBelow := declaredEncoded(profile.Encoded, encodedFiles)
+	needsOutput := (profile.Lossless != nil && len(losslessKeep) == 0) ||
+		(profile.Encoded != nil && len(encodedKeep) == 0)
 
-	// Rule 6: source ambiguity blocks the affected component.
-	if len(losslessFiles) > 0 && profile.Lossless != nil && len(source) > 1 {
+	sources := qualifiedSources(losslessFiles, profile)
+	if needsOutput && len(sources) > 1 {
 		d.blockCode = ReasonSourceAmbiguous
 		d.blockMsg = fmt.Sprintf("stem %s has multiple equivalent lossless sources", g.Stem)
 		d.keep(g.Stem, ReasonSourceAmbiguous)
 		return d
 	}
 	var src *GroupedFile
-	if len(source) == 1 {
-		s := source[0]
+	if len(sources) == 1 {
+		s := sources[0]
 		src = &s
 	}
-
-	if profile.Lossless != nil {
-		lenientLosslessLane(&d, losslessFiles, profile, src)
+	if needsOutput && src == nil {
+		// The declared shape is out of reach: every observed file stays and the
+		// stem is reported as an unmet target. Removing what the profile does
+		// not want would leave the stem with less than it has, not with what
+		// was asked for.
+		for _, f := range g.Files {
+			d.keep(f.PathPosix, ReasonUnmetTarget)
+		}
+		return d
 	}
-	if profile.Encoded != nil {
-		lenientEncodedLane(&d, g, encodedFiles, profile, src, occupied)
+
+	// The stem can reach its declared shape.
+	kept := map[string]bool{}
+	for _, f := range losslessKeep {
+		kept[f.PathPosix] = true
+		d.keep(f.PathPosix, ReasonKeepLosslessTarget)
+	}
+	for _, f := range encodedKeep {
+		kept[f.PathPosix] = true
+		d.keep(f.PathPosix, ReasonKeepEncodedSatisfied)
+	}
+	if profile.Lossless != nil && len(losslessKeep) == 0 {
+		target := sameStemPath(src.PathPosix, ExtForCodec(profile.Lossless.Codec))
+		d.encode(src.PathPosix, target, ReasonMaterializeLossless)
+	}
+	replaced := ""
+	if profile.Encoded != nil && len(encodedKeep) == 0 {
+		replaced = sameStemPath(src.PathPosix, ExtForCodec(profile.Encoded.Codec))
+		if len(encodedBelow) == 1 {
+			// A single below-target variant of the right codec is replaced in
+			// place, so its path is not also queued for removal.
+			replaced = sameStemPath(encodedBelow[0].PathPosix, ExtForCodec(profile.Encoded.Codec))
+		}
+		if _, taken := occupied[replaced]; taken && !stemOwns(g, replaced) {
+			d.blockCode = ReasonTargetPathConflict
+			d.blockMsg = fmt.Sprintf("stem %s target path %s is occupied by another entry", d.stem, replaced)
+			return d
+		}
+		d.encode(src.PathPosix, replaced, ReasonMaterializeEncoded)
+	}
+	for _, f := range g.Files {
+		if kept[f.PathPosix] || f.PathPosix == replaced {
+			continue
+		}
+		reason := ReasonObsoleteEncoded
+		if f.Lossless {
+			reason = ReasonObsoleteLossless
+		}
+		d.del(f.PathPosix, reason)
 	}
 	return d
 }
 
-// qualifiedSource mirrors strict source selection: the desired lossless codec,
-// else WAV, then FLAC. Returns all qualifying candidates; relaxed mode treats
-// >1 as ambiguous and uses exactly one.
-func qualifiedSource(losslessFiles []GroupedFile, profile DesiredProfile) []GroupedFile {
-	if profile.Lossless == nil {
+// declaredLossless returns the observed files that already are the declared
+// lossless output; empty when the profile declares no lossless lane.
+func declaredLossless(spec *AudioOutputSpec, losslessFiles []GroupedFile) []GroupedFile {
+	if spec == nil {
 		return nil
 	}
-	for _, codec := range []Codec{profile.Lossless.Codec, CodecWav, CodecFlac} {
+	var keep []GroupedFile
+	for _, f := range losslessFiles {
+		if f.Codec == spec.Codec {
+			keep = append(keep, f)
+		}
+	}
+	return keep
+}
+
+// declaredEncoded splits the observed files of the declared encoded codec into
+// the ones that already meet the target quality and the ones below it. Files
+// of another codec are neither: the declared shape has no place for them.
+func declaredEncoded(spec *AudioOutputSpec, encodedFiles []GroupedFile) (satisfied, below []GroupedFile) {
+	if spec == nil {
+		return nil, nil
+	}
+	for _, f := range encodedFiles {
+		if f.Codec != spec.Codec {
+			continue
+		}
+		if satisfiedEncoded(f, spec) {
+			satisfied = append(satisfied, f)
+		} else {
+			below = append(below, f)
+		}
+	}
+	return satisfied, below
+}
+
+// qualifiedSources returns the observed lossless files that may serve as this
+// stem's source, in priority order: the declared lossless codec when the
+// profile wants one, then WAV, then FLAC. It is deliberately independent of
+// whether a lossless output is declared — a WAV is the source of an only-AAC
+// target too. More than one candidate at the winning codec is ambiguous.
+//
+// Only lossless media qualify: a lossy file is never re-encoded, so a
+// 256 kbps MP3 is no source for a 256 kbps AAC target.
+func qualifiedSources(losslessFiles []GroupedFile, profile DesiredProfile) []GroupedFile {
+	codecs := make([]Codec, 0, 3)
+	if profile.Lossless != nil {
+		codecs = append(codecs, profile.Lossless.Codec)
+	}
+	codecs = append(codecs, CodecWav, CodecFlac)
+	for _, codec := range codecs {
 		var candidates []GroupedFile
 		for _, f := range losslessFiles {
 			if f.Codec == codec {
@@ -189,109 +277,6 @@ func qualifiedSource(losslessFiles []GroupedFile, profile DesiredProfile) []Grou
 		}
 	}
 	return nil
-}
-
-// lenientLosslessLane decides the lossless lane for one stem.
-func lenientLosslessLane(d *stemDecision, losslessFiles []GroupedFile, profile DesiredProfile, src *GroupedFile) {
-	var targetCodec []GroupedFile
-	for _, f := range losslessFiles {
-		if f.Codec == profile.Lossless.Codec {
-			targetCodec = append(targetCodec, f)
-		}
-	}
-	switch {
-	case len(targetCodec) > 0:
-		// Satisfied: keep target-codec files. Other lossless files (e.g. a
-		// FLAC beside the target WAV) are kept too: no source-based cleanup
-		// applies in relaxed mode without a completable replacement plan.
-		for _, f := range targetCodec {
-			d.keep(f.PathPosix, ReasonKeepLosslessTarget)
-		}
-		for _, f := range losslessFiles {
-			if f.Codec != profile.Lossless.Codec {
-				d.keep(f.PathPosix, ReasonKeepNoSource)
-			}
-		}
-	case len(losslessFiles) > 0 && src != nil:
-		// Rule 5 boundary: only a lossless source may materialize a lossless
-		// target (candidates are lossless by construction).
-		target := sameStemPath(src.PathPosix, ExtForCodec(profile.Lossless.Codec))
-		d.encode(src.PathPosix, target, ReasonMaterializeLossless)
-	case len(losslessFiles) > 0:
-		// Lossless present but unusable as a source: keep, record unmet.
-		for _, f := range losslessFiles {
-			d.keep(f.PathPosix, ReasonUnmetTarget)
-		}
-	default:
-		// No lossless file: the lane has no applicable file to keep, but the
-		// lossless target itself is unmet (design 4.2: satisfied MP3 alone
-		// keeps, WAV target unmet). Reviewable, non-executable marker.
-		d.keep(d.stem, ReasonUnmetTarget)
-	}
-}
-
-// lenientEncodedLane decides the encoded lane for one stem.
-func lenientEncodedLane(
-	d *stemDecision,
-	g StemGroup,
-	encodedFiles []GroupedFile,
-	profile DesiredProfile,
-	src *GroupedFile,
-	occupied map[string]struct{},
-) {
-	var targetSatisfied, targetBelow, targetOther []GroupedFile
-	for _, f := range encodedFiles {
-		switch {
-		case f.Codec != profile.Encoded.Codec:
-			targetOther = append(targetOther, f)
-		case satisfiedEncoded(f, profile.Encoded):
-			targetSatisfied = append(targetSatisfied, f)
-		default:
-			targetBelow = append(targetBelow, f)
-		}
-	}
-
-	switch {
-	case len(targetSatisfied) > 0:
-		// Rule 1: keep satisfied outputs, no rebuild.
-		for _, f := range targetSatisfied {
-			d.keep(f.PathPosix, ReasonKeepEncodedSatisfied)
-		}
-	case src != nil:
-		// Rule 2: unique qualified lossless source generates the missing or
-		// below-target output, beside the existing file where possible.
-		target := sameStemPath(src.PathPosix, ExtForCodec(profile.Encoded.Codec))
-		if len(targetBelow) == 1 {
-			target = sameStemPath(targetBelow[0].PathPosix, ExtForCodec(profile.Encoded.Codec))
-		}
-		if _, taken := occupied[target]; taken && !stemOwns(g, target) {
-			d.blockCode = ReasonTargetPathConflict
-			d.blockMsg = fmt.Sprintf("stem %s target path %s is occupied by another entry", d.stem, target)
-			return
-		}
-		d.encode(src.PathPosix, target, ReasonMaterializeEncoded)
-		// Strict cleanup semantics apply to a completable stem: below-target
-		// and other-codec files are obsolete because a replacement now
-		// exists; deletions depend on that replacement succeeding.
-		for _, f := range targetBelow {
-			if f.PathPosix != target {
-				d.del(f.PathPosix, ReasonReplacedEncoded)
-			}
-		}
-		for _, f := range targetOther {
-			d.del(f.PathPosix, ReasonObsoleteEncoded)
-		}
-	default:
-		// Rule 3: no qualified source — keep the whole stem, record the
-		// unmet target, no generation or cleanup for this stem.
-		for _, f := range targetBelow {
-			d.keep(f.PathPosix, ReasonUnmetTarget)
-		}
-		for _, f := range targetOther {
-			// Rule 4: quality-unverifiable files are kept, never satisfied.
-			d.keep(f.PathPosix, ReasonKeepUnverifiable)
-		}
-	}
 }
 
 // stemOwns reports whether the occupied path belongs to the stem's own files
