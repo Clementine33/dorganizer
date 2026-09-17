@@ -114,6 +114,10 @@ type sessionStop struct {
 	unit      ExecutionUnit
 	open      *openUnit
 	err       error
+	// reported marks a failure whose unit already carries its own final report —
+	// a commit that returned its own result — so teardown only finishes the
+	// session instead of reporting the unit again.
+	reported bool
 }
 
 // encodePool is one session's shared pool: N workers pulling encode tasks from
@@ -206,8 +210,8 @@ func (p *encodePool) recordedStop() *sessionStop {
 // before that.
 func (p *encodePool) shutdown() {
 	p.endOnce.Do(func() {
-		close(p.jobs)
 		p.cancel()
+		close(p.jobs)
 		p.wg.Wait()
 	})
 }
@@ -249,33 +253,41 @@ func (s *sessionRun) fill(units []ExecutionUnit) *sessionStop {
 	return nil
 }
 
-// settleHead closes the head's boundary. A stop recorded while it committed
-// ends the session — the head keeps the facts its own commit returned — and so
-// does the head's own failed or canceled result. It reports whether the
-// session ended; otherwise the commit cursor moves on.
+// settleHead closes the head's boundary. A head whose own operation failed
+// enters the session's one stop path — its entry is already its report, so it
+// is never discarded — and a stop recorded while it committed ends the session
+// with that first error. It reports whether the session ended; otherwise the
+// commit cursor moves on.
 func (s *sessionRun) settleHead(
 	head *openUnit,
 	entry *ExecutionComponentView,
 	commitErr error,
 ) bool {
-	if stop := s.stopNow(); stop != nil {
-		s.stopSession(*stop)
-		return true
-	}
 	switch {
-	case entry.Status == ExecComponentCanceled:
-		s.stopAfterHead(sqlite.ExecStatusCanceled, "CANCELED", "execution canceled")
-		return true
 	case entry.Status == ExecComponentFailed:
-		s.stopAfterHead(sqlite.ExecStatusFailed, entry.ErrorCode, unitStopMessage(head.frozen, entry))
-		return true
+		s.pool.requestStop(sessionStop{
+			reportIdx: head.reportIdx,
+			unit:      head.frozen,
+			err:       NewError(ErrKindInternal, entry.ErrorCode, entry.ErrorMessage, nil),
+			reported:  true,
+		})
 	case commitErr != nil:
+		// A session-level failure of the commit itself: the entry keeps its own
+		// result, so it is reported here.
 		code, message := taskFailureOf(commitErr)
 		s.stopAfterHead(
 			sqlite.ExecStatusFailed,
 			code,
 			fmt.Sprintf("component %s: %s", head.frozen.ID, message),
 		)
+		return true
+	}
+	if stop := s.stopNow(); stop != nil {
+		s.stopSession(*stop)
+		return true
+	}
+	if entry.Status == ExecComponentCanceled {
+		s.stopAfterHead(sqlite.ExecStatusCanceled, "CANCELED", "execution canceled")
 		return true
 	}
 	return false
@@ -294,16 +306,21 @@ func (s *sessionRun) prepare(u ExecutionUnit, reportIdx int) *sessionStop {
 	})
 	if err != nil {
 		if isCanceled(err) {
-			return &sessionStop{}
+			return canceledStop()
 		}
-		return &sessionStop{reportIdx: reportIdx, unit: u, err: err}
+		stop := sessionStop{reportIdx: reportIdx, unit: u, err: err}
+		s.pool.requestStop(stop)
+		return &stop
 	}
 	unit := newOpenUnit(prepared, u, reportIdx)
 	s.open = append(s.open, unit)
 	for i := range unit.expected {
 		if !s.pool.deliver(unit, i) {
 			unit.endDelivery()
-			return s.stopOrCancel()
+			if stop := s.stopNow(); stop != nil {
+				return stop
+			}
+			return canceledStop()
 		}
 	}
 	unit.endDelivery()
@@ -339,15 +356,6 @@ func (s *sessionRun) stopNow() *sessionStop {
 		return canceledStop()
 	}
 	return nil
-}
-
-// stopOrCancel is stopNow for a caller that has just observed a stop, so a
-// cancellation is the default when nothing was recorded.
-func (s *sessionRun) stopOrCancel() *sessionStop {
-	if stop := s.stopNow(); stop != nil {
-		return stop
-	}
-	return canceledStop()
 }
 
 // canceledStop is the user's own stop.
@@ -394,6 +402,9 @@ func (s *sessionRun) stopAfterHead(status, code, message string) {
 // task failed reports its discarded facts, and one that never prepared takes
 // the error's stage and code.
 func (s *sessionRun) reportFailedUnit(stop sessionStop) {
+	if stop.reported {
+		return
+	}
 	entry := &s.report[stop.reportIdx]
 	if stop.open == nil {
 		applyPrepareFailure(entry, stop.err)
@@ -405,9 +416,10 @@ func (s *sessionRun) reportFailedUnit(stop sessionStop) {
 
 // discardOpen cleans every unit still open, skipping the one the stop already
 // reported: its staged temps are removed and it stays pending, since no
-// filesystem change happened for it. The entry keeps the operations it never
-// ran — the report still names the unrun range — and a temp that could not be
-// removed, so neither fact is lost.
+// filesystem change happened for it. This deliberately does not apply the
+// discarded result as a status — only its facts land: the operations the unit
+// never ran, so the report still names the unrun range, and any temp the
+// cleanup could not remove, so no leftover is lost.
 func (s *sessionRun) discardOpen(except *openUnit) {
 	for _, unit := range s.open {
 		if unit == except {

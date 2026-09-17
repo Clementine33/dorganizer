@@ -96,9 +96,10 @@ type PreparedUnit interface {
 	// EncodeTasks is how many encode tasks Commit expects.
 	EncodeTasks() int
 	// EncodeTask materializes one staged output. Indices may run concurrently
-	// and are each delivered exactly once; the task observes the cancellation
-	// of the context it is handed. A failure of the task's own work is a
-	// workset error carrying its stage and code.
+	// and are each delivered exactly once. A task that stops because the
+	// session stopped returns an error wrapping context.Canceled — the session
+	// never reads that as work failing — and a failure of the task's own work
+	// is a workset error carrying its stage and code.
 	EncodeTask(ctx context.Context, index int) error
 	// Commit lands the encoded outputs in frozen order and reports the unit's
 	// observed facts. It is called once, after every EncodeTask completed.

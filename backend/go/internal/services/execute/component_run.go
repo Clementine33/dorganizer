@@ -151,7 +151,7 @@ func RunComponent(ctx context.Context, req ComponentRunRequest) (ComponentRunRes
 func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToolkit) (ComponentRunResult, error) {
 	prepared, err := prepareComponent(ctx, req, tk)
 	if err != nil {
-		return prepareFailureResult(err), err
+		return stoppedResult(err), err
 	}
 	for i := range prepared.Encodes() {
 		if encErr := prepared.EncodeOne(ctx, i); encErr != nil {
@@ -159,20 +159,6 @@ func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToo
 		}
 	}
 	return prepared.Commit(ctx)
-}
-
-// prepareFailureResult is the facts of a component that never prepared: a
-// canceled request reports a cancellation without a stage, anything else the
-// failure and the stage its precheck stopped in.
-func prepareFailureResult(err error) ComponentRunResult {
-	cerr, ok := errors.AsType[*ComponentError](err)
-	if !ok {
-		return ComponentRunResult{Status: ComponentStatusFailed}
-	}
-	if cerr.Code == ComponentCodeCanceled {
-		return ComponentRunResult{Status: ComponentStatusCanceled}
-	}
-	return ComponentRunResult{Status: ComponentStatusFailed, Stage: cerr.Stage}
 }
 
 // stopRun finalizes a failed or canceled run: it records the stage and the

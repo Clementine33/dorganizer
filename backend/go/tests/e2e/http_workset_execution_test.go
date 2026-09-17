@@ -350,7 +350,12 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 			done.CompletedOperations, done.TotalOperations)
 	}
 	var committed, removed, recovery []string
-	for _, c := range done.Components {
+	// Per-unit statuses after a concurrent run: every component reports its own
+	// outcome, in the frozen order the session committed them.
+	for i, c := range done.Components {
+		if c.ComponentIndex != i {
+			t.Fatalf("component report order = %d at %d, want the frozen order", c.ComponentIndex, i)
+		}
 		if c.Status != "succeeded" || !c.InventorySynced {
 			t.Fatalf("component %d = %+v", c.ComponentIndex, c)
 		}

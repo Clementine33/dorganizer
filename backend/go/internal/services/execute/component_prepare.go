@@ -164,9 +164,10 @@ func (p *PreparedComponent) Discard(cause error) ComponentRunResult {
 	return result
 }
 
-// stoppedResult is the status and stage a stop reports: a nil cause or a
-// canceled ComponentError is a cancellation, any other cause is a failure
-// carrying the stage it stopped in.
+// stoppedResult is the facts of a component that never committed: a nil cause
+// or a canceled ComponentError is a cancellation, any other cause a failure
+// carrying the stage it stopped in. Both a failed preparation and a Discard go
+// through it, so the serial wrapper and a session report the same shape.
 func stoppedResult(cause error) ComponentRunResult {
 	if cause == nil {
 		return ComponentRunResult{Status: ComponentStatusCanceled}
@@ -175,8 +176,9 @@ func stoppedResult(cause error) ComponentRunResult {
 	if !ok {
 		return ComponentRunResult{Status: ComponentStatusFailed}
 	}
+	status := ComponentStatusFailed
 	if cerr.Code == ComponentCodeCanceled {
-		return ComponentRunResult{Status: ComponentStatusCanceled, Stage: cerr.Stage}
+		status = ComponentStatusCanceled
 	}
-	return ComponentRunResult{Status: ComponentStatusFailed, Stage: cerr.Stage}
+	return ComponentRunResult{Status: status, Stage: cerr.Stage}
 }
