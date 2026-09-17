@@ -147,7 +147,12 @@ no active generation, valid inputs and no blocked Components. Unmet targets
 and zero-operation proposals do not themselves block execution; their
 counts and excluded scope remain visible. Saving does not generate; generating
 does not execute; executing is its own explicit step, and a revision runs at
-most once. The obsolete-audio handling (soft or hard deletion) is a draft
+most once. Inside a session, encode work runs through one bounded pool of
+workers shared across every member folder, while a single coordinator commits
+components in frozen order and keeps commits, removals, recovery copies,
+inventory sync and persistence strict — ADR 0006 records the pool, the window
+and the fail-fast failure and cancellation semantics. The obsolete-audio
+handling (soft or hard deletion) is a draft
 setting: the plan freezes it into the session options and the run uses the
 frozen value — the client sends no such option at execution time. An earlier
 confirmation step between generation and execution was
