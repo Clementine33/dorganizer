@@ -732,6 +732,35 @@ func TestExecutionPoolSealedHeadNeverCommitsAfterAStop(t *testing.T) {
 	}
 }
 
+// TestExecutionPoolStopReachesABlockedDelivery covers a stop while the queue
+// is full and the only worker is busy: the cancel-aware send aborts instead of
+// waiting the queue out, so the teardown never hangs behind a delivery.
+func TestExecutionPoolStopReachesABlockedDelivery(t *testing.T) {
+	f, obs := poolFixture(t, 1, poolUnit(3)) // one worker, one queue slot
+	obs.gate("u0")
+	f.seedRevision("plan-blocked", poolComponent("u0", "albumA"))
+
+	started := f.mustStart("plan-blocked", "k-blocked")
+	obs.waitEncode(t, "u0") // the worker is inside the gated encode
+	if _, err := f.svc.CancelExecution(
+		f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, started.ExecutionID,
+	); err != nil {
+		t.Fatalf("CancelExecution: %v", err)
+	}
+	done := f.waitTerminal(started.ExecutionID)
+
+	if done.Status != "canceled" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	entry := entryOf(t, done, "u0")
+	if entry.Status != "pending" || len(entry.Remaining) == 0 {
+		t.Fatalf("the blocked unit stays pending with its unrun range: %+v", entry)
+	}
+	if events := obs.snapshot(); indexOf(events, "commit u0") >= 0 {
+		t.Fatalf("a canceled session must not commit: %v", events)
+	}
+}
+
 // lastIndex and firstIndex scan the event log for the last and first event
 // with the given prefix.
 func lastIndex(events []string, prefix string) int {
