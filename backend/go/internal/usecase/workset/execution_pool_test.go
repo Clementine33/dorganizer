@@ -338,6 +338,7 @@ func TestExecutionPoolEncodesConcurrentlyAndCommitsInFrozenOrder(t *testing.T) {
 	obs.waitEncode(t, "u0")
 	obs.waitEncode(t, "u1") // both encodes are running before either is released
 	obs.release("u1")
+	obs.waitEvent(t, "return u1#0") // the later unit finishes first
 	obs.release("u0")
 	done := f.waitTerminal(started.ExecutionID)
 
@@ -449,6 +450,9 @@ func TestExecutionPoolFailureStopsAndDiscardsTheOpenUnits(t *testing.T) {
 	pending := entryOf(t, done, "u0")
 	if pending.Status != "pending" {
 		t.Fatalf("a unit whose commit never began must stay pending: %+v", pending)
+	}
+	if !slices.Equal(pending.Remaining, []string{"u0/staged"}) {
+		t.Fatalf("the unrun operations must stay visible: %+v", pending.Remaining)
 	}
 	if !slices.Equal(pending.Recovery, []string{"/recovery/u0-tmp"}) {
 		t.Fatalf("leftovers must survive on the pending entry: %+v", pending.Recovery)
@@ -564,8 +568,12 @@ func TestExecutionPoolCancellationLeavesPendingTails(t *testing.T) {
 		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
 	}
 	for _, id := range []string{"u0", "u1"} {
-		if entry := entryOf(t, done, id); entry.Status != "pending" {
+		entry := entryOf(t, done, id)
+		if entry.Status != "pending" {
 			t.Fatalf("component %s = %+v, want pending", id, entry)
+		}
+		if !slices.Equal(entry.Remaining, []string{id + "/staged"}) {
+			t.Fatalf("component %s must still name its unrun operations: %+v", id, entry.Remaining)
 		}
 	}
 	if events := obs.snapshot(); indexOf(events, "commit u0") >= 0 || indexOf(events, "commit u1") >= 0 {

@@ -405,18 +405,18 @@ func (s *sessionRun) reportFailedUnit(stop sessionStop) {
 
 // discardOpen cleans every unit still open, skipping the one the stop already
 // reported: its staged temps are removed and it stays pending, since no
-// filesystem change happened for it. A temp that could not be removed is
-// recorded on the entry so the leftover is never lost.
+// filesystem change happened for it. The entry keeps the operations it never
+// ran — the report still names the unrun range — and a temp that could not be
+// removed, so neither fact is lost.
 func (s *sessionRun) discardOpen(except *openUnit) {
 	for _, unit := range s.open {
 		if unit == except {
 			continue
 		}
 		res := unit.prepared.Discard(nil)
-		if len(res.Recovery) > 0 {
-			entry := &s.report[unit.reportIdx]
-			entry.Recovery = append(entry.Recovery, res.Recovery...)
-		}
+		entry := &s.report[unit.reportIdx]
+		entry.Remaining = append(entry.Remaining, res.Remaining...)
+		entry.Recovery = append(entry.Recovery, res.Recovery...)
 	}
 }
 

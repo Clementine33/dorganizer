@@ -95,8 +95,10 @@ file, whose encode is single-threaded and cannot be split.
    prepared — its index is kept even without a prepared unit — and never to
    the head. Only the component whose task failed is marked failed; a
    component stopped mid-commit keeps its partial facts; a component whose
-   commit never began stays pending, with its staged temps removed and any
-   recovery path the cleanup could not remove recorded on its entry. The
+   commit never began stays pending, with its staged temps removed, the
+   operations it never ran kept on its entry — the report still names that
+   range — and any recovery path the cleanup could not remove recorded there
+   too. The
    session is canceled only when no real operation error was recorded by the
    time all in-flight work returned; otherwise the first real error decides
    the failure. Cancellation-induced errors never replace it. Committed
