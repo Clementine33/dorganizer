@@ -149,109 +149,30 @@ func RunComponent(ctx context.Context, req ComponentRunRequest) (ComponentRunRes
 }
 
 func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToolkit) (ComponentRunResult, error) {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ComponentRunResult{Status: ComponentStatusCanceled}, canceledComponentError("", ctxErr)
+	prepared, err := prepareComponent(ctx, req, tk)
+	if err != nil {
+		return prepareFailureResult(err), err
 	}
-
-	plan, precheckErr := precheckComponentRequest(req)
-	if precheckErr != nil {
-		return ComponentRunResult{Status: ComponentStatusFailed, Stage: precheckErr.Stage}, precheckErr
-	}
-
-	encoder := newFFmpeg(req.Tools)
-	soft := req.DeleteMode == DeleteModeSoft
-	result := ComponentRunResult{Status: ComponentStatusSucceeded}
-
-	// Materialize: encode every output into a task-owned temporary file in the
-	// target directory, so the later commit is a same-filesystem rename.
-	for i := range plan.encodes {
-		enc := &plan.encodes[i]
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stopCanceled(plan, tk, result, ComponentStageMaterialize, ctxErr)
-		}
-		enc.temp = tempOutputPath(enc.target)
-		if err := tk.encode(ctx, enc.source, enc.temp, enc.spec); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return stopCanceled(plan, tk, result, ComponentStageMaterialize, ctxErr)
-			}
-			return stopRun(plan, tk, result, ComponentStatusFailed, ComponentStageMaterialize, &ComponentError{
-				Stage:   ComponentStageMaterialize,
-				Code:    ComponentCodeEncodeFailed,
-				Path:    posixForm(enc.target),
-				Message: "encoding the frozen target failed",
-				Err:     err,
-			})
+	for i := range prepared.Encodes() {
+		if encErr := prepared.EncodeOne(ctx, i); encErr != nil {
+			return prepared.Discard(encErr), encErr
 		}
 	}
+	return prepared.Commit(ctx)
+}
 
-	// Validate: every staged output is re-probed on disk before any commit can
-	// touch existing media.
-	for i := range plan.encodes {
-		enc := &plan.encodes[i]
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stopCanceled(plan, tk, result, ComponentStageValidate, ctxErr)
-		}
-		if err := validateStagedOutput(ctx, encoder, enc.temp, enc.spec); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return stopCanceled(plan, tk, result, ComponentStageValidate, ctxErr)
-			}
-			return stopRun(plan, tk, result, ComponentStatusFailed, ComponentStageValidate, &ComponentError{
-				Stage:   ComponentStageValidate,
-				Code:    ComponentCodeValidateFailed,
-				Path:    posixForm(enc.target),
-				Message: "staged output validation failed",
-				Err:     err,
-			})
-		}
+// prepareFailureResult is the facts of a component that never prepared: a
+// canceled request reports a cancellation without a stage, anything else the
+// failure and the stage its precheck stopped in.
+func prepareFailureResult(err error) ComponentRunResult {
+	cerr, ok := errors.AsType[*ComponentError](err)
+	if !ok {
+		return ComponentRunResult{Status: ComponentStatusFailed}
 	}
-
-	// Commit: outputs land only after every one of them is valid. A started
-	// commit finishes before a cancellation is honored, so a recovery copy is
-	// never destroyed halfway.
-	for i := range plan.encodes {
-		enc := &plan.encodes[i]
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stopCanceled(plan, tk, result, ComponentStageCommit, ctxErr)
-		}
-		recovery, committed, err := commitOutput(tk, plan.recoveryRoot, enc, soft)
-		result.Recovery = append(result.Recovery, recovery...)
-		if committed {
-			result.Committed = append(result.Committed, posixForm(enc.target))
-		}
-		if err != nil {
-			return stopRun(plan, tk, result, ComponentStatusFailed, ComponentStageCommit, &ComponentError{
-				Stage:   ComponentStageCommit,
-				Code:    ComponentCodeCommitFailed,
-				Path:    posixForm(enc.target),
-				Message: "committing the output failed",
-				Err:     err,
-			})
-		}
+	if cerr.Code == ComponentCodeCanceled {
+		return ComponentRunResult{Status: ComponentStatusCanceled}
 	}
-
-	// Remove: obsolete audio is cleaned only after every commit succeeded.
-	for i := range plan.removes {
-		rem := &plan.removes[i]
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stopCanceled(plan, tk, result, ComponentStageRemove, ctxErr)
-		}
-		recoveryPath, err := removeObsolete(tk, plan.recoveryRoot, rem.source, soft)
-		if err != nil {
-			return stopRun(plan, tk, result, ComponentStatusFailed, ComponentStageRemove, &ComponentError{
-				Stage:   ComponentStageRemove,
-				Code:    ComponentCodeDeleteFailed,
-				Path:    posixForm(rem.source),
-				Message: "removing an obsolete file failed",
-				Err:     err,
-			})
-		}
-		result.Removed = append(result.Removed, posixForm(rem.source))
-		if recoveryPath != "" {
-			result.Recovery = append(result.Recovery, recoveryPath)
-		}
-	}
-
-	return result, nil
+	return ComponentRunResult{Status: ComponentStatusFailed, Stage: cerr.Stage}
 }
 
 // stopRun finalizes a failed or canceled run: it records the stage and the

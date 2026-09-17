@@ -15,11 +15,24 @@ type ComponentRunTestKit struct {
 	Remove func(path string) error
 }
 
+// PrepareComponentWithTestKit prepares one component with replaced IO, the
+// shape a concurrent session drives.
+func PrepareComponentWithTestKit(
+	ctx context.Context, req ComponentRunRequest, kit ComponentRunTestKit,
+) (*PreparedComponent, error) {
+	return prepareComponent(ctx, req, testToolkit(req.Tools, kit))
+}
+
 // RunComponentWithTestKit runs the exported component entry with replaced IO.
 func RunComponentWithTestKit(
 	ctx context.Context, req ComponentRunRequest, kit ComponentRunTestKit,
 ) (ComponentRunResult, error) {
-	tk := defaultComponentToolkit(req.Tools)
+	return runComponent(ctx, req, testToolkit(req.Tools, kit))
+}
+
+// testToolkit is the component IO surface of one test kit.
+func testToolkit(tools ToolsConfig, kit ComponentRunTestKit) *componentToolkit {
+	tk := defaultComponentToolkit(tools)
 	if kit.Encode != nil {
 		tk.encode = kit.Encode
 	}
@@ -29,5 +42,5 @@ func RunComponentWithTestKit(
 	if kit.Remove != nil {
 		tk.remove = kit.Remove
 	}
-	return runComponent(ctx, req, tk)
+	return tk
 }
