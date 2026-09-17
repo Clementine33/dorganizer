@@ -117,16 +117,17 @@ type sessionStop struct {
 }
 
 // encodePool is one session's shared pool: N workers pulling encode tasks from
-// one FIFO queue in frozen order. The first real failure is recorded once by
-// whoever sees it — a worker as much as the coordinator preparing a unit — and
-// stops the encode context, so no teardown decision depends on the coordinator
-// being in a receive.
+// one FIFO queue in frozen order. Every task and every commit run under the
+// shared session context, and the first real failure is recorded once by
+// whoever sees it — a worker as much as the coordinator preparing a unit —
+// before that context is canceled. No teardown decision depends on the
+// coordinator being in a receive: a sibling's failure reaches a commit in
+// flight at its next operation boundary.
 type encodePool struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	jobs    chan encodeJob
-	wg      sync.WaitGroup
-	stopped chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
+	jobs   chan encodeJob
+	wg     sync.WaitGroup
 
 	recordOnce sync.Once
 	stop       *sessionStop
@@ -134,14 +135,14 @@ type encodePool struct {
 	endOnce    sync.Once
 }
 
-// newEncodePool starts the session's workers over one bounded queue.
-func newEncodePool(parent context.Context, workers int) *encodePool {
-	ctx, cancel := context.WithCancel(parent)
+// newEncodePool starts the session's workers over one bounded queue; cancel is
+// the session's own cancellation, so a stop reaches encoders and the
+// committing component alike.
+func newEncodePool(ctx context.Context, cancel context.CancelFunc, workers int) *encodePool {
 	p := &encodePool{
-		ctx:     ctx,
-		cancel:  cancel,
-		jobs:    make(chan encodeJob, workers),
-		stopped: make(chan struct{}),
+		ctx:    ctx,
+		jobs:   make(chan encodeJob, workers),
+		cancel: cancel,
 	}
 	for range workers {
 		p.wg.Go(func() {
@@ -159,7 +160,7 @@ func (p *encodePool) work(job encodeJob) {
 	err := job.unit.prepared.EncodeTask(p.ctx, job.index)
 	job.unit.taskReturned(err)
 	if err != nil && !isCanceled(err) {
-		p.recordStop(sessionStop{
+		p.requestStop(sessionStop{
 			reportIdx: job.unit.reportIdx,
 			unit:      job.unit.frozen,
 			open:      job.unit,
@@ -180,14 +181,15 @@ func (p *encodePool) deliver(unit *openUnit, index int) bool {
 	}
 }
 
-// recordStop records the session's first real failure and stops encoding;
-// later failures are ignored, so the first one decides the session.
-func (p *encodePool) recordStop(stop sessionStop) {
+// requestStop is the session's one stop entry point: it records the first real
+// error with its unit before canceling the shared session context. Later
+// failures are ignored, so the first recorded error decides the session and a
+// cancellation can never mask it.
+func (p *encodePool) requestStop(stop sessionStop) {
 	p.recordOnce.Do(func() {
 		p.stopMu.Lock()
 		p.stop = &stop
 		p.stopMu.Unlock()
-		close(p.stopped)
 		p.cancel()
 	})
 }
@@ -199,7 +201,7 @@ func (p *encodePool) recordedStop() *sessionStop {
 	return p.stop
 }
 
-// shutdown closes the queue, cancels the encode context and waits for every
+// shutdown closes the queue, cancels the session context and waits for every
 // worker — with its encoder child — to return. Nothing staged may be cleaned
 // before that.
 func (p *encodePool) shutdown() {
@@ -247,17 +249,16 @@ func (s *sessionRun) fill(units []ExecutionUnit) *sessionStop {
 	return nil
 }
 
-// settleHead closes the head's boundary. A sibling's failure stops the session
-// even when this commit landed — the head keeps the facts its own commit
-// returned — and so does the head's own stop. It reports whether the session
-// ended; otherwise the commit cursor moves on and the next head's progress is
-// written before it can block.
+// settleHead closes the head's boundary. A stop recorded while it committed
+// ends the session — the head keeps the facts its own commit returned — and so
+// does the head's own failed or canceled result. It reports whether the
+// session ended; otherwise the commit cursor moves on.
 func (s *sessionRun) settleHead(
 	head *openUnit,
 	entry *ExecutionComponentView,
 	commitErr error,
 ) bool {
-	if stop := s.pool.recordedStop(); stop != nil {
+	if stop := s.stopNow(); stop != nil {
 		s.stopSession(*stop)
 		return true
 	}
@@ -276,9 +277,6 @@ func (s *sessionRun) settleHead(
 			fmt.Sprintf("component %s: %s", head.frozen.ID, message),
 		)
 		return true
-	}
-	if len(s.open) > 0 {
-		s.d.persistProgress(s.ex.ExecutionID, s.completed, s.doneOps, s.open[0].frozen, s.report)
 	}
 	return false
 }
@@ -305,37 +303,55 @@ func (s *sessionRun) prepare(u ExecutionUnit, reportIdx int) *sessionStop {
 	for i := range unit.expected {
 		if !s.pool.deliver(unit, i) {
 			unit.endDelivery()
-			return s.stopReason()
+			return s.stopOrCancel()
 		}
 	}
 	unit.endDelivery()
 	return nil
 }
 
-// wait blocks until the head unit can commit, or until the session must stop.
+// wait blocks until the head unit is sealed, or until the session must stop.
+// Waking on completion is not a commit permit: the stop is rechecked here and
+// again at admission, because a stop can be recorded while completion and
+// cancellation were both ready.
 func (s *sessionRun) wait(head *openUnit) *sessionStop {
 	select {
 	case <-head.done:
-		if head.committable() {
-			return nil
-		}
-		return s.stopReason()
-	case <-s.pool.stopped:
-		return s.stopReason()
 	case <-s.ctx.Done():
-		return s.stopReason()
 	}
+	if stop := s.stopNow(); stop != nil {
+		return stop
+	}
+	if !head.committable() {
+		return canceledStop()
+	}
+	return nil
 }
 
-// stopReason is the stop seen at this instant: the first real failure, or the
-// user's cancellation when none was recorded. A real error wins even if a
-// cancellation lands in the same window.
-func (s *sessionRun) stopReason() *sessionStop {
+// stopNow is the stop pending at this instant, nil when the session may go on:
+// the first real failure, or the user's cancellation when none was recorded. A
+// real error wins even if a cancellation lands in the same window.
+func (s *sessionRun) stopNow() *sessionStop {
 	if recorded := s.pool.recordedStop(); recorded != nil {
 		return recorded
 	}
-	return &sessionStop{}
+	if s.ctx.Err() != nil {
+		return canceledStop()
+	}
+	return nil
 }
+
+// stopOrCancel is stopNow for a caller that has just observed a stop, so a
+// cancellation is the default when nothing was recorded.
+func (s *sessionRun) stopOrCancel() *sessionStop {
+	if stop := s.stopNow(); stop != nil {
+		return stop
+	}
+	return canceledStop()
+}
+
+// canceledStop is the user's own stop.
+func canceledStop() *sessionStop { return &sessionStop{} }
 
 // stopSession ends a session that stopped before every unit committed. The
 // pool drains first — no staged file is touched while an encoder could still

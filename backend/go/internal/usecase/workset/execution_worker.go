@@ -164,21 +164,36 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		completed: ex.CompletedComponents,
 		doneOps:   ex.CompletedOperations,
 	}
-	session.pool = newEncodePool(ctx, session.window)
-
-	// Progress is written as soon as a head is known — before any task is
-	// delivered, so a large component's encoding is never displayed as stale.
-	if len(req.Units) > 0 {
-		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, req.Units[0], report)
+	// An empty execution keeps its existing completion rules: no worker pool
+	// starts and no frozen unit is indexed.
+	if len(req.Units) == 0 {
+		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, ExecutionUnit{}, report)
+		d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
+		return
 	}
+	session.pool = newEncodePool(ctx, cancel, session.window)
 
-	for range req.Units { // one commit per frozen unit, in frozen order
+	for i := range req.Units { // one commit per frozen unit, in frozen order
+		if stop := session.stopNow(); stop != nil {
+			session.stopSession(*stop)
+			return
+		}
+		// Progress is written before preparation or delivery can block, so the
+		// head being worked on is never displayed as a previous one — including
+		// at N = 1, where the window empties after every commit.
+		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, req.Units[i], report)
 		if stop := session.fill(req.Units); stop != nil {
 			session.stopSession(*stop)
 			return
 		}
 		head := session.open[0]
 		if stop := session.wait(head); stop != nil {
+			session.stopSession(*stop)
+			return
+		}
+		// Commit admission: a sealed unit is no commit permit, so the stop is
+		// rechecked here and again by Commit before its first mutation.
+		if stop := session.stopNow(); stop != nil {
 			session.stopSession(*stop)
 			return
 		}

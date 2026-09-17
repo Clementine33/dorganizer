@@ -23,6 +23,8 @@ type poolPlan struct {
 	FailEncode   int      `json:"fail_encode"`
 	FailPrepare  bool     `json:"fail_prepare"`
 	CancelCommit bool     `json:"cancel_commit"`
+	CommitGate   bool     `json:"commit_gate"`
+	FinishOnStop bool     `json:"finish_on_stop"`
 	Leftovers    []string `json:"leftovers"`
 }
 
@@ -84,8 +86,9 @@ func (o *poolObservations) snapshot() []string {
 }
 
 // enterEncode records one encode start and waits for the unit's gate, the
-// session's cancellation or the test's release.
-func (o *poolObservations) enterEncode(ctx context.Context, id string, index int) error {
+// session's cancellation or the test's release. finishOnStop models the one
+// encoder that was past its last write when the stop landed.
+func (o *poolObservations) enterEncode(ctx context.Context, id string, index int, finishOnStop bool) error {
 	o.mu.Lock()
 	o.running++
 	o.maxRunning = max(o.maxRunning, o.running)
@@ -98,6 +101,10 @@ func (o *poolObservations) enterEncode(ctx context.Context, id string, index int
 		o.mu.Unlock()
 	}()
 	if gate == nil {
+		return nil
+	}
+	if finishOnStop {
+		<-gate
 		return nil
 	}
 	select {
@@ -224,7 +231,7 @@ type scriptUnit struct {
 func (u *scriptUnit) EncodeTasks() int { return u.plan.Tasks }
 
 func (u *scriptUnit) EncodeTask(ctx context.Context, index int) error {
-	err := u.obs.enterEncode(ctx, u.id, index)
+	err := u.obs.enterEncode(ctx, u.id, index, u.plan.FinishOnStop)
 	u.obs.recordf("return %s#%d", u.id, index)
 	if err != nil {
 		return err
@@ -237,18 +244,17 @@ func (u *scriptUnit) EncodeTask(ctx context.Context, index int) error {
 	return nil
 }
 
-func (u *scriptUnit) Commit(context.Context) (worksetusecase.UnitResult, error) {
+func (u *scriptUnit) Commit(ctx context.Context) (worksetusecase.UnitResult, error) {
 	u.obs.recordf("commit %s", u.id)
-	u.obs.leaveOpen()
+	defer u.obs.leaveOpen()
+	if u.plan.CommitGate {
+		// The coordinator stays inside this commit while a sibling fails: the
+		// shared context reaches it between the commit's operations.
+		<-ctx.Done()
+		return u.canceledFacts(), nil
+	}
 	if u.plan.CancelCommit {
-		return worksetusecase.UnitResult{
-			Canceled:  true,
-			Stage:     "commit",
-			Committed: []string{u.id + "/a"},
-			Removed:   []string{},
-			Remaining: []string{u.id + "/b"},
-			Recovery:  []string{},
-		}, nil
+		return u.canceledFacts(), nil
 	}
 	return worksetusecase.UnitResult{
 		Committed: []string{u.id + "/out"},
@@ -256,6 +262,19 @@ func (u *scriptUnit) Commit(context.Context) (worksetusecase.UnitResult, error) 
 		Remaining: []string{},
 		Recovery:  []string{},
 	}, nil
+}
+
+// canceledFacts is a commit stopped between its operations: the partial facts
+// of what already landed survive.
+func (u *scriptUnit) canceledFacts() worksetusecase.UnitResult {
+	return worksetusecase.UnitResult{
+		Canceled:  true,
+		Stage:     "commit",
+		Committed: []string{u.id + "/a"},
+		Removed:   []string{},
+		Remaining: []string{u.id + "/b"},
+		Recovery:  []string{},
+	}
 }
 
 func (u *scriptUnit) Discard(cause error) worksetusecase.UnitResult {
@@ -551,6 +570,157 @@ func TestExecutionPoolCancellationLeavesPendingTails(t *testing.T) {
 	}
 	if events := obs.snapshot(); indexOf(events, "commit u0") >= 0 || indexOf(events, "commit u1") >= 0 {
 		t.Fatalf("a canceled session must not commit: %v", events)
+	}
+}
+
+// waitCurrentComponent polls the session until it names the given component.
+func (f *execFixture) waitCurrentComponent(
+	t *testing.T,
+	executionID, componentID string,
+) *worksetusecase.ExecutionView {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := f.svc.GetExecution(
+			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, executionID,
+		)
+		if err != nil {
+			t.Fatalf("GetExecution: %v", err)
+		}
+		if view.CurrentComponentID == componentID {
+			return view
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("component %s never became current", componentID)
+	return nil
+}
+
+// TestExecutionPoolEmptySessionSucceeds covers the empty worklist: no frozen
+// unit is indexed, no worker pool starts, and the session completes as it
+// always did.
+func TestExecutionPoolEmptySessionSucceeds(t *testing.T) {
+	f, obs := poolFixture(t, 2)
+	f.seedRevision("plan-empty")
+
+	started := f.mustStart("plan-empty", "k-empty")
+	done := f.waitTerminal(started.ExecutionID)
+
+	if done.Status != "succeeded" || done.ErrorCode != "" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	if done.TotalComponents != 0 || len(done.Components) != 0 {
+		t.Fatalf("an empty session reported components: %+v", done.Components)
+	}
+	if events := obs.snapshot(); len(events) != 0 {
+		t.Fatalf("an empty session must not start workers: %v", events)
+	}
+}
+
+// TestExecutionPoolProgressMovesToTheNextUnitBeforeItBlocks pins the progress
+// rule at N = 1: the next unit becomes the current one before its preparation
+// or delivery can block, even though the window emptied after the commit.
+func TestExecutionPoolProgressMovesToTheNextUnitBeforeItBlocks(t *testing.T) {
+	f, obs := poolFixture(t, 1, poolUnit(1), poolUnit(1))
+	obs.gate("u1")
+	f.seedRevision("plan-progress", poolComponent("u0", "albumA"), poolComponent("u1", "albumB"))
+
+	started := f.mustStart("plan-progress", "k-progress")
+	obs.waitEvent(t, "commit u0")
+	if view := f.waitCurrentComponent(t, started.ExecutionID, "u1"); view.Status != sqlite.ExecStatusRunning {
+		t.Fatalf("the session must still be running while u1 encodes: %+v", view)
+	}
+	events := obs.snapshot()
+	if indexOf(events, "encode u1#0") < 0 || indexOf(events, "return u1#0") >= 0 {
+		t.Fatalf("u1 must be encoding, not finished: %v", events)
+	}
+	obs.release("u1")
+	if done := f.waitTerminal(started.ExecutionID); done.Status != "succeeded" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+}
+
+// TestExecutionPoolStopReachesACommitInFlight proves the stop path needs no
+// failure notification from the coordinator: a component is inside its commit
+// while a sibling's encode fails, and the shared context stops it between its
+// commit operations, keeping every partial fact it observed.
+func TestExecutionPoolStopReachesACommitInFlight(t *testing.T) {
+	inCommit := poolUnit(1)
+	inCommit.CommitGate = true
+	failing := poolUnit(1)
+	failing.FailEncode = 0
+	f, obs := poolFixture(t, 3, inCommit, failing, poolUnit(1))
+	obs.gate("u1")
+	obs.gate("u2")
+	f.seedRevision(
+		"plan-inflight",
+		poolComponent("u0", "albumA"),
+		poolComponent("u1", "albumB"),
+		poolComponent("u2", "albumA"),
+	)
+
+	started := f.mustStart("plan-inflight", "k-inflight")
+	obs.waitEvent(t, "commit u0") // the coordinator is inside u0's commit
+	obs.release("u1")             // a sibling's encode fails meanwhile
+	done := f.waitTerminal(started.ExecutionID)
+
+	if done.Status != "failed" || done.ErrorCode != "ENCODE_FAILED" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	stopped := entryOf(t, done, "u0")
+	if stopped.Status != "canceled" || stopped.Stage != "commit" {
+		t.Fatalf("the stopped component keeps its partial facts: %+v", stopped)
+	}
+	if !slices.Equal(stopped.Committed, []string{"u0/a"}) ||
+		!slices.Equal(stopped.Remaining, []string{"u0/b"}) {
+		t.Fatalf("partial facts were not preserved: %+v", stopped)
+	}
+	if !stopped.InventorySynced {
+		t.Fatalf("a stopped component still syncs its inventory: %+v", stopped)
+	}
+	failed := entryOf(t, done, "u1")
+	if failed.Status != "failed" || failed.Stage != "materialize" {
+		t.Fatalf("sibling = %+v", failed)
+	}
+	if open := entryOf(t, done, "u2"); open.Status != "pending" {
+		t.Fatalf("the third component stays pending: %+v", open)
+	}
+	events := obs.snapshot()
+	if indexOf(events, "discard u0") >= 0 || indexOf(events, "discard u2") < 0 {
+		t.Fatalf("only units whose commit never began are discarded: %v", events)
+	}
+}
+
+// TestExecutionPoolSealedHeadNeverCommitsAfterAStop covers completion racing
+// the stop: the head's last task returns after the stop was recorded, so the
+// session must not commit it even though completion and cancellation were both
+// ready.
+func TestExecutionPoolSealedHeadNeverCommitsAfterAStop(t *testing.T) {
+	head := poolUnit(1)
+	head.FinishOnStop = true
+	failing := poolUnit(1)
+	failing.FailEncode = 0
+	f, obs := poolFixture(t, 2, head, failing)
+	obs.gate("u0")
+	obs.gate("u1")
+	f.seedRevision("plan-race", poolComponent("u0", "albumA"), poolComponent("u1", "albumB"))
+
+	started := f.mustStart("plan-race", "k-race")
+	obs.waitEncode(t, "u0")
+	obs.waitEncode(t, "u1")
+	obs.release("u1") // the failure is recorded and the session stops
+	obs.waitEvent(t, "return u1#0")
+	obs.release("u0") // the head's own task finishes afterwards
+	done := f.waitTerminal(started.ExecutionID)
+
+	if done.Status != "failed" || done.ErrorCode != "ENCODE_FAILED" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	if headEntry := entryOf(t, done, "u0"); headEntry.Status != "pending" {
+		t.Fatalf("a stopped session must not commit the sealed head: %+v", headEntry)
+	}
+	if events := obs.snapshot(); indexOf(events, "commit u0") >= 0 {
+		t.Fatalf("no commit may start after the stop: %v", events)
 	}
 }
 
