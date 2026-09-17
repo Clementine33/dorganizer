@@ -104,9 +104,11 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 	return &executionRun{req: req, report: report, rootPath: w.RootPath, outcomes: outcomes, plan: plan}, true
 }
 
-// executeRun runs one claimed session: units in frozen order, first failure
-// stops admission, and every unit boundary persists its facts. The business
-// work of one unit belongs to the operation's task.
+// executeRun runs one claimed session: the frozen units are prepared into a
+// bounded window, their encode tasks share one pool across every component and
+// member folder, and a single coordinator commits them strictly in frozen
+// order. The first failure stops admission, and every unit boundary persists
+// its facts. The business work of one unit belongs to the operation's task.
 func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	run, ok := d.prepareExecution(ex)
 	if !ok {
@@ -143,75 +145,97 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		d.finishExecution(ex, status, code, message, report)
 		return
 	}
+	// The report is indexed by the frozen unit order and every unit needs its
+	// frozen payload; a mismatch would mislabel facts, so the session fails
+	// closed before anything is written.
+	if code, message, ready := worklistReady(req, run); !ready {
+		d.finishExecution(ex, sqlite.ExecStatusFailed, code, message, report)
+		return
+	}
 
-	completed, doneOps := ex.CompletedComponents, ex.CompletedOperations
+	session := &sessionRun{
+		d:         d,
+		ex:        ex,
+		run:       run,
+		task:      task,
+		ctx:       ctx,
+		report:    report,
+		window:    d.svc.encodeWindow(),
+		completed: ex.CompletedComponents,
+		doneOps:   ex.CompletedOperations,
+	}
+	session.pool = newEncodePool(ctx, session.window)
 
-	for i := range req.Units {
-		u := req.Units[i]
-		if ctx.Err() != nil {
-			d.finishExecution(ex, sqlite.ExecStatusCanceled, "CANCELED", "execution canceled", report)
+	// Progress is written as soon as a head is known — before any task is
+	// delivered, so a large component's encoding is never displayed as stale.
+	if len(req.Units) > 0 {
+		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, req.Units[0], report)
+	}
+
+	for range req.Units { // one commit per frozen unit, in frozen order
+		if stop := session.fill(req.Units); stop != nil {
+			session.stopSession(*stop)
 			return
 		}
-		// The report is indexed by the frozen unit order; a mismatch would
-		// mislabel facts, so the session fails closed instead.
-		if report[i].ComponentIndex != u.Index {
-			d.finishExecution(
-				ex,
-				sqlite.ExecStatusFailed,
-				"REQUEST_LOAD_FAILED",
-				"worklist and report disagree",
-				report,
-			)
+		head := session.open[0]
+		if stop := session.wait(head); stop != nil {
+			session.stopSession(*stop)
 			return
 		}
-		outcome, ok := run.outcomes[u.Index]
-		if !ok {
-			d.finishExecution(
-				ex,
-				sqlite.ExecStatusFailed,
-				"REVISION_LOAD_FAILED",
-				"frozen component is unreadable",
-				report,
-			)
-			return
-		}
-		d.persistProgress(ex.ExecutionID, completed, doneOps, u, report)
-
-		res, runErr := task.RunUnit(ctx, d.svc.repo, UnitRunInput{
-			WorksetRoot: run.rootPath,
-			Options:     req.Options,
-			Unit:        u,
-			Outcome:     outcome,
-		})
-		if runErr != nil {
-			code, message := "COMPONENT_FAILED", runErr.Error()
-			if werr, ok := AsError(runErr); ok {
-				code, message = werr.Code, werr.Message
-			}
-			d.finishExecution(ex, sqlite.ExecStatusFailed, code, message, report)
-			return
-		}
-		entry := &report[i]
-		applyUnitResult(entry, res)
-		d.syncUnitInventory(run.rootPath, res, entry)
-		completed++
-		doneOps += entry.CompletedOps
-		d.persistProgress(ex.ExecutionID, completed, doneOps, u, report)
-
-		switch entry.Status {
-		case ExecComponentCanceled:
-			d.finishExecution(ex, sqlite.ExecStatusCanceled, "CANCELED", "execution canceled", report)
-			return
-		case ExecComponentFailed:
-			// First failure stops admission: every later component stays pending
-			// in the report and is never executed.
-			message := fmt.Sprintf("component %s stopped at %s: %s", u.ID, entry.Stage, entry.ErrorMessage)
-			d.finishExecution(ex, sqlite.ExecStatusFailed, entry.ErrorCode, message, report)
+		res, commitErr := head.prepared.Commit(session.ctx)
+		entry := &report[head.reportIdx]
+		session.open = session.open[1:]
+		session.recordUnit(head.frozen, entry, res)
+		if session.settleHead(head, entry, commitErr) {
 			return
 		}
 	}
-	d.persistProgress(ex.ExecutionID, completed, doneOps, ExecutionUnit{}, report)
+	session.pool.shutdown()
+	d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, ExecutionUnit{}, report)
 	d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
+}
+
+// worklistReady checks the frozen worklist's two invariants before any write:
+// the report is indexed by unit order, and every unit has its frozen payload.
+func worklistReady(req *executionRequest, run *executionRun) (code, message string, ready bool) {
+	for i := range req.Units {
+		if run.report[i].ComponentIndex != req.Units[i].Index {
+			return "REQUEST_LOAD_FAILED", "worklist and report disagree", false
+		}
+		if _, ok := run.outcomes[req.Units[i].Index]; !ok {
+			return "REVISION_LOAD_FAILED", "frozen component is unreadable", false
+		}
+	}
+	return "", "", true
+}
+
+// applyPrepareFailure records a failed preparation on the unit's own entry: the
+// error's stage and code belong to that unit, never to a neighbour the window
+// happened to open first.
+func applyPrepareFailure(entry *ExecutionComponentView, err error) {
+	entry.Status = ExecComponentFailed
+	if werr, ok := AsError(err); ok {
+		entry.Stage, entry.ErrorCode, entry.ErrorMessage = werr.Stage, werr.Code, werr.Message
+		return
+	}
+	entry.ErrorCode, entry.ErrorMessage = "COMPONENT_FAILED", err.Error()
+}
+
+// unitStopMessage names the unit and the stage it stopped in.
+func unitStopMessage(unit ExecutionUnit, entry *ExecutionComponentView) string {
+	if entry.Stage == "" {
+		return fmt.Sprintf("component %s stopped: %s", unit.ID, entry.ErrorMessage)
+	}
+	return fmt.Sprintf("component %s stopped at %s: %s", unit.ID, entry.Stage, entry.ErrorMessage)
+}
+
+// taskFailureOf extracts the stable code and message of a session-level unit
+// failure.
+func taskFailureOf(err error) (code, message string) {
+	if werr, ok := AsError(err); ok {
+		return werr.Code, werr.Message
+	}
+	return "COMPONENT_FAILED", err.Error()
 }
 
 // verifyInputs refreshes the scanned inventory of the session's roots and

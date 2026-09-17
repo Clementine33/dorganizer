@@ -174,7 +174,9 @@ func runServer(
 	// and before writing: the stored inventory is the only input fact a plan
 	// reads, and it is only as current as the last scan.
 	memberScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
-	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, []worksetusecase.Task{
+	// Encode concurrency stays automatic (min(4, CPU count)); a user setting
+	// will feed this parameter later.
+	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, 0, []worksetusecase.Task{
 		tasksconversion.New(configDir),
 	}, func(scanCtx context.Context, folderPath, rootPath string) error {
 		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)

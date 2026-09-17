@@ -31,7 +31,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+	svc := worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 		tasksconversion.New(tmp),
 	}, nil)
 	handler := NewServer(Dependencies{

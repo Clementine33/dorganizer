@@ -99,12 +99,32 @@ func (stubTask) FreezeExecution(
 	return frozen, nil, nil
 }
 
-func (stubTask) RunUnit(
+func (stubTask) PrepareUnit(
 	context.Context, *sqlite.Repository, worksetusecase.UnitRunInput,
-) (worksetusecase.UnitResult, error) {
+) (worksetusecase.PreparedUnit, error) {
+	return stubUnit{}, nil
+}
+
+// stubUnit is the prepared form of a stub unit: nothing to encode and nothing
+// to report.
+type stubUnit struct{}
+
+func (stubUnit) EncodeTasks() int { return 0 }
+
+func (stubUnit) EncodeTask(context.Context, int) error { return nil }
+
+func (stubUnit) Commit(context.Context) (worksetusecase.UnitResult, error) {
+	return stubFacts(), nil
+}
+
+func (stubUnit) Discard(error) worksetusecase.UnitResult { return stubFacts() }
+
+// stubFacts is an empty fact set with no nil lists, the shape the report
+// persists.
+func stubFacts() worksetusecase.UnitResult {
 	return worksetusecase.UnitResult{
 		Committed: []string{}, Removed: []string{}, Remaining: []string{}, Recovery: []string{},
-	}, nil
+	}
 }
 
 func (stubTask) RevisionMembers(in worksetusecase.RevisionFacts) ([]worksetusecase.RevisionMemberFacts, error) {

@@ -40,11 +40,14 @@ const (
 )
 
 // Error is the workset usecase error with a stable machine code. Details
-// carries machine-readable reason codes (e.g. PLAN_NOT_CONFIRMABLE reasons).
+// carries machine-readable reason codes (e.g. PLAN_NOT_CONFIRMABLE reasons);
+// Stage names the unit stage a failure happened in, when the failure belongs
+// to one execution unit's own work.
 type Error struct {
 	Kind    string
 	Code    string
 	Message string
+	Stage   string
 	Details []string
 	Cause   error
 }
@@ -52,6 +55,12 @@ type Error struct {
 // NewError creates a workset usecase error.
 func NewError(kind, code, message string, cause error) *Error {
 	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
+}
+
+// WithStage names the unit stage the failure happened in.
+func (e *Error) WithStage(stage string) *Error {
+	e.Stage = stage
+	return e
 }
 
 // WithDetails attaches machine-readable reason codes to the error.

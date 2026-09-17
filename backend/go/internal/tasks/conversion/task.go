@@ -280,80 +280,6 @@ func (t *Task) FreezeExecution(
 	return frozen, nil, nil
 }
 
-// RunUnit executes one frozen unit through the Component pipeline and reports
-// its observed facts plus the inventory refresh the generic side applies.
-func (t *Task) RunUnit(
-	ctx context.Context,
-	repo *sqlite.Repository,
-	in worksetusecase.UnitRunInput,
-) (worksetusecase.UnitResult, error) {
-	result := worksetusecase.UnitResult{}
-	var outcome reconcile.ComponentOutcome
-	if err := json.Unmarshal(in.Outcome, &outcome); err != nil {
-		return result, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "REVISION_LOAD_FAILED", "frozen component is unreadable", err,
-		)
-	}
-	var profile reconcile.DesiredProfile
-	if err := json.Unmarshal(in.Unit.Payload, &profile); err != nil {
-		return result, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
-		)
-	}
-	mode, modeErr := deleteModeFromOptions(in.Options)
-	if modeErr != nil {
-		return result, modeErr
-	}
-	res, runErr := execute.RunComponent(ctx, execute.ComponentRunRequest{
-		Root:       in.Unit.RootPath,
-		Component:  outcome,
-		Specs:      profile,
-		DeleteMode: mode,
-		Tools:      t.tools(),
-		// Recovery copies land under <workset root>/Delete/..., beside the
-		// member folders, so they never re-enter the member's own inventory.
-		RecoveryRoot: in.WorksetRoot,
-	})
-	result.Committed = nonNil(res.Committed)
-	result.Removed = nonNil(res.Removed)
-	result.Remaining = nonNil(res.Remaining)
-	result.Recovery = nonNil(res.Recovery)
-	if runErr != nil {
-		result.Stage, result.ErrorCode, result.ErrorMessage = componentErrorOf(runErr)
-		if ctx.Err() != nil || result.ErrorCode == execute.ComponentCodeCanceled {
-			result.Canceled = true
-			result.ErrorMessage = "component run canceled"
-		}
-	}
-	t.fillInventoryFacts(&result, in)
-	return result, nil
-}
-
-// fillInventoryFacts gathers the observed disk facts of one unit: the removed
-// sources plus the committed outputs and soft-delete destinations that are
-// real media in their scanned place. A stat failure is disclosed instead of
-// being reported as "unchanged".
-func (*Task) fillInventoryFacts(result *worksetusecase.UnitResult, in worksetusecase.UnitRunInput) {
-	paths := make([]string, 0, len(result.Committed)+len(result.Recovery))
-	paths = append(paths, result.Committed...)
-	for _, p := range result.Recovery {
-		if underRecoveryDir(in.WorksetRoot, p) {
-			paths = append(paths, p)
-		}
-	}
-	facts := make([]sqlite.InventoryFile, 0, len(paths))
-	for _, p := range paths {
-		info, err := os.Stat(filepath.FromSlash(p))
-		if err != nil {
-			result.InventoryError = fmt.Sprintf("stat %s: %v", p, err)
-			return
-		}
-		facts = append(facts, sqlite.InventoryFile{Path: p, Size: info.Size(), Mtime: info.ModTime().Unix()})
-	}
-	result.InventoryRemoved = result.Removed
-	result.InventoryRefreshed = facts
-}
-
 // RevisionMembers resolves the frozen draft snapshot into per-member effective
 // configs with inheritance sources. An unreadable snapshot yields no members
 // rather than failing the whole historical revision read.
@@ -488,27 +414,6 @@ func deleteModeFromOptions(options json.RawMessage) (execute.DeleteMode, error) 
 		}
 	}
 	return deleteModeOf(opts.DeleteMode)
-}
-
-// underRecoveryDir reports whether a persisted path is inside the member root's
-// soft-delete recovery folder: the only recovery entries that are real media in
-// their scanned place. A temp leftover is not an inventory fact.
-func underRecoveryDir(componentRoot, p string) bool {
-	rel, err := filepath.Rel(filepath.FromSlash(componentRoot), filepath.FromSlash(p))
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	return len(parts) > 1 && parts[0] == execute.RecoveryDirName
-}
-
-// nonNil turns a nil path slice into an empty one so the persisted report never
-// marshals a planned-empty list as JSON null.
-func nonNil(paths []string) []string {
-	if paths == nil {
-		return []string{}
-	}
-	return paths
 }
 
 // mustJSON marshals a snapshot fragment for storage.

@@ -52,7 +52,7 @@ func newFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *fixture {
 	return &fixture{
 		t:    t,
 		repo: repo,
-		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+		svc: worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 			tasksconversion.New(tmp),
 		}, scan),
 		ctx: context.Background(),

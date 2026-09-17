@@ -43,6 +43,19 @@ func newExecFixture(t *testing.T) *execFixture {
 // keeps the stored inventory as the only input facts.
 func newExecFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *execFixture {
 	t.Helper()
+	return newExecFixtureWithTask(t, scan, 1, nil)
+}
+
+// newExecFixtureWithTask wires the fixture with the given registered tasks and
+// execution encode concurrency; a nil tasks list registers the real conversion
+// task.
+func newExecFixtureWithTask(
+	t *testing.T,
+	scan worksetusecase.FolderScan,
+	encodeConcurrency int,
+	tasks []worksetusecase.Task,
+) *execFixture {
+	t.Helper()
 	tmp := t.TempDir()
 	repo, err := sqlite.NewRepository(filepath.Join(tmp, "test.db"))
 	if err != nil {
@@ -53,13 +66,14 @@ func newExecFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *execF
 	if cfgErr := os.WriteFile(filepath.Join(tmp, "config.json"), []byte(cfg), 0o644); cfgErr != nil {
 		t.Fatalf("write config: %v", cfgErr)
 	}
+	if tasks == nil {
+		tasks = []worksetusecase.Task{tasksconversion.New(tmp)}
+	}
 	root := filepath.Join(tmp, "music")
 	f := &execFixture{
-		t:    t,
-		repo: repo,
-		svc: worksetusecase.NewService(repo, 1, []worksetusecase.Task{
-			tasksconversion.New(tmp),
-		}, scan),
+		t:         t,
+		repo:      repo,
+		svc:       worksetusecase.NewService(repo, 1, encodeConcurrency, tasks, scan),
 		root:      root,
 		libraryID: "lib-1",
 		members:   map[string]worksetusecase.MemberView{},

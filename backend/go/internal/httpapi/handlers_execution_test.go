@@ -85,7 +85,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 		t.Fatalf("decode workset: %v", err)
 	}
 	wsID := created.Workset.WorksetID
-	svc := worksetusecase.NewService(repo, 1, []worksetusecase.Task{
+	svc := worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 		tasksconversion.New(t.TempDir()),
 	}, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"

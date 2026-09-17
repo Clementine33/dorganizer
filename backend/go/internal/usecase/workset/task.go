@@ -72,9 +72,11 @@ type Task interface {
 	// nil error.
 	FreezeExecution(repo *sqlite.Repository, in RevisionFacts) (FrozenExecution, []string, error)
 
-	// RunUnit executes one frozen unit and reports its observed facts; the
-	// generic side applies them to the report and the observed inventory.
-	RunUnit(ctx context.Context, repo *sqlite.Repository, in UnitRunInput) (UnitResult, error)
+	// PrepareUnit prechecks one frozen unit and returns it ready to encode;
+	// nothing is written yet. A failure of the unit's own work is returned as a
+	// workset error carrying its stage and code, so the session can report the
+	// unit — never a neighbour — as failed.
+	PrepareUnit(ctx context.Context, repo *sqlite.Repository, in UnitRunInput) (PreparedUnit, error)
 
 	// RevisionMembers resolves each member's frozen effective configuration
 	// from the revision's draft snapshot, with its inheritance sources.
@@ -83,6 +85,27 @@ type Task interface {
 	// ReviewRevision rebuilds the reviewable payload of a persisted revision
 	// from its stored rows.
 	ReviewRevision(in RevisionFacts) (PlanReview, error)
+}
+
+// PreparedUnit is one frozen unit that passed its business precheck and wrote
+// nothing yet. The session drives it in three steps: every encode task is
+// delivered exactly once — possibly concurrently with other units' tasks —
+// then either Commit lands them in frozen order or Discard cleans them because
+// the session stopped first.
+type PreparedUnit interface {
+	// EncodeTasks is how many encode tasks Commit expects.
+	EncodeTasks() int
+	// EncodeTask materializes one staged output. Indices may run concurrently
+	// and are each delivered exactly once; the task observes the cancellation
+	// of the context it is handed. A failure of the task's own work is a
+	// workset error carrying its stage and code.
+	EncodeTask(ctx context.Context, index int) error
+	// Commit lands the encoded outputs in frozen order and reports the unit's
+	// observed facts. It is called once, after every EncodeTask completed.
+	Commit(ctx context.Context) (UnitResult, error)
+	// Discard cleans the staged outputs of a unit that will not commit and
+	// reports the stopped unit's facts; a nil cause reports a cancellation.
+	Discard(cause error) UnitResult
 }
 
 // PlanSessionInput is the frozen input of one generation session.
