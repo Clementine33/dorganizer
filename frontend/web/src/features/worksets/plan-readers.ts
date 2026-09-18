@@ -2,6 +2,7 @@ import type {
   AudioOutputSpec,
   ComponentOutcome,
   DesiredProfile,
+  FileDecision,
   OverrideUnit,
   RevisionDetailResponse,
   VariantDecision,
@@ -52,6 +53,31 @@ export function componentHasUnmetTarget(component: ComponentOutcome): boolean {
 
 export function componentOperationCount(component: ComponentOutcome): number {
   return (component.operations ?? []).length
+}
+
+/**
+ * The files the plan left untouched: KEEP decisions are conclusions, never
+ * executable operations. They are what a run shows as 保留文件 — a file stays
+ * because it already satisfies the declared target, or because nothing could
+ * satisfy it (UNMET_TARGET keeps the stem instead of a silently satisfied one).
+ */
+export function keptDecisions(component: ComponentOutcome): FileDecision[] {
+  return (component.variant_decisions ?? [])
+    .flatMap((variant) => variant.decisions ?? [])
+    .filter((decision) => decision.resolution === 'keep')
+}
+
+/** Why a kept file was kept, in the plan's own short words. */
+const KEEP_REASON_TEXT: Record<string, string> = {
+  UNMET_TARGET: '目标未满足',
+  KEEP_LOSSLESS_TARGET: '已满足无损目标',
+  KEEP_ENCODED_SATISFIED: '已满足编码目标',
+  SOURCE_AMBIGUOUS: '源不唯一',
+}
+
+export function keepReasonText(reasonCode: string | undefined): string {
+  if (!reasonCode) return '原样保留'
+  return KEEP_REASON_TEXT[reasonCode] ?? reasonCode
 }
 
 /** One partition's independent facts within a member's planned components. */

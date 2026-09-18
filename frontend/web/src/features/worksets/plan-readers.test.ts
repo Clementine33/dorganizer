@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ComponentOutcome } from '@/lib/api/types'
 import {
+  keepReasonText,
+  keptDecisions,
   componentHasUnmetTarget,
   componentOperationCount,
   memberConclusion,
@@ -145,5 +147,39 @@ describe('partition facts', () => {
     expect(facts.matched).toEqual({ applicable: true, blocked: true, unmet: true, changes: true })
     // The partition with no component holds none of those facts.
     expect(facts.unmatched).toEqual({ applicable: false, blocked: false, unmet: false, changes: false })
+  })
+})
+
+describe('kept files', () => {
+  const component = readComponent({
+    component_id: 'cmp',
+    partition: 'matched',
+    status: 'ok',
+    variant_decisions: [
+      {
+        stem: 'track',
+        decisions: [
+          { path: '/album/track.mp3', resolution: 'encode', target_path: '/album/track.mp3' },
+          { path: '/album/track.wav', resolution: 'keep', reason_code: 'UNMET_TARGET' },
+          { path: '/album/notes.mp3', resolution: 'delete', reason_code: 'OBSOLETE_ENCODED' },
+          { path: '/album/other.mp3', resolution: 'keep', reason_code: 'KEEP_ENCODED_SATISFIED' },
+        ],
+      },
+    ],
+  } as ComponentOutcome)
+
+  it('reads only the keep conclusions, never the operations', () => {
+    expect(keptDecisions(component).map((decision) => decision.path)).toEqual([
+      '/album/track.wav',
+      '/album/other.mp3',
+    ])
+  })
+
+  it("explains each kept file in the plan's own words", () => {
+    expect(keepReasonText('UNMET_TARGET')).toBe('目标未满足')
+    expect(keepReasonText('KEEP_ENCODED_SATISFIED')).toBe('已满足编码目标')
+    expect(keepReasonText(undefined)).toBe('原样保留')
+    // An unknown code stays readable rather than disappearing.
+    expect(keepReasonText('SOME_NEW_CODE')).toBe('SOME_NEW_CODE')
   })
 })

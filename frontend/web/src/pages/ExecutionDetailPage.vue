@@ -3,7 +3,9 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import ExecutionPanel from '@/features/worksets/ExecutionPanel.vue'
+import { keptDecisions, revisionComponents } from '@/features/worksets/plan-readers'
 import { useOperationContext } from '@/composables/use-operation-context'
+import type { FileDecision } from '@/lib/api/types'
 
 /**
  * The execution session of the revision in view
@@ -17,7 +19,20 @@ import { useOperationContext } from '@/composables/use-operation-context'
 const route = useRoute()
 const worksetId = computed(() => (route.params.worksetId as string) || null)
 const revisionPlanId = computed(() => (route.query.revision as string) || null)
-const { execution, executionView, queries } = useOperationContext(worksetId, 'conversion', revisionPlanId)
+const { execution, executionView, queries, workspace } = useOperationContext(
+  worksetId,
+  'conversion',
+  revisionPlanId,
+)
+
+/** Each component's kept files, as the executed revision concluded them. */
+const kept = computed<Record<string, FileDecision[]>>(() => {
+  const executed = workspace.revision.value
+  if (!executed) return {}
+  return Object.fromEntries(
+    revisionComponents(executed).map((component) => [component.component_id, keptDecisions(component)]),
+  )
+})
 
 const loading = computed(() => queries.operationQuery.isPending.value || queries.revisionQuery.isPending.value)
 const running = computed(() => {
@@ -43,7 +58,7 @@ async function cancel() {
       当前版本没有执行记录。
     </p>
     <template v-else>
-      <ExecutionPanel :view="executionView" />
+      <ExecutionPanel :view="executionView" :kept="kept" />
       <div v-if="running" class="flex flex-wrap items-center gap-2 px-3 py-2">
         <Button
           variant="destructive"

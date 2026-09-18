@@ -1,16 +1,28 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
+import { keepReasonText } from '@/features/worksets/plan-readers'
 import { sessionFailureText } from '@/features/worksets/session-failure'
-import type { ExecutionComponent, ExecutionStatus, ExecutionView } from '@/lib/api/types'
+import type { ExecutionComponent, ExecutionStatus, ExecutionView, FileDecision } from '@/lib/api/types'
 
 /**
  * Live progress and the observed result of one execution session (M3). Every
  * number here is a count that actually happened — no estimated percentage —
  * and a failure keeps its partial facts: completed components, the operations
  * that never ran, and the files preserved for an operator.
+ *
+ * 保留文件 is the plan's conclusion, not the run's bookkeeping: the files the
+ * revision kept untouched, read from that revision and joined by component id.
  */
-const props = defineProps<{ view: ExecutionView }>()
+const props = defineProps<{
+  view: ExecutionView
+  /** Kept files per component id, as the executed revision concluded them. */
+  kept?: Record<string, FileDecision[]>
+}>()
+
+function keptFiles(component: ExecutionComponent): FileDecision[] {
+  return props.kept?.[component.component_id] ?? []
+}
 
 const STATUS: Record<ExecutionStatus, { label: string; tone: 'neutral' | 'brand' | 'success' | 'warning' | 'danger' }> = {
   queued: { label: '排队中', tone: 'neutral' },
@@ -115,10 +127,18 @@ function shortPath(path: string): string {
               <span v-for="path in component.remaining" :key="path" class="block truncate font-mono" :title="path">{{ path }}</span>
             </dd>
           </div>
-          <div v-if="component.recovery.length > 0" class="flex gap-1.5">
+          <div v-if="keptFiles(component).length > 0" class="flex gap-1.5">
             <dt class="w-16 shrink-0 text-[var(--text-muted)]">保留文件</dt>
-            <dd class="min-w-0 flex-1" data-testid="execution-recovery">
-              <span v-for="path in component.recovery" :key="path" class="block truncate font-mono" :title="path">{{ path }}</span>
+            <dd class="min-w-0 flex-1" data-testid="execution-kept">
+              <span
+                v-for="kept in keptFiles(component)"
+                :key="kept.path"
+                class="block truncate font-mono"
+                :title="kept.path"
+              >
+                {{ kept.path }}
+                <span class="text-[var(--text-muted)]">· {{ keepReasonText(kept.reason_code) }}</span>
+              </span>
             </dd>
           </div>
         </dl>

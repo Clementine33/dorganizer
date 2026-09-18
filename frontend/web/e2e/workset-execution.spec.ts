@@ -133,6 +133,11 @@ test.describe('workset execution', () => {
     await expect(page.getByTestId('workbench-detail-inline').getByTestId('execution-panel')).toBeVisible()
     await expect(page.getByTestId('execution-panel')).toContainText('已写入')
     await expect(page.getByTestId('execution-panel')).toContainText('已清理到 Delete/')
+    // 保留文件 is the plan's conclusion, not the run's bookkeeping: the declared
+    // lossless target was already satisfied, so it stayed untouched — and the
+    // Delete/ destinations the run moved files to are not listed at all.
+    await expect(page.getByTestId('execution-kept')).toContainText('00.wav')
+    await expect(page.getByTestId('execution-panel')).not.toContainText('Delete/soft-album')
 
     // Disk truth: the mp3 was rebuilt at the frozen target quality, the wav
     // source stays, and both the obsolete aac and the replaced mp3 are kept

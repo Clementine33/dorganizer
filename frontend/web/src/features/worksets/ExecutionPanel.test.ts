@@ -53,7 +53,7 @@ describe('ExecutionPanel', () => {
     expect(wrapper.text()).toContain('albumB')
   })
 
-  it('keeps the partial facts of a failure: stage, error, unrun operations and preserved files', () => {
+  it('keeps the partial facts of a failure: stage, error and unrun operations', () => {
     const wrapper = mount(ExecutionPanel, {
       props: {
         view: view({
@@ -102,7 +102,6 @@ describe('ExecutionPanel', () => {
     expect(wrapper.get('[data-testid="execution-error"]').text()).toContain('ffmpeg failed')
     expect(wrapper.text()).toContain('停在生成输出')
     expect(wrapper.get('[data-testid="execution-remaining"]').text()).toContain('00.wav')
-    expect(wrapper.get('[data-testid="execution-recovery"]').text()).toContain('Delete/00.m4a')
     expect(wrapper.get('[data-testid="execution-inventory-warning"]').text()).toContain('未完全同步')
     // The component that never ran is visible as such, not hidden or counted
     // as done.
@@ -163,6 +162,46 @@ describe('ExecutionPanel', () => {
     })
     expect(hard.text()).toContain('已硬删除')
     expect(hard.text()).toContain('硬删除')
+  })
+
+  it("shows the plan's kept files, not where a run moved files", () => {
+    const wrapper = mount(ExecutionPanel, {
+      props: {
+        kept: {
+          'comp-a': [
+            { path: '/music/albumA/00.wav', resolution: 'keep', reason_code: 'UNMET_TARGET' },
+            { path: '/music/albumA/01.mp3', resolution: 'keep', reason_code: 'KEEP_ENCODED_SATISFIED' },
+          ],
+        },
+        view: view({
+          status: 'succeeded',
+          components: [
+            {
+              component_index: 1,
+              component_id: 'comp-a',
+              root_path: '/music/albumA',
+              partition: 'matched',
+              status: 'succeeded',
+              operations: 1,
+              completed_operations: 1,
+              committed: ['/music/albumA/00.mp3'],
+              removed: ['/music/albumA/00.m4a'],
+              remaining: [],
+              recovery: ['/music/albumA/Delete/00.m4a'],
+              inventory_synced: true,
+            },
+          ],
+        }),
+      },
+    })
+
+    const kept = wrapper.get('[data-testid="execution-kept"]').text()
+    expect(kept).toContain('00.wav')
+    expect(kept).toContain('目标未满足')
+    expect(kept).toContain('已满足编码目标')
+    // The run's own bookkeeping stays out of the panel.
+    expect(wrapper.find('[data-testid="execution-recovery"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Delete/00.m4a')
   })
 
   it('explains a canceled run without claiming the whole revision happened', () => {
