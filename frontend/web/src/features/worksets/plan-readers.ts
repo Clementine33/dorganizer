@@ -6,7 +6,6 @@ import type {
   OverrideUnit,
   RevisionDetailResponse,
   VariantDecision,
-  PlanOperation,
 } from '@/lib/api/types'
 
 /**
@@ -40,10 +39,6 @@ export function readVariant(variant: VariantDecision): VariantDecision {
   return { ...variant, decisions: variant.decisions ?? [] }
 }
 
-export function operationsOf(component: ComponentOutcome): PlanOperation[] {
-  return component.operations ?? []
-}
-
 /** Plan facts of one component, as independent observations. */
 export function componentHasUnmetTarget(component: ComponentOutcome): boolean {
   return (component.variant_decisions ?? []).some((variant) =>
@@ -62,9 +57,66 @@ export function componentOperationCount(component: ComponentOutcome): number {
  * satisfy it (UNMET_TARGET keeps the stem instead of a silently satisfied one).
  */
 export function keptDecisions(component: ComponentOutcome): FileDecision[] {
-  return (component.variant_decisions ?? [])
-    .flatMap((variant) => variant.decisions ?? [])
-    .filter((decision) => decision.resolution === 'keep')
+  return decisionsOf(component).filter((decision) => decision.resolution === 'keep')
+}
+
+function decisionsOf(component: ComponentOutcome): FileDecision[] {
+  return (component.variant_decisions ?? []).flatMap((variant) => variant.decisions ?? [])
+}
+
+/**
+ * One file's conclusion as a review row. It is read straight from the plan's
+ * per-file resolution — no operation is consulted and nothing is re-derived —
+ * so every file is named exactly once, with the one thing that happens to it.
+ */
+export interface DecisionRow {
+  resolution: string
+  /** The file the decision concludes: an encode's target. */
+  name: string
+  reasonCode: string
+}
+
+/** One folder's rows: every file in it is named exactly once. */
+export interface DecisionGroup {
+  /** The folder, relative to the member root; empty when the files sit in it. */
+  dir: string
+  rows: DecisionRow[]
+}
+
+/**
+ * The component's per-file resolutions grouped by folder. Paths are relative
+ * to the member root — the review's header already names the member — so a
+ * long CJK name is the only thing a row has to carry.
+ */
+export function decisionGroups(component: ComponentOutcome, memberRoot = ''): DecisionGroup[] {
+  const groups = new Map<string, DecisionRow[]>()
+  for (const decision of decisionsOf(component)) {
+    const rel = relativeTo(decision.path, memberRoot)
+    const row: DecisionRow = {
+      resolution: decision.resolution,
+      name: posixBase(rel),
+      reasonCode: decision.reason_code ?? '',
+    }
+    const dir = posixDir(rel)
+    groups.set(dir, [...(groups.get(dir) ?? []), row])
+  }
+  return [...groups].map(([dir, rows]) => ({ dir, rows }))
+}
+
+/** A frozen path as the member reads it: the member root is the header. */
+function relativeTo(path: string, memberRoot: string): string {
+  const prefix = memberRoot && !memberRoot.endsWith('/') ? `${memberRoot}/` : memberRoot
+  return prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path
+}
+
+function posixDir(path: string): string {
+  const at = path.lastIndexOf('/')
+  return at < 0 ? '' : path.slice(0, at)
+}
+
+function posixBase(path: string): string {
+  const at = path.lastIndexOf('/')
+  return at < 0 ? path : path.slice(at + 1)
 }
 
 /** Why a kept file was kept, in the plan's own short words. */
@@ -78,6 +130,17 @@ const KEEP_REASON_TEXT: Record<string, string> = {
 export function keepReasonText(reasonCode: string | undefined): string {
   if (!reasonCode) return '原样保留'
   return KEEP_REASON_TEXT[reasonCode] ?? reasonCode
+}
+
+/** One decision's own short word: what happens to the file. */
+const RESOLUTION_TEXT: Record<string, string> = {
+  keep: '保留',
+  delete: '删除',
+  encode: '生成',
+}
+
+export function resolutionText(resolution: string): string {
+  return RESOLUTION_TEXT[resolution] ?? resolution
 }
 
 /** One partition's independent facts within a member's planned components. */

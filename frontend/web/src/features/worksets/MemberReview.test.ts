@@ -43,18 +43,31 @@ const revision: RevisionDetailResponse = {
               kind: 'encode',
               phase: 'materialize_outputs',
               component_id: 'comp-1',
-              variant_stem: 'track',
+              variant_stem: '00',
               source_path: '/music/albumA/00.wav',
               target_path: '/music/albumA/00.mp3',
+            },
+            {
+              kind: 'delete_obsolete',
+              phase: 'remove_obsolete_audio',
+              component_id: 'comp-1',
+              variant_stem: '01',
+              source_path: '/music/albumA/01.wav',
             },
           ],
           variant_decisions: [
             {
-              stem: 'track',
+              stem: '00',
               decisions: [
+                { path: '/music/albumA/00.mp3', resolution: 'encode', target_path: '/music/albumA/00.mp3' },
                 { path: '/music/albumA/00.wav', resolution: 'keep', reason_code: 'KEEP_LOSSLESS_TARGET' },
+              ],
+            },
+            {
+              stem: '01',
+              decisions: [
                 { path: '/music/albumA/01.mp3', resolution: 'keep', reason_code: 'UNMET_TARGET' },
-                { path: '/music/albumA/legacy.m4a', resolution: 'delete', reason_code: 'OBSOLETE_ENCODED' },
+                { path: '/music/albumA/01.wav', resolution: 'delete', reason_code: 'OBSOLETE_LOSSLESS' },
               ],
             },
           ],
@@ -92,24 +105,39 @@ const revision: RevisionDetailResponse = {
 }
 
 describe('MemberReview', () => {
-  it('shows the kept files of a component and why each was kept', () => {
+  it("gives every file one row, in the plan's own words", () => {
     const wrapper = mount(MemberReview, { props: { member, revision, editable: false } })
 
-    const kept = wrapper.get('[data-testid="component-kept"]').text()
-    expect(kept).toContain('00.wav')
-    expect(kept).toContain('已满足无损目标')
-    expect(kept).toContain('01.mp3')
-    expect(kept).toContain('目标未满足')
-    // Deleted and materialized files are operations, never kept conclusions.
-    expect(kept).not.toContain('legacy.m4a')
-    expect(kept).not.toContain('00.wav →')
+    const rows = wrapper.findAll('[data-testid="component-decision"]').map((row) => row.text())
+    expect(rows).toHaveLength(4)
+    expect(rows[0]).toContain('生成')
+    expect(rows[0]).toContain('00.mp3')
+    expect(rows[1]).toContain('保留')
+    expect(rows[1]).toContain('已满足无损目标')
+    expect(rows[2]).toContain('保留')
+    expect(rows[2]).toContain('目标未满足')
+    expect(rows[3]).toContain('删除')
+    expect(rows[3]).toContain('01.wav')
   })
 
-  it('still lists the operations beside them', () => {
+  it('keeps the paths whole in the narrow column', () => {
     const wrapper = mount(MemberReview, { props: { member, revision, editable: false } })
 
-    expect(wrapper.text()).toContain('encode · /music/albumA/00.wav')
-    expect(wrapper.text()).toContain('→ /music/albumA/00.mp3')
-    expect(wrapper.text()).toContain('有变化')
+    // The member folder is the card's header, so rows carry the member-relative
+    // path unabridged instead of a clipped absolute one.
+    const rows = wrapper.findAll('[data-testid="component-decision"]').map((row) => row.text())
+    for (const row of rows) expect(row).not.toContain('/music/albumA/')
+    expect(rows[0]).toContain('00.mp3')
+    expect(rows[3]).toContain('01.wav')
+  })
+
+  it('does not repeat the same files as a second operations list', () => {
+    const wrapper = mount(MemberReview, { props: { member, revision, editable: false } })
+
+    const body = wrapper.text()
+    expect(body).not.toContain('delete_obsolete')
+    expect(body).not.toContain('→')
+    expect(wrapper.findAll('[data-testid="component-kept"]')).toHaveLength(0)
+    expect(body).toContain('有变化')
   })
 })

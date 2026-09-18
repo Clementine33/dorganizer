@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ComponentOutcome } from '@/lib/api/types'
 import {
+  decisionGroups,
   keepReasonText,
   keptDecisions,
+  resolutionText,
   componentHasUnmetTarget,
   componentOperationCount,
   memberConclusion,
-  operationsOf,
   partitionFacts,
   readComponent,
   type MemberFacts,
@@ -33,7 +34,7 @@ describe('plan snapshot readers', () => {
     expect(component.operations).toEqual([])
     expect(component.projected_inventory).toEqual([])
     expect(component.files).toEqual([])
-    expect(operationsOf(component)).toEqual([])
+    expect(component.operations).toEqual([])
     expect(componentOperationCount(component)).toBe(0)
     expect(componentHasUnmetTarget(component)).toBe(false)
   })
@@ -155,6 +156,16 @@ describe('kept files', () => {
     component_id: 'cmp',
     partition: 'matched',
     status: 'ok',
+    operations: [
+      {
+        kind: 'encode',
+        phase: 'materialize_outputs',
+        component_id: 'cmp',
+        variant_stem: 'track',
+        source_path: '/album/track.flac',
+        target_path: '/album/track.mp3',
+      },
+    ] as ComponentOutcome['operations'],
     variant_decisions: [
       {
         stem: 'track',
@@ -181,5 +192,82 @@ describe('kept files', () => {
     expect(keepReasonText(undefined)).toBe('原样保留')
     // An unknown code stays readable rather than disappearing.
     expect(keepReasonText('SOME_NEW_CODE')).toBe('SOME_NEW_CODE')
+  })
+})
+
+describe('decision rows', () => {
+  const component = readComponent({
+    component_id: 'cmp',
+    partition: 'matched',
+    status: 'ok',
+    operations: [
+      {
+        kind: 'encode',
+        phase: 'materialize_outputs',
+        component_id: 'cmp',
+        variant_stem: 'track',
+        source_path: '/album/track.flac',
+        target_path: '/album/track.mp3',
+      },
+    ] as ComponentOutcome['operations'],
+    variant_decisions: [
+      {
+        stem: 'track',
+        decisions: [
+          { path: '/album/track.mp3', resolution: 'encode', target_path: '/album/track.mp3' },
+          { path: '/album/track.wav', resolution: 'keep', reason_code: 'UNMET_TARGET' },
+          { path: '/album/notes.mp3', resolution: 'delete', reason_code: 'OBSOLETE_ENCODED' },
+        ],
+      },
+    ],
+  } as ComponentOutcome)
+
+  it('names every file once, with the one thing that happens to it', () => {
+    expect(decisionGroups(component, '/album')).toEqual([
+      {
+        dir: '',
+        rows: [
+          { resolution: 'encode', name: 'track.mp3', reasonCode: '' },
+          { resolution: 'keep', name: 'track.wav', reasonCode: 'UNMET_TARGET' },
+          { resolution: 'delete', name: 'notes.mp3', reasonCode: 'OBSOLETE_ENCODED' },
+        ],
+      },
+    ])
+  })
+
+  it('gives a subfolder its own group, named once', () => {
+    const nested = readComponent({
+      component_id: 'cmp',
+      partition: 'matched',
+      status: 'ok',
+      operations: [] as ComponentOutcome['operations'],
+      variant_decisions: [
+        {
+          stem: 'disc',
+          decisions: [
+            { path: '/album/disc/01.flac', resolution: 'keep', reason_code: 'KEEP_LOSSLESS_TARGET' },
+            { path: '/album/disc/02.flac', resolution: 'keep', reason_code: 'KEEP_LOSSLESS_TARGET' },
+          ],
+        },
+      ],
+    } as ComponentOutcome)
+
+    expect(decisionGroups(nested, '/album')).toEqual([
+      {
+        dir: 'disc',
+        rows: [
+          { resolution: 'keep', name: '01.flac', reasonCode: 'KEEP_LOSSLESS_TARGET' },
+          { resolution: 'keep', name: '02.flac', reasonCode: 'KEEP_LOSSLESS_TARGET' },
+        ],
+      },
+    ])
+  })
+
+  it("spells a resolution in the plan's own words", () => {
+    expect(resolutionText('keep')).toBe('保留')
+    expect(resolutionText('delete')).toBe('删除')
+    expect(resolutionText('encode')).toBe('生成')
+    // An unknown resolution stays readable rather than disappearing.
+    expect(resolutionText('rewrap')).toBe('rewrap')
   })
 })

@@ -2,12 +2,11 @@
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import {
-  componentHasUnmetTarget,
   componentOperationCount,
+  decisionGroups,
   keepReasonText,
-  keptDecisions,
-  operationsOf,
   profileText,
+  resolutionText,
   revisionComponents,
 } from '@/features/worksets/plan-readers'
 import type { ComponentOutcome, RevisionDetailResponse, RevisionMember, WorksetMember } from '@/lib/api/types'
@@ -58,19 +57,17 @@ function isOverride(unit: string): boolean {
 }
 
 /**
- * Every state a component can hold at once. An unmet target is not "no
- * change": the component may still convert other stems, so both facts show.
+ * The component's headline. An unmet target is deliberately not a badge here:
+ * every kept file names its own reason below, and the member row already
+ * carries the warning.
  */
 function componentFacts(component: ComponentOutcome): { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] {
   if (component.status === 'blocked') return [{ label: '阻塞', tone: 'danger' }]
-  const facts: { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }[] = []
-  if (componentHasUnmetTarget(component)) facts.push({ label: '目标未满足', tone: 'warning' })
-  facts.push(
+  return [
     componentOperationCount(component) > 0
       ? { label: '有变化', tone: 'success' }
       : { label: '无变化', tone: 'neutral' },
-  )
-  return facts
+  ]
 }
 </script>
 
@@ -128,30 +125,42 @@ function componentFacts(component: ComponentOutcome): { label: string; tone: 'su
             </span>
           </div>
           <p v-if="component.message" class="mt-1 text-[11px]">{{ component.message }}</p>
-          <ul v-if="operationsOf(component).length > 0" class="mt-1 space-y-0.5">
-            <li
-              v-for="operation in operationsOf(component)"
-              :key="`${operation.kind}-${operation.source_path}`"
-              class="truncate font-mono text-[10px]"
-              :title="operation.source_path"
-            >
-              {{ operation.kind }} · {{ operation.source_path }}
-              <span v-if="operation.target_path">→ {{ operation.target_path }}</span>
-            </li>
-          </ul>
-          <!-- What the plan left untouched, and why: an unchanged component is
-               not an empty one — its files are conclusions too. -->
-          <ul v-if="keptDecisions(component).length > 0" class="mt-1 space-y-0.5" data-testid="component-kept">
-            <li
-              v-for="kept in keptDecisions(component)"
-              :key="kept.path"
-              class="truncate font-mono text-[10px]"
-              :title="kept.path"
-            >
-              保留 · {{ kept.path }}
-              <span class="text-[var(--text-muted)]">· {{ keepReasonText(kept.reason_code) }}</span>
-            </li>
-          </ul>
+          <!-- Each file once, its folder named once: the plan's own per-file
+               resolutions. Text wraps rather than clipping, so a long name is
+               never cut into an unreadable one. -->
+          <div
+            v-for="group in decisionGroups(component, member.folder_path)"
+            :key="group.dir"
+            class="mt-1"
+            data-testid="component-decisions"
+          >
+            <p v-if="group.dir" class="font-mono text-[10px] text-[var(--text-muted)] [overflow-wrap:anywhere]">
+              {{ group.dir }}
+            </p>
+            <ul class="space-y-0.5">
+              <li
+                v-for="row in group.rows"
+                :key="`${row.resolution}-${row.name}`"
+                class="flex gap-1.5 font-mono text-[10px] leading-4"
+                data-testid="component-decision"
+              >
+                <span class="w-8 shrink-0 text-[var(--text-secondary)]">
+                  {{ resolutionText(row.resolution) }}
+                </span>
+                <span class="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                  {{ row.name }}
+                  <!-- Why a file stays is the question worth answering; a
+                       generated or removed file speaks for itself. -->
+                  <span
+                    v-if="row.resolution === 'keep' && row.reasonCode"
+                    class="text-[var(--text-muted)]"
+                  >
+                    · {{ keepReasonText(row.reasonCode) }}
+                  </span>
+                </span>
+              </li>
+            </ul>
+          </div>
         </li>
       </ul>
     </section>
