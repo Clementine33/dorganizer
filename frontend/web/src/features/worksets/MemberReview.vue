@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/badge'
 import {
   componentHasUnmetTarget,
   componentOperationCount,
+  keepReasonText,
+  keptDecisions,
   operationsOf,
   profileText,
   revisionComponents,
@@ -115,12 +117,12 @@ function componentFacts(component: ComponentOutcome): { label: string; tone: 'su
       <ul v-else class="space-y-2">
         <li v-for="component in components" :key="component.component_id" class="rounded-md border border-border p-2">
           <div class="flex flex-wrap items-center gap-1.5">
-            <Badge v-for="fact in componentFacts(component)" :key="fact.label" :tone="fact.tone">
-              {{ fact.label }}
-            </Badge>
             <span class="text-[11px] text-[var(--text-muted)]">
               {{ component.partition === 'matched' ? '无音效' : '有音效' }}
             </span>
+            <Badge v-for="fact in componentFacts(component)" :key="fact.label" :tone="fact.tone">
+              {{ fact.label }}
+            </Badge>
             <span v-if="component.reason_code" class="font-mono text-[10px] text-[var(--text-muted)]">
               {{ component.reason_code }}
             </span>
@@ -135,6 +137,19 @@ function componentFacts(component: ComponentOutcome): { label: string; tone: 'su
             >
               {{ operation.kind }} · {{ operation.source_path }}
               <span v-if="operation.target_path">→ {{ operation.target_path }}</span>
+            </li>
+          </ul>
+          <!-- What the plan left untouched, and why: an unchanged component is
+               not an empty one — its files are conclusions too. -->
+          <ul v-if="keptDecisions(component).length > 0" class="mt-1 space-y-0.5" data-testid="component-kept">
+            <li
+              v-for="kept in keptDecisions(component)"
+              :key="kept.path"
+              class="truncate font-mono text-[10px]"
+              :title="kept.path"
+            >
+              保留 · {{ kept.path }}
+              <span class="text-[var(--text-muted)]">· {{ keepReasonText(kept.reason_code) }}</span>
             </li>
           </ul>
         </li>
