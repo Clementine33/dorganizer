@@ -63,28 +63,27 @@ function mp3Bitrate(file: string): number {
 }
 
 async function addLibraryAndScan(page: Page, root: string, name: string): Promise<void> {
-  await page.goto('/libraries')
+  await page.goto('/worksets')
   const emptyState = page.getByTestId('empty-add-library')
   if (await emptyState.isVisible().catch(() => false)) {
     await emptyState.click()
   } else {
-    await page.getByRole('button', { name: '添加媒体库' }).click()
+    await page.getByRole('button', { name: '添加媒体库' }).first().click()
   }
   await page.locator('#library-name').fill(name)
   await page.locator('#library-root').fill(root)
   await page.getByRole('button', { name: '保存' }).click()
+  // Entering the library opens its workbench, where it is scanned.
+  await page.getByRole('main').getByRole('link', { name: new RegExp(name) }).first().click()
+  await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
   await page.getByTestId('scan-button').click()
   await expect(page.getByText('扫描完成')).toBeVisible({ timeout: 60_000 })
 }
 
-/** Creates a workset over every scanned folder and opens its conversion list. */
+/** Creates the library's conversion record over every scanned folder. */
 async function createWorksetForAllFolders(page: Page): Promise<void> {
   await page.getByRole('checkbox', { name: '选择全部文件夹' }).check()
-  await page.getByTestId('create-workset').click()
-  await expect(page.getByTestId('create-workset-dialog')).toBeVisible()
-  await page.getByTestId('confirm-create-workset').click()
-  await expect(page).toHaveURL(/\/worksets\/ws-[\w.-]+\/?$/)
-  await page.getByTestId('overview-operation').click()
+  await page.getByTestId('enter-conversion').click()
   await expect(page).toHaveURL(/\/conversion$/)
 }
 

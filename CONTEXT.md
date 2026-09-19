@@ -1,26 +1,43 @@
 # Onsei Media Organization
 
-Onsei organizes audio collections by comparing observed media with desired audio outputs. Worksets keep the folders under review together while each business operation owns its settings and planning history.
+Onsei organizes audio collections by comparing observed media with desired audio outputs. A media library IS the workbench: its folders are browsed, organized and converted there, and each operation keeps one current record of the folders it works on.
 
 ## Language
 
 ### Collections and workbench
 
 **Library**:
-A named media collection rooted at one directory, whose scanned inventory supplies album folders and media facts.
+A named media collection rooted at one directory, whose scanned inventory supplies the member directories and media facts. It owns the workbench: entering a library is entering its overview, its browsing, its conversion record and its file management. Its deletion removes its entry (and that entry's record) but never the media.
 
 **Album Folder / Planning Root**:
-A direct-child audio folder of a Library, including its descendants. Each selected folder is an independent boundary for classification, association and planning.
+A direct-child directory of a Library, including its descendants. It is listed whether or not it holds audio — the audio count is a status, not a filter — and each *selected* folder becomes one planning root, an independent boundary for classification, association and planning.
 
-**Workset**:
-A fixed, ordered set of 1–500 album folders from one Library, with a shared name and membership for its independent Workset Operations.
+**Workset (processing record)**:
+The current record of one (Library, operation) pair: a fixed, ordered set of 1–500 member directories the user selected, plus that operation's settings and its current plan. At most one exists per pair, and creating a new one replaces the record it supersedes — together with that record's plan and execution results. The product entry keeps the name 工作集.
+_Avoid_: Multiple named collections per library; permanent per-record history.
 
 **Member / Member ID**:
-An album folder's stable identity within a Workset. Its path and position describe the member but do not define its identity.
-_Avoid_: Scan folder ID, list index or path as member identity.
+A directory of one processing record. Its library-relative path (`rel_path`) is the durable identity the workbench addresses it by — a rescan cannot renumber it — and `member_id` is the record-scoped identity routes carry.
+_Avoid_: Scan folder ID, list index, or the absolute path as member identity.
+
+**Member Files / Current Files**:
+What the shared file module shows for one member: the directory's contents as the last scan recorded them, refreshed when the page is entered. It serves every caller — the overview's browsing and a conversion member's page alike — and it reads no draft and interprets no plan.
+_Avoid_: Conversion file browser; a page-owned tree.
+
+**Plan Review**:
+The read-only view of one member's frozen plan: what will be kept, deleted or generated, and which planned outputs do not exist yet. It is built from the frozen plan, never from the latest scan, and it never manages files.
+_Avoid_: Using the current-files tree as the plan's view.
+
+**Direct File Management**:
+Renaming one item, moving one item inside its member, and soft-deleting one or more items into the library-level `Delete/`, without a plan. It validates its own paths and conflicts, reports per-item results, and never overwrites a destination.
+_Avoid_: Treating these writes as a conversion step; disguising them as a plan.
+
+**File Management Admission**:
+The process-wide rule that direct file management and the managed task paths (scan, planning, execution) never interleave: one side is refused while the other is in flight, checked and registered atomically. Library root changes and deletions take the same slot.
+_Avoid_: Frontend-only disabling; a queue of waiting file operations.
 
 **Workset Operation**:
-An independent business activity on Workset members, owning its draft, participation scope, planning sessions and revisions. Conversion is the currently available activity.
+An independent business activity on a record's members, owning its draft, participation scope, planning sessions and its current plan. Conversion is the currently available activity, and it is the operation a record is created for.
 _Avoid_: Workflow step; filesystem Operation when referring to this activity.
 
 **Operation Draft**:
@@ -60,11 +77,12 @@ A reviewable proposal of media decisions and required filesystem changes, produc
 **Plan Snapshot**:
 The frozen payload of one Plan Revision as its Task wrote it: opaque to the generic workset module, carries `kind` and `schema_version` so a reader knows what it is looking at.
 
-**Plan Revision**:
-An immutable proposal owned by one Workset Operation, freezing its draft, member participation, effective settings and sources, input facts and results.
+**Plan Revision (current plan)**:
+The immutable proposal a processing record currently holds: its draft, member participation, effective settings and sources, input facts and results are frozen. Publishing a new one retires the plan it replaced, with its payload and execution results, in the same transaction — a record keeps one plan.
+_Avoid_: Revision history; browsing an older plan of a record.
 
 **Planning Session**:
-An asynchronous attempt to produce a complete Plan Revision from frozen settings and member inputs. Only successful completion replaces the operation's current revision.
+An asynchronous attempt to produce a complete Plan Revision from frozen settings and member inputs. Only successful completion replaces the operation's current plan; failure, cancellation or interruption leaves the previous plan exactly as it was.
 
 **Planning State**:
 The operation's relationship to planning: unplanned, planning, planned, needs planning or orphaned. It is distinct from input validity and the proposal's results.
@@ -84,8 +102,8 @@ _Avoid_: Delete mode as a per-run option.
 **Input Validity**:
 Whether a revision's recorded inputs still agree with the current observed inventory: valid, stale or unavailable.
 
-**Orphaned Workset**:
-A Workset whose Library has been deleted, retaining its members and historical proposals for read-only review.
+**Deleted Library**:
+A Library entry the user removed: its processing record, plan and execution results are deleted with it, while the media files and the `Delete/` recovery directory on disk stay untouched. There are no orphaned records left behind to review.
 
 ### Audio reconciliation
 

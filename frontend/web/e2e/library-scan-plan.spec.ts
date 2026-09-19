@@ -19,12 +19,14 @@ async function pickUnitOption(page: Page, testId: string, option: string) {
  * The browser flow exercised here:
  *   1. create a library pointing at a generated fixture tree,
  *   2. run the scan to completion (SSE),
- *   3. select a folder and create a workset (title dialog → workspace),
+ *   3. select a folder and enter its conversion record (scope dialog → record),
  *   4. edit the common settings in place (direct fields, 恢复默认) and apply,
  *   5. generate a plan revision and read the five summary facts,
  *   6. generate again on a changed draft and confirm the new revision
  *      supersedes the old one,
- *   7. return to the workset list and see the operation state.
+ *   7. browse a member's files and rename one file through the shared file
+ *      module, then return to the list,
+ *   8. return to the library selection and delete the library.
  *
  * Skipped unless ONSEI_E2E=1 so CI can run it optionally and local `vitest`
  * runs never try to boot the stack (vitest only includes `src/**` anyway).
@@ -39,55 +41,54 @@ test.describe('workset operation smoke', () => {
     const { fixtureRoot } = readStackState()
     const fixturePosix = fixtureRoot.replaceAll('\\', '/')
 
-    // Empty data dir → libraries empty state.
+    // Empty data dir → the library selection, which is the product entry.
     await page.goto('/')
-    await expect(page.getByTestId('empty-add-library')).toBeVisible()
+    await expect(page.getByTestId('libraries-empty')).toBeVisible()
 
     // The global shell exists before any page content: at the default desktop
-    // width the rail owns the navigation and 媒体库 is the current entry
-    // (N02, N08, N21).
+    // width the rail owns the navigation, and 工作集 is the only entry — the
+    // old 媒体库 entry is gone with its page (N02, N08, N21).
     await expect(page.getByTestId('global-rail')).toBeVisible()
     await expect(page.getByTestId('global-bottom-bar')).toBeHidden()
-    await expect(page.getByTestId('global-rail').getByRole('link', { name: '媒体库' })).toHaveAttribute(
+    await expect(page.getByTestId('global-rail').getByRole('link', { name: '工作集' })).toHaveAttribute(
       'aria-current',
       'page',
     )
+    await expect(page.getByTestId('global-rail').getByRole('link', { name: '媒体库' })).toHaveCount(0)
 
     // 1. Create the library pointing at the generated fixture tree.
     await page.getByTestId('empty-add-library').click()
     await page.locator('#library-name').fill('E2E Library')
     await page.locator('#library-root').fill(fixtureRoot)
     await page.getByRole('button', { name: '保存' }).click()
-    await expect(page.getByTestId('scan-button')).toBeVisible()
     await expect(page.getByRole('main').getByText(fixturePosix)).toBeVisible()
+
+    // Entering the library is what opens the workbench: the overview lists
+    // every direct child directory the scan will record.
+    await page.getByRole('main').getByRole('link', { name: /E2E Library/ }).first().click()
+    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+    await expect(page.getByTestId('overview')).toBeVisible()
 
     // 2. Run the scan and wait for the SSE stream to complete.
     await page.getByTestId('scan-button').click()
     await expect(page.getByText('扫描完成')).toBeVisible()
 
-    // 3. Select albumA and create a workset.
-    await expect(page.getByRole('checkbox', { name: '选择 albumA' })).toBeVisible()
-    await page.getByRole('checkbox', { name: '选择 albumA' }).check()
+    // Every direct child directory is listed, with its audio count as status.
+    await expect(page.getByTestId('dir-list')).toContainText('albumA')
+
+    // 3. Select albumA and enter its conversion record. No naming step: the
+    //    record is the library's own.
+    await expect(page.getByRole('checkbox', { name: '选择 albumA' }).first()).toBeVisible()
+    await page.getByRole('checkbox', { name: '选择 albumA' }).first().check()
     await expect(page.getByText('已选择 1 个文件夹')).toBeVisible()
-    await page.getByTestId('create-workset').click()
-    await expect(page.getByTestId('create-workset-dialog')).toBeVisible()
-    await page.getByTestId('confirm-create-workset').click()
+    await page.getByTestId('enter-conversion').click()
 
-    // The workset opens on 概览与成员: the workset itself — identity, its
-    // operation entry and its folders — one section of the workspace page.
-    await expect(page).toHaveURL(/\/worksets\/ws-[\w.-]+\/?$/)
-    await expect(page.getByTestId('workset-overview')).toBeVisible()
-    await expect(page.getByTestId('overview-members')).toContainText('albumA')
-    await expect(page.getByTestId('workspace-breadcrumb')).toContainText('工作集')
-    await expect(page.getByRole('link', { name: '概览与成员' })).toHaveAttribute('aria-current', 'page')
-    // Each member reaches its own page in the library it came from — the
-    // workbench carries no separate 媒体库 entry any more.
-    await expect(page.getByTestId('overview-member').first()).toHaveAttribute('href', /\/libraries\/[^/]+\/folders\/[^/]+$/)
-
-    // 转换 is the other section of the same page, reached from the navigation
-    // or the operation entry — never by rebuilding the workbench.
-    await page.getByTestId('overview-operation').click()
+    // The record opens on 转换: its settings, members and plan. The overview
+    // keeps the record entry, so the workbench is one place.
     await expect(page).toHaveURL(/\/conversion$/)
+    await expect(page.getByTestId('workspace-breadcrumb')).toContainText('工作集')
+    await expect(page.getByRole('link', { name: '概览与成员' })).toBeVisible()
+    await expect(page.getByTestId('member-toolbar')).toBeVisible()
     await expect(page.getByTestId('operation-header')).toBeVisible()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
     await expect(page.getByText('尚无计划版本')).toBeVisible()
@@ -171,7 +172,7 @@ test.describe('workset operation smoke', () => {
     await expect(drawer).toBeVisible()
     await expect(page).toHaveURL(/\/conversion\/members\//)
     await page.getByTestId('nav-overview').click()
-    await expect(page).toHaveURL(/\/worksets\/ws-[\w.-]+\/?$/)
+    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
     await expect(drawer).toBeHidden()
     await expect(page.getByTestId('workbench-context')).toContainText('概览与成员')
     // Every narrow page keeps a fixed parent to return to (N32): the overview
@@ -182,9 +183,9 @@ test.describe('workset operation smoke', () => {
     // Back into the operation, then the same drill-down as before: the narrow
     // carrier is a full page, and the local back control returns to the fixed
     // parent of the page in view (N32, R06).
-    await page.getByTestId('overview-operation').click()
+    await page.getByTestId('current-record').click()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
-    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/worksets\/ws-[\w.-]+$/)
+    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/worksets\/libraries\/[^/]+$/)
     await page.getByTestId('member-open').first().click()
     await expect(page.getByTestId('member-review')).toBeVisible()
     await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/conversion$/)
@@ -236,23 +237,45 @@ test.describe('workset operation smoke', () => {
     await page.getByTestId('start-generation').click()
     await expect(page.getByTestId('operation-counts')).toBeVisible({ timeout: 30_000 })
 
-    // 7. Back to the workset list through the global rail: the global entry is
-    //    reachable inside the workbench and always targets /worksets (G01,
-    //    N22). The last generation settled on a fresh revision, so the entry
-    //    reports "已规划" (and would report 需重新规划 as soon as a setting
-    //    changes).
+    // 7. The shared file module: the same tree the overview browses, here for
+    //    a conversion member, with the plan as a read-only second view (T1-T3).
+    await page.getByTestId('nav-conversion').click()
+    await page.getByTestId('member-files').first().click()
+    await expect(page).toHaveURL(/\/conversion\/members\/[^/]+\/files$/)
+    await expect(page.getByTestId('member-tree')).toBeVisible()
+    await expect(page.getByTestId('view-plan')).toBeVisible()
+
+    // Renaming one file: the request carries the member-relative path, and the
+    // result reports both what happened and whether the inventory refreshed
+    // (F1, F4).
+    await page.getByTestId('rename-test1.mp3').click()
+    const renameInput = page.getByTestId('rename-input')
+    await renameInput.fill('renamed.mp3')
+    await page.getByTestId('rename-submit').click()
+    await expect(page.getByTestId('file-op-result')).toContainText('完成 1 项')
+    await expect(page.getByTestId('file-op-result')).toContainText('已刷新目录')
+    await expect(page.getByTestId('member-tree')).toContainText('renamed.mp3')
+
+    // Back to the list: the workbench survives, and the member list is where
+    // it was (N2). The crumb is the way back at every tier.
+    await page.getByTestId('workspace-breadcrumb').getByRole('link', { name: '转换' }).click()
+    await expect(page.getByTestId('member-toolbar')).toBeVisible()
+    await expect(page).toHaveURL(/\/conversion$/)
+
+    // 8. Back to the library selection through the global rail: the global
+    //    entry is reachable inside the workbench and always targets /worksets
+    //    (G01, N22).
     await page.getByTestId('global-rail').getByRole('link', { name: '工作集' }).click()
     await expect(page.getByTestId('worksets-page')).toBeVisible()
-    await expect(page.getByTestId('workset-item')).toContainText('已规划', { timeout: 15_000 })
 
-    // 8. Clean up: delete the library this spec created so the stack returns
-    //    to its initial state for the sibling diagnostics spec. The workset
-    //    survives as an orphan and stays readable — the delete protection is
-    //    the operation's own active-session rule, not a workset count.
+    // 9. Clean up: delete the library this spec created so the stack returns
+    //    to its initial state for the sibling diagnostics spec. The record,
+    //    its plan and its execution results go with it; the media on disk does
+    //    not (L1).
     page.on('dialog', (dialog) => void dialog.accept())
-    // 媒体库 lives in the global rail, reachable from every module.
-    await page.getByTestId('global-rail').getByRole('link', { name: '媒体库' }).click()
-    await page.getByRole('button', { name: '编辑媒体库' }).click()
+    // The selection page lists one row per library, each with its own edit
+    // entry (the label names the library it edits).
+    await page.getByRole('button', { name: /^编辑 / }).first().click()
     await page.getByRole('button', { name: '删除媒体库' }).click()
     await expect(page.getByRole('button', { name: '删除媒体库' })).toBeHidden({ timeout: 15_000 })
   })

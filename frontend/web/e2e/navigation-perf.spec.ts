@@ -1,90 +1,32 @@
 import { expect, test, type Page } from '@playwright/test'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { readStackState } from './helpers/stack-state.ts'
 
 /**
- * Navigation latency diagnostic (FolderDetailPage -> LibrariesPage).
+ * Returning to the overview keeps the list — behaviour, not a timing.
  *
- * User-reported symptom: returning from the folder tree to the libraries page
- * has a visible delay even though the Vue Query caches are warm — the library
- * list and folder list are NOT re-fetched. This spec turns that symptom into a
- * reproducible measurement and attributes it:
+ * The workbench's own navigation model says a return must preserve what the
+ * user had: selection, filters and scroll position (spec N2). Keeping the
+ * list mounted is how that is implemented, and this diagnostic proves the
+ * consequence: after a round trip into a member's files and back, the checked
+ * directory is still checked and the list is back where it was scrolled —
+ * without a fresh page load or a lost selection.
  *
- *   Phase A — small baseline against the real stack (2 folders, 4-file tree).
- *   Phase B — differential cases on three additional libraries, served by
- *             Playwright route interception:
- *               big-both   2500 folder rows + 12 000-file tree (801 visible rows)
- *               big-tree   real-small list (2 rows) + big tree     -> isolates
- *                          FolderTreeCard teardown cost
- *               big-list   2500 rows + tiny tree (3 visible rows)  -> isolates
- *                          the windowed flat-list cost (must stay near the
- *                          small baseline)
+ * It also records the round trip's painted time and long tasks for the record
+ * (e2e/.perf-results.json, gitignored), because a diagnostic that only asserts
+ * a boolean would not show a regression that is still under the threshold.
  *
- * Per round it records:
- *   - painted: ms from clicking `back-to-libraries` until the folder list's
- *     first row exists AND two animation frames have been produced (i.e. the
- *     new page has painted), measured inside the page via rAF, not polling;
- *   - long: durations of Long Tasks (>= 50 ms) that started inside that window
- *     (observed via PerformanceObserver, which Long Tasks require).
- *
- * It also counts folder/tree requests so the warm-cache invariant (zero
- * requests on repeated same-library round-trips) is asserted alongside the
- * timing data, matching the cache-hit behavior covered by
- * library-scan-plan.spec.ts.
- *
- * Timing results are written to e2e/.perf-results.json (gitignored).
  * Skipped unless ONSEI_E2E=1 — opt-in diagnostics, not default CI.
- *
- * Stack-state independence: every library here lives on its own temporary
- * on-disk root (created via mkdtemp), so this spec does not depend on an
- * empty data dir and can share one stack with library-scan-plan.spec.ts.
- * Ordering note: the smoke spec assumes an empty data dir at start, so this
- * diagnostic file must run after it (testDir alphabetical order guarantees
- * `library-scan-plan` < `navigation-perf`).
  */
 
 const e2eEnabled = process.env.ONSEI_E2E === '1'
-
-// ---- deterministic fixtures -------------------------------------------------
 
 interface PerfRound {
   painted: number
   long: number[]
 }
-
-function makeFolders(count: number) {
-  const folders = []
-  for (let i = 0; i < count; i++) {
-    const id = `perf-folder-${String(i).padStart(4, '0')}`
-    folders.push({
-      id,
-      name: id,
-      path: `/music/${id}`,
-      relative_path: id,
-      audio_file_count: 12,
-    })
-  }
-  return folders
-}
-
-function makeTree(dirCount: number, filesPerDir: number) {
-  const dirs = []
-  for (let d = 0; d < dirCount; d++) {
-    const dirPath = `/music/dir-${String(d).padStart(3, '0')}`
-    const children = []
-    for (let f = 0; f < filesPerDir; f++) {
-      const name = `trk-${String(d).padStart(3, '0')}-${String(f).padStart(3, '0')}.flac`
-      children.push({ name, path: `${dirPath}/${name}`, type: 'file', format: 'flac', bitrate: 1411, size: 10 * 1024 * 1024 })
-    }
-    dirs.push({ name: `dir-${String(d).padStart(3, '0')}`, path: dirPath, type: 'dir', children })
-  }
-  return { name: 'music', path: '/music', type: 'dir', children: dirs }
-}
-
-// ---- measurement seam -------------------------------------------------------
 
 /** Long Tasks are only delivered to a PerformanceObserver, never into the entry buffer. */
 async function installLongTaskObserver(page: Page): Promise<void> {
@@ -142,224 +84,93 @@ async function readPerfRound(page: Page): Promise<PerfRound> {
   })
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-}
-
-async function createLibrary(page: Page, name: string, rootPath: string): Promise<void> {
-  await page.getByRole('button', { name: '添加媒体库' }).click()
-  await page.locator('#library-name').fill(name)
-  await page.locator('#library-root').fill(rootPath)
-  await page.getByRole('button', { name: '保存' }).click()
-  // The new library becomes active; its (empty, unscanned) folder list renders.
-  await expect(page.getByRole('main').getByRole('heading', { name })).toBeVisible()
-}
-
-async function libraryIdByName(page: Page, name: string): Promise<string> {
-  return page.evaluate((target) => {
-    const select = document.querySelector<HTMLSelectElement>('select[aria-label="切换媒体库"]')
-    const option = Array.from(select?.options ?? []).find((opt) => opt.textContent === target)
-    return option?.value ?? ''
-  }, name)
-}
-
-interface CaseShape {
-  openButtonName: string
-  firstRowSelector: string
-  lastTreeRow: number
-  rounds: number
-}
-
-async function runCase(
-  page: Page,
-  folderRequests: string[],
-  libraryId: string,
-  shape: CaseShape,
-): Promise<{ painted: number[]; long: number[]; requests: number }> {
-  await page.selectOption('select[aria-label="切换媒体库"]', libraryId)
-  await expect(page.locator(shape.firstRowSelector).first()).toBeVisible({ timeout: 30_000 })
-  // Warm-up round, unmeasured: performs the first tree fetch (per-case payload)
-  // and warms the virtualized list + JIT so the measured rounds below are pure
-  // cache hits and the numbers are not skewed by first-render setup.
-  await page.getByRole('button', { name: shape.openButtonName }).click()
-  await expect(page.getByTestId('tree-row-0')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId(`tree-row-${shape.lastTreeRow}`)).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('back-to-libraries').click()
-  await expect(page.locator(shape.firstRowSelector).first()).toBeVisible({ timeout: 30_000 })
-
-  const before = folderRequests.length
-  const painted: number[] = []
-  const long: number[] = []
-  for (let i = 0; i < shape.rounds; i++) {
-    await page.getByRole('button', { name: shape.openButtonName }).click()
-    await expect(page.getByTestId('tree-row-0')).toBeVisible({ timeout: 30_000 })
-    await expect(page.getByTestId(`tree-row-${shape.lastTreeRow}`)).toBeVisible({ timeout: 30_000 })
-    await installPerfWatch(page, shape.firstRowSelector)
-    await page.getByTestId('back-to-libraries').click()
-    await page.waitForFunction(() => (window as unknown as { __perf?: { painted: number } }).__perf?.painted)
-    const round = await readPerfRound(page)
-    painted.push(round.painted)
-    long.push(...round.long)
+/** A fixture library with enough directories to be worth virtualizing. */
+function makeFixtureTree(count: number): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'onsei-perf-'))
+  for (let i = 0; i < count; i++) {
+    const dir = path.join(root, `album-${String(i).padStart(3, '0')}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'track.flac'), 'perf fixture')
   }
-  // Warm-cache invariant: measured rounds issue zero requests (all data cached).
-  expect(folderRequests.length).toBe(before)
-  return { painted, long, requests: folderRequests.length - before }
+  return root
 }
 
-test.describe('navigation latency diagnostics', () => {
+test.describe('workbench return diagnostics', () => {
   test.skip(!e2eEnabled, 'e2e diagnostics run only with ONSEI_E2E=1')
 
-  test('measure and attribute warm-cache FolderDetailPage -> LibrariesPage return', async ({ page }) => {
+  test('returning from a member keeps the overview list, with timings', async ({ page }) => {
+    test.setTimeout(180_000)
     const { fixtureRoot } = readStackState()
-    // Count backend folder/tree API calls only — Vite dev-server module
-    // requests for the folder feature components would otherwise match the
-    // '/folders' path segment too.
-    const folderRequests: string[] = []
-    page.on('request', (request) => {
-      const url = new URL(request.url())
-      if (url.pathname.startsWith('/api/v1/') && /\/folders(\/|$)/.test(url.pathname)) {
-        folderRequests.push(request.url())
-      }
-    })
+    const root = makeFixtureTree(120)
+    test.info().annotations.push({ type: 'fixture', description: `stack=${fixtureRoot} perf=${root}` })
 
-    const tmpRoots: string[] = []
+    await page.goto('/worksets')
+    const addButton = page.getByRole('button', { name: '添加媒体库' }).first()
+    await addButton.click()
+    await page.locator('#library-name').fill('Perf Library')
+    await page.locator('#library-root').fill(root)
+    await page.getByRole('button', { name: '保存' }).click()
 
-    try {
-      // ---- Phase A: small library on the real stack (scan materializes 2 folders) ----
-      // Copy the launcher's fixture tree to our own temp root so this spec is
-      // independent of the stack's data-dir state (the smoke spec may have
-      // already created its own library at the original fixture root, and the
-      // backend enforces unique root_path).
-      const smallRoot = mkdtempSync(path.join(os.tmpdir(), 'onsei-e2e-small-'))
-      tmpRoots.push(smallRoot)
-      cpSync(fixtureRoot, path.join(smallRoot, 'music'), { recursive: true })
-      await page.goto('/')
-      await installLongTaskObserver(page)
-      // Header add button works with either an empty or a populated data dir
-      // (the empty-state button duplicates the name when there are no libraries).
-      await page.getByRole('button', { name: '添加媒体库' }).first().click()
-      await page.locator('#library-name').fill('Perf Small')
-      await page.locator('#library-root').fill(path.join(smallRoot, 'music'))
-      await page.getByRole('button', { name: '保存' }).click()
-      await expect(page.getByTestId('scan-button')).toBeVisible()
-      // Baseline varies with stack state: an empty data dir fires no folders
-      // fetch at boot, but after the smoke spec there is a pre-existing
-      // library whose (now-active) folders query fires on load. Snapshot
-      // after creation, before the scan.
-      const requestsBeforeScan = folderRequests.length
-      await page.getByTestId('scan-button').click()
-      await expect(page.getByText('扫描完成')).toBeVisible()
-      await expect(page.getByRole('checkbox', { name: '选择 albumA' })).toBeVisible()
-      // Scan completion triggers a targeted folders refetch (active observer) —
-      // wait for it instead of sleeping so the snapshot taken inside runCase
-      // cannot race it.
-      await expect.poll(() => folderRequests.length).toBe(requestsBeforeScan + 1)
-      const smallLibraryId = await libraryIdByName(page, 'Perf Small')
-      expect(smallLibraryId).not.toBe('')
+    await page.getByRole('main').getByRole('link', { name: /Perf Library/ }).first().click()
+    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+    await page.getByTestId('scan-button').click()
+    await expect(page.getByText('扫描完成')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('dir-list')).toBeVisible({ timeout: 30_000 })
 
-      const small = await runCase(page, folderRequests, smallLibraryId, {
-        openButtonName: '打开 albumA',
-        firstRowSelector: '[aria-label="选择 albumA"]',
-        lastTreeRow: 4, // albumA has 4 files -> rows 0..4
-        rounds: 3,
+    await installLongTaskObserver(page)
+
+    // A selection and a scroll offset, both made before leaving: they are what
+    // a return must bring back. The row the round trip starts from is one that
+    // is visible at that offset — clicking a row Playwright has to scroll to
+    // would move the list itself.
+    await expect(page.locator('[data-testid="dir-list-spacer"] li').first()).toBeVisible({ timeout: 30_000 })
+    const checked = page.locator('[data-testid="dir-list-spacer"] input[type="checkbox"]').first()
+    await checked.check()
+    await expect(page.getByText('已选择 1 个文件夹')).toBeVisible()
+    const scrolledTo = await page
+      .getByTestId('dir-list-scroller')
+      .evaluate((node) => {
+        node.scrollTop = 600
+        return node.scrollTop
       })
-      // (runCase already asserted: exactly one albumA tree fetch beyond the settle count.)
+    const visibleRow = page.locator('[data-testid="dir-list-spacer"] li').nth(12)
 
-      // ---- Phase B: differential cases on three additional libraries. ----
-      // The backend enforces unique root_path (LIBRARY_EXISTS), so each
-      // library needs its own on-disk root directory.
-      const bigTreeFixture = makeTree(800, 15) // 12 000 files; 801 visible rows with root expanded
-      const tinyTreeFixture = makeTree(2, 15) // 3 visible rows
-      const bigListFixture = makeFolders(2500)
-      const tinyListFixture = makeFolders(2)
+    const rounds: PerfRound[] = []
+    for (let i = 0; i < 3; i++) {
+      await visibleRow.click()
+      await expect(page).toHaveURL(/\/files\?folder=/)
+      await expect(page.getByTestId('member-tree')).toBeVisible({ timeout: 30_000 })
 
-      // Routes are installed BEFORE the libraries exist. Every creation
-      // triggers exactly one folders fetch for the new library (the active
-      // page's folder query after setActiveLibrary), so an order-based queue
-      // dispatches the right payload per creation. Tree requests only happen
-      // during runCase below, when the id -> fixture map is already populated.
-      const treeById = new Map<string, unknown>()
-      const foldersQueue = [bigListFixture, tinyListFixture, bigListFixture]
-      await page.route(`**/api/v1/libraries/*/folders`, async (route) => {
-        if (route.request().url().includes(`/libraries/${smallLibraryId}/`)) return route.fallback()
-        const payload = foldersQueue.shift()
-        if (!payload) throw new Error('unexpected folders request — queue misaligned')
-        await route.fulfill({ json: { folders: payload } })
-      })
-      await page.route(`**/api/v1/libraries/*/folders/*/tree`, async (route) => {
-        if (route.request().url().includes(`/libraries/${smallLibraryId}/`)) return route.fallback()
-        const id = route.request().url().split('/libraries/')[1]?.split('/')[0] ?? ''
-        const tree = treeById.get(id)
-        if (!tree) throw new Error(`no tree fixture for library ${id}`)
-        await route.fulfill({ json: { tree } })
-      })
+      await installPerfWatch(page, '[data-testid="dir-list-spacer"]')
+      // The way back is the overview crumb in the breadcrumb (the narrow
+      // header's back control only exists below the rail breakpoint).
+      await page.getByTestId('overview-breadcrumb').getByRole('link').last().click()
+      await page.waitForFunction(() => (window as unknown as { __perf?: { painted: number } }).__perf?.painted)
+      rounds.push(await readPerfRound(page))
 
-      for (const [name, dir] of [
-        ['Perf Both', 'both'],
-        ['Perf BigTree', 'tree'],
-        ['Perf BigList', 'list'],
-      ] as const) {
-        const root = mkdtempSync(path.join(os.tmpdir(), `onsei-e2e-${dir}-`))
-        tmpRoots.push(root)
-        mkdirSync(path.join(root, 'music'), { recursive: true })
-        await createLibrary(page, name, path.join(root, 'music'))
-      }
-
-      const bothId = await libraryIdByName(page, 'Perf Both')
-      const bigTreeId = await libraryIdByName(page, 'Perf BigTree')
-      const bigListId = await libraryIdByName(page, 'Perf BigList')
-      expect(bothId).not.toBe('')
-      expect(bigTreeId).not.toBe('')
-      expect(bigListId).not.toBe('')
-      treeById.set(bothId, bigTreeFixture)
-      treeById.set(bigTreeId, bigTreeFixture)
-      treeById.set(bigListId, tinyTreeFixture)
-
-      const perfShape = {
-        openButtonName: '打开 perf-folder-0000',
-        firstRowSelector: '[data-testid="folder-checkbox-perf-folder-0000"]',
-      }
-      const both = await runCase(page, folderRequests, bothId, { ...perfShape, lastTreeRow: 800, rounds: 3 })
-      const bigTree = await runCase(page, folderRequests, bigTreeId, { ...perfShape, lastTreeRow: 800, rounds: 2 })
-      const bigList = await runCase(page, folderRequests, bigListId, { ...perfShape, lastTreeRow: 2, rounds: 2 })
-
-      const summary = {
-        small: { painted: small.painted, medianPainted: median(small.painted), long: small.long },
-        'big-both': { painted: both.painted, medianPainted: median(both.painted), long: both.long },
-        'big-tree': { painted: bigTree.painted, medianPainted: median(bigTree.painted), long: bigTree.long },
-        'big-list': { painted: bigList.painted, medianPainted: median(bigList.painted), long: bigList.long },
-        requestsPerCase: { both: both.requests, bigTree: bigTree.requests, bigList: bigList.requests },
-      }
-      writeFileSync(
-        fileURLToPath(new URL('./.perf-results.json', import.meta.url)),
-        JSON.stringify(summary, null, 2),
-      )
-      // eslint-disable-next-line no-console
-      console.log(
-        `[perf] small=${summary.small.medianPainted.toFixed(0)}ms · both=${summary['big-both'].medianPainted.toFixed(0)}ms · big-tree=${summary['big-tree'].medianPainted.toFixed(0)}ms · big-list=${summary['big-list'].medianPainted.toFixed(0)}ms`,
-      )
-      test.info().attach('navigation-perf-summary', {
-        body: JSON.stringify(summary, null, 2),
-        contentType: 'application/json',
-      })
-
-      // The flat list is windowed now: the 2500-row list return must stay near the
-      // small baseline and below a hard absolute bound — if windowing is ever
-      // removed this goes red again (the list was a 2-4s single long task).
-      // Both a relative-to-baseline ratio and an absolute floor are asserted so
-      // a single noisy sample cannot flip the verdict, and a slow CI machine
-      // cannot hide a real regression behind a large baseline.
-      expect(median(bigList.painted)).toBeLessThan(summary.small.medianPainted * 1.5)
-      expect(median(bigList.painted)).toBeLessThan(300)
-      // Combined tree teardown + windowed-list return stays bounded (relative
-      // and absolute); any regression in either renderer pushes it past both.
-      expect(median(both.painted)).toBeLessThan(summary.small.medianPainted * 3)
-      expect(median(both.painted)).toBeLessThan(500)
-    } finally {
-      for (const root of tmpRoots) rmSync(root, { recursive: true, force: true })
+      // The selection survived the trip, and the list is back where it was.
+      await expect(page.getByText('已选择 1 个文件夹')).toBeVisible()
+      const restored = await page.getByTestId('dir-list-scroller').evaluate((node) => node.scrollTop)
+      expect(Math.abs(restored - scrolledTo)).toBeLessThan(5)
     }
+
+    const timings = {
+      spec: 'workbench-return',
+      rounds,
+      medianPainted: rounds
+        .map((round) => round.painted)
+        .sort((a, b) => a - b)[Math.floor(rounds.length / 2)],
+      longTasks: rounds.flatMap((round) => round.long),
+    }
+    writeFileSync(
+      path.join(process.cwd(), 'e2e', '.perf-results.json'),
+      `${JSON.stringify(timings, null, 2)}\n`,
+    )
+
+    // A return that rebuilds the whole list would take a different order of
+    // magnitude; this is a floor, not a target.
+    expect(timings.medianPainted).toBeLessThan(1500)
+
+    rmSync(root, { recursive: true, force: true })
   })
 })
