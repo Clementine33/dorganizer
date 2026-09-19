@@ -17,8 +17,12 @@ The current record of one (Library, operation) pair: a fixed, ordered set of 1�
 _Avoid_: Multiple named collections per library; permanent per-record history.
 
 **Member / Member ID**:
-A directory of one processing record. Its library-relative path (`rel_path`) is the durable identity the workbench addresses it by — a rescan cannot renumber it — and `member_id` is the record-scoped identity routes carry.
+A directory of one processing record. Its library-relative path (`rel_path`) is the durable data identity — a rescan cannot renumber it, and file management addresses items relative to it — `member_id` is the record-scoped identity the conversion routes carry, and `dir_id` is the identity its *page address* carries.
 _Avoid_: Scan folder ID, list index, or the absolute path as member identity.
+
+**Directory Identity (`dir_id`)**:
+The navigation identity of one member directory, derived by the backend from a fixed version marker, the library, the canonical identity of its root and the directory's stored relative path. Page addresses and the tree routes carry it instead of the path, so an address names no folder. It is stable across rescans and restarts, unknown again once the directory is renamed or the library root changes, and it is never an access credential.
+_Avoid_: Treating it as a permission, or confusing it with the data identity `rel_path`.
 
 **Member Files / Current Files**:
 What the shared file module shows for one member: the directory's contents as the last scan recorded them, refreshed when the page is entered. It serves every caller — the overview's browsing and a conversion member's page alike — and it reads no draft and interprets no plan.

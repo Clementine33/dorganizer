@@ -70,8 +70,8 @@ Common codes: `INVALID_ARGUMENT` (400), `UNAUTHORIZED` (401),
 | DELETE | `/api/v1/libraries/:id` | yes | 204 | — |
 | POST | `/api/v1/libraries/:id/scans` | yes | 200 | SSE stream (see below) |
 | GET | `/api/v1/libraries/:id/dirs` | yes | 200 | `{"dirs":[{...}]}` |
-| GET | `/api/v1/libraries/:id/tree?folder=…` | yes | 200 | `{"tree":{...}}` (see below) |
-| POST | `/api/v1/libraries/:id/tree/refresh?folder=…` | yes | 200 | `{"tree":{...},"refreshed":true}` |
+| GET | `/api/v1/libraries/:id/tree?dir=…` | yes | 200 | `{"tree":{...},"dir_id":…,"member_path":…}` (see below) |
+| POST | `/api/v1/libraries/:id/tree/refresh?dir=…` | yes | 200 | `{"tree":{...},"dir_id":…,"member_path":…,"refreshed":true}` |
 | POST | `/api/v1/libraries/:id/file-operations` | yes | 200 | per-item result (see below) |
 | GET | `/api/v1/libraries/:id/operations/:type/current` | yes | 200 | `{"workset":{...}\|null}` |
 | PUT | `/api/v1/libraries/:id/operations/:type/current` | yes | 201/200 | record + `skipped[]` (see below) |
@@ -149,20 +149,32 @@ counts. The library-level recovery directory is not a member and is left out:
 {
   "dirs": [
     { "name": "albumA", "path": "/home/me/music/albumA", "rel_path": "albumA",
+      "dir_id": "4b7fa32eebf5b001bcf43b1976c1b163",
       "audio_file_count": 4, "file_count": 7 }
   ]
 }
 ```
 
-`rel_path` is the identity every other route uses: it is stable across rescans,
-where a scan-scoped folder id is not.
+`rel_path` is the data identity: it is stable across rescans, where a
+scan-scoped folder id is not, and it is what a record's scope and file
+management address. `dir_id` is the navigation identity a page address carries
+instead of the name (ADR 0008): the backend derives it from a fixed version
+marker, the library, the canonical identity of its root and the stored relative
+path (SHA-256, first 128 bits, lowercase hex). The same root and path keep the
+same value across rescans and restarts; renaming the directory, or changing the
+library root, makes the old value unknown. It is an identity, **not** a
+credential: the same auth and path checks apply to it as to any other route.
 
-`GET /api/v1/libraries/:id/tree?folder=<rel_path>` returns the stored tree of
-one member directory. The tree carries each node's `rel_path` (relative to the
-member root), which is what file management addresses:
+`GET /api/v1/libraries/:id/tree?dir=<dir_id>` returns the stored tree of one
+member directory, and answers with the identity it resolved and the path that
+identity stands for, so a caller that only holds the identity learns both. The
+tree carries each node's `rel_path` (relative to the member root), which is what
+file management addresses:
 
 ```json
 {
+  "dir_id": "4b7fa32eebf5b001bcf43b1976c1b163",
+  "member_path": "albumA",
   "tree": {
     "name": "albumA", "path": "/home/me/music/albumA", "rel_path": "", "type": "dir",
     "children": [
@@ -174,14 +186,27 @@ member root), which is what file management addresses:
 }
 ```
 
-The member is resolved against the library root: a path that is not a plain
-relative path (`FOLDER_PATH_INVALID`), names the recovery directory
-(`MEMBER_PATH_INVALID`), or does not exist as a real directory
-(`MEMBER_MISSING`) is refused. A symlinked member is not a member
-(`MEMBER_IS_SYMLINK`).
+The identity is resolved against the library's scanned inventory — the direct
+child directories its listing shows, recovery directory excluded — and only the
+single match is then checked on disk. The refusals are distinct:
 
-`POST /api/v1/libraries/:id/tree/refresh?folder=<rel_path>` re-scans that one
-member directory and answers `{"tree": …, "refreshed": true}`. It takes the
+| Condition | Answer |
+|---|---|
+| No `dir` parameter | 400 `DIR_ID_REQUIRED` |
+| Not 32 lowercase hex characters | 400 `DIR_ID_INVALID` |
+| No directory of this library has that identity | 404 `DIRECTORY_NOT_FOUND` |
+| More than one directory claims it | 409 `DIRECTORY_AMBIGUOUS` (never the first match) |
+| A direct child in the inventory that is gone from disk | 404 `MEMBER_MISSING` |
+| Names the recovery directory, or is a symlink | 400 `MEMBER_PATH_INVALID` / `MEMBER_IS_SYMLINK` |
+
+The retired `?folder=<rel_path>` parameter is not read: a request that carries
+it instead of `dir` is answered as a missing identity. A directory that no scan
+has recorded yet has no identity to address.
+
+`POST /api/v1/libraries/:id/tree/refresh?dir=<dir_id>` re-scans that one
+member directory and answers `{"tree": …, "dir_id": …, "member_path": …,
+"refreshed": true}`; the refreshed directory keeps its own row in the inventory,
+so it stays listed and stays addressable. It takes the
 scanning side of the admission slot (see above) and answers `BUSY` (409) while
 a file operation holds it. A failed refresh is `502` with the scan's code: the
 caller keeps the tree it already shows and marks it unrefreshed.
@@ -530,9 +555,9 @@ touches path separators, never joins or resolves paths, and never uses any
 (`backend/go/internal/pathnorm`) before they reach SQLite or the plan usecase.
 
 Paths *inside* a library are relative, and the backend resolves them: a
-directory listing returns `rel_path`, a member tree is read by
-`?folder=<rel_path>`, and file management addresses items relative to their
-member. A relative path is validated as a plain descendant chain before it is
+directory listing returns `rel_path`, a member tree is read by `?dir=<dir_id>`
+(the identity derived from that path — see *Directories and member trees*), and
+file management addresses items relative to their member. A relative path is validated as a plain descendant chain before it is
 joined to a root — absolute paths, drive or device prefixes, backslashes,
 `..`, `.` and empty segments are refused — and every write re-checks that the
 resolved path is still inside the member it was resolved against.
