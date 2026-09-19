@@ -2,10 +2,7 @@ package httpapi
 
 import (
 	"errors"
-	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +10,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
@@ -102,6 +100,12 @@ func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "scan service not configured")
 		return
 	}
+	release, ok := s.beginScan(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	if err := s.deps.ScanService.RefreshMember(r.Context(), memberAbs, lib.RootPath); err != nil {
 		// The refresh failed; the caller keeps the tree it already shows and
 		// says so. Nothing else was touched, so the failure is the whole
@@ -139,54 +143,80 @@ func (s *Server) member(w http.ResponseWriter, r *http.Request) (*sqlite.Library
 		writeError(w, http.StatusBadRequest, "FOLDER_PATH_INVALID", "folder must be a library-relative path")
 		return nil, "", false
 	}
-	abs, err := resolveMemberDir(lib.RootPath, rel)
+	abs, err := fileops.ResolveMember(lib.RootPath, rel)
 	if err != nil {
-		switch {
-		case errors.Is(err, errMemberMissing):
-			writeError(w, http.StatusNotFound, "MEMBER_MISSING", "the folder no longer exists")
-		case errors.Is(err, errMemberSymlink):
-			writeError(w, http.StatusBadRequest, "MEMBER_IS_SYMLINK", "symbolic links are not browsable")
-		default:
-			writeError(w, http.StatusBadRequest, "MEMBER_PATH_INVALID", "this path is not a browsable folder")
-		}
+		writeMemberError(w, err)
 		return nil, "", false
 	}
 	return lib, pathnorm.NormalizeToPOSIX(abs), true
 }
 
-// Member resolution failures, as stable sentinels the handler maps.
-var (
-	errMemberInvalid = errors.New("member path invalid")
-	errMemberMissing = errors.New("member missing")
-	errMemberSymlink = errors.New("member is a symlink")
-)
+// writeMemberError maps a member resolution failure to its response.
+func writeMemberError(w http.ResponseWriter, err error) {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, fileops.CodeMemberMissing):
+		writeError(w, http.StatusNotFound, "MEMBER_MISSING", "the folder no longer exists")
+	case strings.Contains(message, fileops.CodeSymlink):
+		writeError(w, http.StatusBadRequest, "MEMBER_IS_SYMLINK", "symbolic links are not browsable")
+	case strings.Contains(message, fileops.CodeMemberRoot):
+		writeError(w, http.StatusBadRequest, "MEMBER_PATH_INVALID", "this path is not a browsable folder")
+	default:
+		writeError(w, http.StatusBadRequest, "MEMBER_PATH_INVALID", "this path is not a browsable folder")
+	}
+}
 
-// resolveMemberDir validates a library-relative member path and resolves it
-// against the library root: the member must be a direct child directory of
-// that root, must exist on disk as a real directory, and must not be a link.
-func resolveMemberDir(rootPath, memberRel string) (string, error) {
-	rel, ok := pathnorm.RelPath(memberRel)
-	if !ok || strings.Contains(rel, "/") {
-		return "", errMemberInvalid
+// beginScan registers one scanning operation with the admission gate; it
+// answers the request and returns false when the scan must not start. The
+// returned release is per-request state, never server state: one server serves
+// concurrent requests.
+func (s *Server) beginScan(w http.ResponseWriter) (func(), bool) {
+	if s.deps.Gate == nil {
+		return func() {}, true
 	}
-	if rel == pathnorm.RecoveryDirName {
-		return "", errMemberInvalid
-	}
-	abs := pathnorm.JoinRel(rootPath, rel)
-	info, err := os.Lstat(filepath.FromSlash(abs))
+	release, err := s.deps.Gate.BeginScan()
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", errMemberMissing
+		writeBusyError(w, err)
+		return nil, false
+	}
+	return release, true
+}
+
+// beginManual takes the direct-file-management slot for a route that rewrites
+// paths (a library root change or a library deletion) without writing files
+// itself. A nil gate means this process has no file management wired; every
+// test server is in that state.
+func (s *Server) beginManual(w http.ResponseWriter) (func(), bool) {
+	if s.deps.Gate == nil {
+		return func() {}, true
+	}
+	release, err := s.deps.Gate.BeginManual()
+	if err != nil {
+		writeBusyError(w, err)
+		return nil, false
+	}
+	return release, true
+}
+
+// busyMessage explains an admission refusal in the user's terms.
+func busyMessage(err error) string {
+	if busy, ok := errors.AsType[*fileops.BusyError](err); ok {
+		switch busy.Reason {
+		case "a scan is running":
+			return "a scan is running; wait for it to finish"
+		case "direct file management is in progress":
+			return "direct file management is in progress; wait for it to finish"
+		case "another file operation is in progress":
+			return "another file operation is in progress; wait for it to finish"
+		default:
+			return busy.Reason
 		}
-		return "", errMemberInvalid
 	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return "", errMemberSymlink
-	}
-	if !info.IsDir() {
-		return "", errMemberInvalid
-	}
-	return abs, nil
+	return err.Error()
+}
+
+func writeBusyError(w http.ResponseWriter, err error) {
+	writeError(w, http.StatusConflict, "BUSY", busyMessage(err))
 }
 
 // buildMemberTree assembles the nested node structure for the entries under a

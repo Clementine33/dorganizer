@@ -20,6 +20,7 @@ import (
 	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/httpapi"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/fileops"
 	"github.com/onsei/organizer/backend/internal/services/scanner"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
@@ -174,6 +175,15 @@ func runServer(
 	// and before writing: the stored inventory is the only input fact a plan
 	// reads, and it is only as current as the last scan.
 	memberScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
+	// Direct file management and the managed task paths share one admission
+	// control: a file operation is refused while a scan, planning session or
+	// execution is running, and starting one of those is refused while a file
+	// operation holds the slot (ADR 0007 §5).
+	gate := fileops.NewGate(repo.HasActiveSession)
+	fileOpsSvc := fileops.NewService(gate, func(scanCtx context.Context, folderPath, rootPath string) error {
+		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
+		return scanErr
+	})
 	// Encode concurrency stays automatic (min(4, CPU count)); a user setting
 	// will feed this parameter later.
 	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, 0, []worksetusecase.Task{
@@ -181,7 +191,7 @@ func runServer(
 	}, func(scanCtx context.Context, folderPath, rootPath string) error {
 		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
 		return scanErr
-	}, nil)
+	}, gate.Enqueue)
 
 	// Startup recovery: any session left queued/running by a previous process
 	// is marked interrupted before the dispatcher starts from an empty queue.
@@ -198,6 +208,8 @@ func runServer(
 			Version:        version,
 			ScanService:    scanSvc,
 			WorksetService: worksetSvc,
+			FileOps:        fileOpsSvc,
+			Gate:           gate,
 		}),
 	}
 	go func() {

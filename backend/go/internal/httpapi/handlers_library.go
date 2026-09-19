@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
@@ -95,6 +96,30 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 		rootPath = *req.RootPath
 	}
 
+	// A root change rebinds every member path of the library, so it takes the
+	// direct-file-management slot: it neither interleaves with a file operation
+	// nor with a scan (spec C1, L1). A name-only edit touches no path and needs
+	// no admission.
+	if pathnorm.RootPathKey(rootPath) != pathnorm.RootPathKey(lib.RootPath) {
+		release, ok := s.beginManual(w)
+		if !ok {
+			return
+		}
+		defer release()
+	}
+
+	// A root change rebinds every member path of the library, so it takes the
+	// direct-file-management slot: it neither interleaves with a file operation
+	// nor with a scan (spec C1, L1). A name-only edit touches no path and needs
+	// no admission.
+	if pathnorm.RootPathKey(rootPath) != pathnorm.RootPathKey(lib.RootPath) {
+		release, ok := s.beginManual(w)
+		if !ok {
+			return
+		}
+		defer release()
+	}
+
 	updated, err := s.deps.Repo.UpdateLibrary(id, name, rootPath)
 	if err != nil {
 		if errors.Is(err, sqlite.ErrLibraryExists) {
@@ -110,7 +135,7 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 				w,
 				http.StatusConflict,
 				"LIBRARY_HAS_WORKSETS",
-				"cannot change the library root while it still has a processing record; replace the record's scope or delete the library first",
+				"cannot change the library root while worksets are linked; delete the library to orphan its worksets first",
 			)
 			return
 		}
@@ -121,6 +146,15 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
+	// Deleting a library removes its records, plans and sessions, so it takes
+	// the direct-file-management slot: it cannot interleave with a file
+	// operation on the same tree (spec C1, L1).
+	release, ok := s.beginManual(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	err := s.deps.Repo.DeleteLibrary(r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, sqlite.ErrLibraryNotFound) {

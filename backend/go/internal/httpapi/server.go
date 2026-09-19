@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -22,6 +23,11 @@ type Dependencies struct {
 	Version        string
 	ScanService    scanusecase.Service
 	WorksetService worksetusecase.Service
+	// FileOps applies direct file management inside a member; Gate is the same
+	// admission control it uses, so the scan and library routes take their side
+	// of it. Both may be nil in tests that do not exercise them.
+	FileOps *fileops.Service
+	Gate    *fileops.Gate
 }
 
 type Server struct{ deps Dependencies }
@@ -43,6 +49,8 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/dirs", protect(http.HandlerFunc(s.listLibraryDirs)))
 	mux.Handle("GET /api/v1/libraries/{id}/tree", protect(http.HandlerFunc(s.getMemberTree)))
 	mux.Handle("POST /api/v1/libraries/{id}/tree/refresh", protect(http.HandlerFunc(s.refreshMemberTree)))
+	// Direct file management: the second, explicitly non-plan write path.
+	mux.Handle("POST /api/v1/libraries/{id}/file-operations", protect(http.HandlerFunc(s.applyFileOperation)))
 	// The current processing record of one (library, operation): at most one
 	// exists, and creating it replaces the one the caller saw.
 	mux.Handle(

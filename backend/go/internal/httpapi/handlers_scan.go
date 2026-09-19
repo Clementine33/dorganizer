@@ -97,6 +97,11 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	if !s.allowScanDuringExecution(w, lib.RootPath) {
 		return
 	}
+	release, ok := s.beginScan(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	sw, err := newSSEWriter(w)
 	if err != nil {
