@@ -15,13 +15,15 @@ import (
 )
 
 // dirResponse is one direct child directory of a library root. Identity is the
-// library-relative path: a rescan renumbers nothing the caller navigates by,
-// and the audio count is a status fact — a directory without audio is still
-// listed and still browsable (spec N3, I1).
+// library-relative path — a rescan renumbers nothing the caller navigates by —
+// and DirID is that path's navigation identity, which is what a page address
+// carries. The audio count is a status fact: a directory without audio is still
+// listed and still browsable (spec N3, I1; §9 N3′).
 type dirResponse struct {
 	Name           string `json:"name"`
 	Path           string `json:"path"`
 	RelPath        string `json:"rel_path"`
+	DirID          string `json:"dir_id"`
 	AudioFileCount int    `json:"audio_file_count"`
 	FileCount      int    `json:"file_count"`
 }
@@ -45,6 +47,7 @@ func (s *Server) listLibraryDirs(w http.ResponseWriter, r *http.Request) {
 			Name:           d.Name,
 			Path:           d.Path,
 			RelPath:        d.RelPath,
+			DirID:          dirID(lib.ID, lib.RootPath, d.RelPath),
 			AudioFileCount: d.AudioFileCount,
 			FileCount:      d.FileCount,
 		})
@@ -68,23 +71,28 @@ type treeNode struct {
 	Children []*treeNode `json:"children,omitempty"`
 }
 
-// getMemberTree returns the stored tree of one member directory. The member is
-// addressed by its library-relative path and is resolved against the library
-// root, so a path that is not a browsable member of this library is refused
-// instead of resolving somewhere else.
+// getMemberTree returns the stored tree of one member directory, addressed by
+// its directory id. The resolved identity comes back with the tree, so a caller
+// that only knows the identity still learns which path it names (spec §9 I1′).
 func (s *Server) getMemberTree(w http.ResponseWriter, r *http.Request) {
-	_, memberAbs, ok := s.member(w, r)
+	member, ok := s.memberByDir(w, r)
 	if !ok {
 		return
 	}
-	entries, err := s.deps.Repo.ListEntriesUnderPath(memberAbs)
+	entries, err := s.deps.Repo.ListEntriesUnderPath(member.absPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list folder entries")
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Tree *treeNode `json:"tree"`
-	}{Tree: buildMemberTree(memberAbs, entries)})
+		Tree       *treeNode `json:"tree"`
+		DirID      string    `json:"dir_id"`
+		MemberPath string    `json:"member_path"`
+	}{
+		Tree:       buildMemberTree(member.absPath, entries),
+		DirID:      member.dirID,
+		MemberPath: member.relPath,
+	})
 }
 
 // refreshMemberTree re-scans one member directory and answers with the
@@ -92,7 +100,7 @@ func (s *Server) getMemberTree(w http.ResponseWriter, r *http.Request) {
 // admission control: a running file operation refuses it instead of letting
 // two writers touch the same tree (spec T2, C1).
 func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
-	lib, memberAbs, ok := s.member(w, r)
+	member, ok := s.memberByDir(w, r)
 	if !ok {
 		return
 	}
@@ -106,7 +114,7 @@ func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	if err := s.deps.ScanService.RefreshMember(r.Context(), memberAbs, lib.RootPath); err != nil {
+	if err := s.deps.ScanService.RefreshMember(r.Context(), member.absPath, member.library.RootPath); err != nil {
 		// The refresh failed; the caller keeps the tree it already shows and
 		// says so. Nothing else was touched, so the failure is the whole
 		// outcome.
@@ -117,38 +125,86 @@ func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, code, message)
 		return
 	}
-	entries, err := s.deps.Repo.ListEntriesUnderPath(memberAbs)
+	entries, err := s.deps.Repo.ListEntriesUnderPath(member.absPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list folder entries")
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Tree      *treeNode `json:"tree"`
-		Refreshed bool      `json:"refreshed"`
-	}{Tree: buildMemberTree(memberAbs, entries), Refreshed: true})
+		Tree       *treeNode `json:"tree"`
+		DirID      string    `json:"dir_id"`
+		MemberPath string    `json:"member_path"`
+		Refreshed  bool      `json:"refreshed"`
+	}{
+		Tree:       buildMemberTree(member.absPath, entries),
+		DirID:      member.dirID,
+		MemberPath: member.relPath,
+		Refreshed:  true,
+	})
 }
 
-// member resolves the ?folder= parameter of a member-scoped request against
-// the library root. A path that is not a plain relative member path, that
-// names the recovery directory, or that does not exist as a real directory is
-// refused: the workbench never invents a directory, and a symlinked member is
-// not a member (spec T2).
-func (s *Server) member(w http.ResponseWriter, r *http.Request) (*sqlite.Library, string, bool) {
+// resolvedMember is one member directory a request addressed by its directory
+// id: the library it belongs to, the library-relative path the inventory stores
+// as the member's identity, and the absolute path the repository queries by.
+type resolvedMember struct {
+	library *sqlite.Library
+	relPath string
+	absPath string
+	dirID   string
+}
+
+// memberByDir resolves the ?dir= parameter of a member-scoped request. The
+// identity is looked up among the direct child directories this library's
+// inventory knows — an identity that names no directory of it, that is
+// malformed, or that two directories claim, is refused — and only the single
+// match is then validated on disk, so the workbench never invents a directory
+// and a symlinked member is not a member (spec T2, §9 I1′).
+func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedMember, bool) {
 	lib, ok := s.library(w, r)
 	if !ok {
-		return nil, "", false
+		return nil, false
 	}
-	rel := r.URL.Query().Get("folder")
-	if _, ok := pathnorm.RelPath(rel); !ok {
-		writeError(w, http.StatusBadRequest, "FOLDER_PATH_INVALID", "folder must be a library-relative path")
-		return nil, "", false
+	raw := r.URL.Query().Get("dir")
+	if raw == "" {
+		writeError(w, http.StatusBadRequest, "DIR_ID_REQUIRED", "dir must be a directory id")
+		return nil, false
+	}
+	if !validDirID(raw) {
+		writeError(w, http.StatusBadRequest, "DIR_ID_INVALID", "dir is not a directory id")
+		return nil, false
+	}
+	children, err := s.deps.Repo.ListLibraryChildDirs(lib.RootPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to resolve the folder")
+		return nil, false
+	}
+	rel, found, ambiguous := matchDirID(children, lib.ID, lib.RootPath, raw)
+	if ambiguous {
+		// Answering "not found" would hide a real state and answering with one
+		// of the matches would be a guess (spec §9 I1′).
+		writeError(
+			w,
+			http.StatusConflict,
+			"DIRECTORY_AMBIGUOUS",
+			"more than one folder claims this id; reload the overview",
+		)
+		return nil, false
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "DIRECTORY_NOT_FOUND", "the folder no longer exists")
+		return nil, false
 	}
 	abs, err := fileops.ResolveMember(lib.RootPath, rel)
 	if err != nil {
 		writeMemberError(w, err)
-		return nil, "", false
+		return nil, false
 	}
-	return lib, pathnorm.NormalizeToPOSIX(abs), true
+	return &resolvedMember{
+		library: lib,
+		relPath: rel,
+		absPath: pathnorm.NormalizeToPOSIX(abs),
+		dirID:   dirID(lib.ID, lib.RootPath, rel),
+	}, true
 }
 
 // writeMemberError maps a member resolution failure to its response.

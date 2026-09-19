@@ -394,6 +394,46 @@ func (r *Repository) ListLibraryDirs(rootPath string) ([]*LibraryDir, error) {
 	return out, rows.Err()
 }
 
+// ListLibraryChildDirs returns the library-relative path of every direct child
+// directory of a library root that the inventory knows. It carries no subtree
+// statistics: resolving a directory identity needs the identities only, not the
+// counts the overview listing shows. The library-level recovery directory is not
+// a member and is left out, exactly as in the overview listing.
+func (r *Repository) ListLibraryChildDirs(rootPath string) ([]string, error) {
+	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
+	if len(rootPath) > 1 {
+		rootPath = strings.TrimRight(rootPath, "/")
+	}
+	rows, err := r.db.Query(`
+		SELECT path, name
+		FROM entries
+		WHERE is_dir = 1
+		  AND parent_path = ?
+		ORDER BY path
+	`, rootPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	prefix := rootPath
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	var out []string
+	for rows.Next() {
+		var path, name string
+		if err := rows.Scan(&path, &name); err != nil {
+			return nil, err
+		}
+		if isRecoveryDirName(rootPath, name) {
+			continue
+		}
+		out = append(out, strings.TrimPrefix(pathnorm.NormalizeToPOSIX(path), prefix))
+	}
+	return out, rows.Err()
+}
+
 // isRecoveryDirName reports whether a direct child of the root is the
 // library-level recovery directory. The name is the recovery convention's
 // ("Delete"); on a case-insensitive filesystem the comparison folds case so

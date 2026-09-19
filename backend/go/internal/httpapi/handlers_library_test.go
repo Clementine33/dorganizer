@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
 //nolint:gocognit,funlen // CRUD scenario with many branches
@@ -123,6 +124,38 @@ func TestLibrariesCRUD(t *testing.T) {
 			t.Fatalf("post-delete status = %d, want 404 (body=%s)", w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestRootChangeTakesTheFileManagementSlot covers the admission rule that a
+// root change is a path-rewriting action (spec C1, L1): it goes through while
+// nothing else holds the slot, releases it again, and is refused — not queued —
+// while a scan is running.
+func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {
+	gate := fileops.NewGate(nil)
+	engine := newTestServer(t, func(d *Dependencies) { d.Gate = gate })
+	libID := createLibraryViaAPI(t, engine, "Music", "/music")
+
+	for _, root := range []string{"/new-music", "/music"} {
+		w := doRequest(t, engine, http.MethodPatch, "/api/v1/libraries/"+libID,
+			map[string]string{"root_path": root}, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("root change to %s: status = %d, want 200 (body=%s)", root, w.Code, w.Body.String())
+		}
+	}
+
+	release, err := gate.BeginScan()
+	if err != nil {
+		t.Fatalf("begin scan: %v", err)
+	}
+	defer release()
+	w := doRequest(t, engine, http.MethodPatch, "/api/v1/libraries/"+libID,
+		map[string]string{"root_path": "/third"}, nil)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status while scanning = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	if code, _ := errorEnvelope(t, w); code != "BUSY" {
+		t.Fatalf("code = %q, want BUSY", code)
+	}
 }
 
 func TestPatchLibraryRootInvalidatesDerivedFolders(t *testing.T) {

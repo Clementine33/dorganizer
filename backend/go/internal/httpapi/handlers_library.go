@@ -108,18 +108,6 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
-	// A root change rebinds every member path of the library, so it takes the
-	// direct-file-management slot: it neither interleaves with a file operation
-	// nor with a scan (spec C1, L1). A name-only edit touches no path and needs
-	// no admission.
-	if pathnorm.RootPathKey(rootPath) != pathnorm.RootPathKey(lib.RootPath) {
-		release, ok := s.beginManual(w)
-		if !ok {
-			return
-		}
-		defer release()
-	}
-
 	updated, err := s.deps.Repo.UpdateLibrary(id, name, rootPath)
 	if err != nil {
 		if errors.Is(err, sqlite.ErrLibraryExists) {

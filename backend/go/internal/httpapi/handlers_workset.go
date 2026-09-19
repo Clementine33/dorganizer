@@ -23,12 +23,17 @@ type libraryRefResponse struct {
 }
 
 // memberResponse is one album-folder member. Participation and overrides are
-// operation state, not member state.
+// operation state, not member state. DirID is the member's directory identity:
+// the same value the overview listing carries for that directory, so the
+// conversion entry addresses the shared file cache exactly as the overview does
+// (spec §9 N3′, §9 缓存). It is empty only while the library is unknown, which
+// is the orphaned record of a deleted library.
 type memberResponse struct {
 	MemberID   string `json:"member_id"`
 	FolderPath string `json:"folder_path"`
 	FolderName string `json:"folder_name"`
 	RelPath    string `json:"rel_path"`
+	DirID      string `json:"dir_id"`
 }
 
 // revisionCountsResponse carries the independent plan facts of a revision.
@@ -155,11 +160,16 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 		}
 	}
 	for _, m := range v.Members {
+		dirIdentity := ""
+		if v.Library != nil && m.RelPath != "" {
+			dirIdentity = dirID(v.Library.LibraryID, v.Library.RootPath, m.RelPath)
+		}
 		out.Members = append(out.Members, memberResponse{
 			MemberID:   m.MemberID,
 			FolderPath: m.FolderPath,
 			FolderName: m.FolderName,
 			RelPath:    m.RelPath,
+			DirID:      dirIdentity,
 		})
 	}
 	for _, op := range v.Operations {

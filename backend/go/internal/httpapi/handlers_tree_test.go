@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -96,9 +98,34 @@ func insertTreeEntry(
 	}
 }
 
+// dirIDFor reads one directory's identity from the overview listing: the value
+// the pages address a tree with, taken from the API that hands it out rather
+// than re-derived here.
+func dirIDFor(t *testing.T, engine http.Handler, libID, rel string) string {
+	t.Helper()
+	w := doRequest(t, engine, http.MethodGet, "/api/v1/libraries/"+libID+"/dirs", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dirs status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var out struct {
+		Dirs []dirResponse `json:"dirs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode dirs: %v (body=%s)", err, w.Body.String())
+	}
+	for _, d := range out.Dirs {
+		if d.RelPath == rel {
+			return d.DirID
+		}
+	}
+	t.Fatalf("directory %q is not listed: %+v", rel, out.Dirs)
+	return ""
+}
+
 // TestListLibraryDirs covers the overview listing: every direct child
-// directory, with its audio count as a status rather than a filter, and the
-// library-relative path as the identity the caller navigates by.
+// directory, with its audio count as a status rather than a filter, the
+// library-relative path as the data identity, and the directory id as the
+// navigation identity the page addresses it by.
 func TestListLibraryDirs(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
@@ -142,6 +169,17 @@ func TestListLibraryDirs(t *testing.T) {
 	if docs.AudioFileCount != 0 || docs.FileCount != 1 {
 		t.Errorf("a directory without audio is still listed: %+v", docs)
 	}
+	for rel, dir := range byRel {
+		if !validDirID(dir.DirID) {
+			t.Errorf("dir %q id = %q, want 32 lowercase hex characters", rel, dir.DirID)
+		}
+	}
+	if album.DirID == docs.DirID {
+		t.Errorf("two directories share the identity %q", album.DirID)
+	}
+	if _, listed := byRel["Delete"]; listed {
+		t.Error("the recovery directory has no identity: it is not a member")
+	}
 }
 
 // TestMemberTree covers the member tree read: no audio filter (an empty or
@@ -160,8 +198,10 @@ func TestMemberTree(t *testing.T) {
 	seedFile(t, repo, root, "albumA/disc2/02.flac", 2048, nil, "flac")
 	seedFile(t, repo, root, "albumA/cover.jpg", 999, nil, "")
 
+	albumID := dirIDFor(t, engine, libID, "albumA")
+
 	w := doRequest(t, engine, http.MethodGet,
-		fmt.Sprintf("/api/v1/libraries/%s/tree?folder=albumA", libID), nil, nil)
+		fmt.Sprintf("/api/v1/libraries/%s/tree?dir=%s", libID, albumID), nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
@@ -179,10 +219,18 @@ func TestMemberTree(t *testing.T) {
 		Children []treeNodeDTO `json:"children"`
 	}
 	var out struct {
-		Tree treeNodeDTO `json:"tree"`
+		Tree       treeNodeDTO `json:"tree"`
+		DirID      string      `json:"dir_id"`
+		MemberPath string      `json:"member_path"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode tree: %v (body=%s)", err, w.Body.String())
+	}
+	// The response says which identity it resolved and which path that is: a
+	// caller that only holds the identity still learns the path the file
+	// operations address, without the address carrying it.
+	if out.DirID != albumID || out.MemberPath != "albumA" {
+		t.Errorf("resolved identity = %q / %q, want %q / albumA", out.DirID, out.MemberPath, albumID)
 	}
 
 	tree := out.Tree
@@ -232,9 +280,14 @@ func TestMemberTree(t *testing.T) {
 	}
 }
 
-// TestMemberTreeRefusals covers what the member-scoped routes refuse: a
-// missing directory, a path that is not a plain relative member path, the
-// recovery directory, and a directory of another library.
+// TestMemberTreeRefusals covers what the member-scoped routes refuse: an
+// identity this library does not know, one that is malformed, one that another
+// library's directory uses, the recovery directory, a directory that vanished
+// from disk, and the retired folder parameter.
+//
+// Traversal and absolute paths are no longer expressible here at all: the
+// address carries an opaque identity, and a value that is not one is a bad
+// request before any lookup happens (spec §9 I1′).
 func TestMemberTreeRefusals(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
@@ -244,24 +297,36 @@ func TestMemberTreeRefusals(t *testing.T) {
 	seedDir(t, repo, rootA, "albumA")
 	seedFile(t, repo, rootA, "albumA/01.flac", 1234, nil, "flac")
 	seedDir(t, repo, rootA, "Delete")
+	seedDir(t, repo, rootA, "vanished")
+	albumID := dirIDFor(t, engine, libA, "albumA")
+	vanishedID := dirIDFor(t, engine, libA, "vanished")
+	if err := os.RemoveAll(filepath.Join(rootA, "vanished")); err != nil {
+		t.Fatalf("remove the vanished directory: %v", err)
+	}
 
 	cases := []struct {
 		name   string
 		libID  string
-		folder string
+		dir    string
 		status int
 		code   string
 	}{
-		{"unknown member", libA, "nope", http.StatusNotFound, "MEMBER_MISSING"},
-		{"traversal", libA, "../albumA", http.StatusBadRequest, "FOLDER_PATH_INVALID"},
-		{"absolute", libA, "/albumA", http.StatusBadRequest, "FOLDER_PATH_INVALID"},
-		{"recovery directory", libA, "Delete", http.StatusBadRequest, "MEMBER_PATH_INVALID"},
-		{"another library's directory", libB, "albumA", http.StatusNotFound, "MEMBER_MISSING"},
+		{"unknown identity", libA, strings.Repeat("0", 32), http.StatusNotFound, "DIRECTORY_NOT_FOUND"},
+		{"another library's identity", libB, albumID, http.StatusNotFound, "DIRECTORY_NOT_FOUND"},
+		{
+			"the recovery directory has no identity", libA, dirID(libA, rootA, "Delete"),
+			http.StatusNotFound, "DIRECTORY_NOT_FOUND",
+		},
+		{"gone from disk", libA, vanishedID, http.StatusNotFound, "MEMBER_MISSING"},
+		{"too short", libA, "abc", http.StatusBadRequest, "DIR_ID_INVALID"},
+		{"not hex", libA, strings.Repeat("z", 32), http.StatusBadRequest, "DIR_ID_INVALID"},
+		{"uppercase hex", libA, strings.ToUpper(albumID), http.StatusBadRequest, "DIR_ID_INVALID"},
+		{"a path instead of an identity", libA, "albumA", http.StatusBadRequest, "DIR_ID_INVALID"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doRequest(t, engine, http.MethodGet,
-				fmt.Sprintf("/api/v1/libraries/%s/tree?folder=%s", tc.libID, tc.folder), nil, nil)
+				fmt.Sprintf("/api/v1/libraries/%s/tree?dir=%s", tc.libID, url.QueryEscape(tc.dir)), nil, nil)
 			if w.Code != tc.status {
 				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tc.status, w.Body.String())
 			}
@@ -271,6 +336,27 @@ func TestMemberTreeRefusals(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("no identity", func(t *testing.T) {
+		w := doRequest(t, engine, http.MethodGet, "/api/v1/libraries/"+libA+"/tree", nil, nil)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+		}
+		if code, _ := errorEnvelope(t, w); code != "DIR_ID_REQUIRED" {
+			t.Fatalf("code = %q, want DIR_ID_REQUIRED", code)
+		}
+	})
+
+	t.Run("the retired folder parameter is not read", func(t *testing.T) {
+		w := doRequest(t, engine, http.MethodGet,
+			"/api/v1/libraries/"+libA+"/tree?folder=albumA", nil, nil)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+		}
+		if code, _ := errorEnvelope(t, w); code != "DIR_ID_REQUIRED" {
+			t.Fatalf("code = %q, want DIR_ID_REQUIRED", code)
+		}
+	})
 }
 
 // fakeScanService is a handwritten scan double: it records the refreshes it
@@ -310,6 +396,7 @@ func TestRefreshMemberTree(t *testing.T) {
 
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, root, "albumA")
+	albumID := dirIDFor(t, engine, libID, "albumA")
 
 	// The refresh stands in for a real scan: it writes what a scan of the
 	// member would have written.
@@ -318,7 +405,7 @@ func TestRefreshMemberTree(t *testing.T) {
 	}
 
 	w := doRequest(t, engine, http.MethodPost,
-		fmt.Sprintf("/api/v1/libraries/%s/tree/refresh?folder=albumA", libID), nil, nil)
+		fmt.Sprintf("/api/v1/libraries/%s/tree/refresh?dir=%s", libID, albumID), nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
@@ -326,8 +413,10 @@ func TestRefreshMemberTree(t *testing.T) {
 		t.Fatalf("refresh calls = %v, want one", scan.refreshed)
 	}
 	var out struct {
-		Refreshed bool `json:"refreshed"`
-		Tree      struct {
+		Refreshed  bool   `json:"refreshed"`
+		DirID      string `json:"dir_id"`
+		MemberPath string `json:"member_path"`
+		Tree       struct {
 			Children []struct {
 				Name string `json:"name"`
 			} `json:"children"`
@@ -338,6 +427,9 @@ func TestRefreshMemberTree(t *testing.T) {
 	}
 	if !out.Refreshed || len(out.Tree.Children) != 1 || out.Tree.Children[0].Name != "01.flac" {
 		t.Fatalf("refreshed tree = %+v", out)
+	}
+	if out.DirID != albumID || out.MemberPath != "albumA" {
+		t.Fatalf("refreshed identity = %q / %q, want %q / albumA", out.DirID, out.MemberPath, albumID)
 	}
 }
 
@@ -355,9 +447,10 @@ func TestRefreshMemberTreeFailureIsReported(t *testing.T) {
 
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, root, "albumA")
+	albumID := dirIDFor(t, engine, libID, "albumA")
 
 	w := doRequest(t, engine, http.MethodPost,
-		fmt.Sprintf("/api/v1/libraries/%s/tree/refresh?folder=albumA", libID), nil, nil)
+		fmt.Sprintf("/api/v1/libraries/%s/tree/refresh?dir=%s", libID, albumID), nil, nil)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (body=%s)", w.Code, w.Body.String())
 	}
