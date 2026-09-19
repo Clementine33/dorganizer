@@ -62,6 +62,7 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		Dirs []struct {
 			RelPath string `json:"rel_path"`
 			Path    string `json:"path"`
+			DirID   string `json:"dir_id"`
 		} `json:"dirs"`
 	}
 	if code := doJSON(
@@ -78,14 +79,34 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		len(dirs.Dirs) == 0 {
 		t.Fatalf("dirs: code=%d n=%d", code, len(dirs.Dirs))
 	}
-	albumRel := ""
+	albumRel, albumDirID := "", ""
 	for _, d := range dirs.Dirs {
 		if d.RelPath == "albumA" {
-			albumRel = d.RelPath
+			albumRel, albumDirID = d.RelPath, d.DirID
 		}
 	}
-	if albumRel == "" {
-		t.Fatal("albumA not found in the overview listing")
+	if albumRel == "" || albumDirID == "" {
+		t.Fatalf("albumA missing from the overview listing: %+v", dirs.Dirs)
+	}
+
+	// The identity the listing hands out opens that directory's tree: the
+	// address carries no name, and the resolved path comes back with the tree.
+	var tree struct {
+		DirID      string `json:"dir_id"`
+		MemberPath string `json:"member_path"`
+	}
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/tree?dir="+albumDirID,
+		token,
+		nil,
+		&tree,
+	); code != http.StatusOK || tree.MemberPath != "albumA" || tree.DirID != albumDirID {
+		t.Fatalf("tree by identity: code=%d %+v (identity=%s)", code, tree, albumDirID)
 	}
 
 	// Create the library's current conversion record.
@@ -114,6 +135,92 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	wsID := wsResp.Workset.WorksetID
 	if wsID == "" {
 		t.Fatal("empty workset id")
+	}
+
+	// The record hands out the same identity for that directory: the conversion
+	// entry addresses the shared file cache exactly as the overview does, and
+	// that identity is what opens the member's tree.
+	var record struct {
+		Workset struct {
+			Members []struct {
+				RelPath string `json:"rel_path"`
+				DirID   string `json:"dir_id"`
+			} `json:"members"`
+		} `json:"workset"`
+	}
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/operations/conversion/current",
+		token,
+		nil,
+		&record,
+	); code != http.StatusOK || len(record.Workset.Members) != 1 {
+		t.Fatalf("current record: code=%d %+v", code, record)
+	}
+	member := record.Workset.Members[0]
+	if member.DirID != albumDirID {
+		t.Fatalf("record member identity = %q, listing identity = %q", member.DirID, albumDirID)
+	}
+	tree = struct {
+		DirID      string `json:"dir_id"`
+		MemberPath string `json:"member_path"`
+	}{}
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/tree?dir="+member.DirID,
+		token,
+		nil,
+		&tree,
+	); code != http.StatusOK || tree.MemberPath != "albumA" {
+		t.Fatalf("tree by the record's identity: code=%d %+v (identity=%s)", code, tree, member.DirID)
+	}
+
+	// Opening the page refreshes the member, and that refresh must not unlist
+	// it: the directory is still there, so its identity must keep resolving and
+	// the overview must keep listing it.
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodPost,
+		"/api/v1/libraries/"+lib.ID+"/tree/refresh?dir="+member.DirID,
+		token,
+		map[string]any{},
+		&tree,
+	); code != http.StatusOK || tree.MemberPath != "albumA" {
+		t.Fatalf("refresh by identity: code=%d %+v (identity=%s)", code, tree, member.DirID)
+	}
+	var afterRefresh struct {
+		Dirs []struct {
+			RelPath string `json:"rel_path"`
+			DirID   string `json:"dir_id"`
+		} `json:"dirs"`
+	}
+	if code := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/dirs",
+		token,
+		nil,
+		&afterRefresh,
+	); code != http.StatusOK || len(afterRefresh.Dirs) != 1 {
+		t.Fatalf("listing after a member refresh: code=%d %+v", code, afterRefresh.Dirs)
+	}
+	if afterRefresh.Dirs[0].RelPath != "albumA" || afterRefresh.Dirs[0].DirID != member.DirID {
+		t.Fatalf("the refreshed member came back as %+v, want albumA with identity %q",
+			afterRefresh.Dirs[0], member.DirID)
 	}
 
 	wsPath := "/api/v1/worksets/" + wsID

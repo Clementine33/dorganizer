@@ -184,12 +184,23 @@ func cleanupStaleEntries(tx *sql.Tx, scanID, rootPath string) string {
 		}
 
 		if scopePath != "" {
-			// Scoped cleanup: DELETE ... WHERE root_path=? AND (path=? OR path LIKE ? || '/%')
-			// AND path NOT IN (SELECT path FROM entries_staging WHERE session_id=?)
+			// Scoped cleanup: everything *under* the scope that the scan of that
+			// scope no longer reports is stale.
+			//
+			// The scope directory's own row is deliberately outside that set: a
+			// folder scan reports the folder's contents (the walk emits the
+			// scope's children), so the scope row can never appear in staging,
+			// and treating its absence as stale would unlist the directory that
+			// was just scanned — the overview listing and the directory identity
+			// the workbench addresses both read that row.
+			//
+			// The prefix is compared with substr, not LIKE: a directory name is
+			// free to contain `%` or `_`, which a LIKE pattern would read as
+			// wildcards and match siblings by accident.
 			if _, err := tx.Exec(`
 				DELETE FROM entries
 				WHERE root_path = ?
-					AND (path = ? OR path LIKE ? || '/%')
+					AND substr(path, 1, length(?) + 1) = ? || '/'
 					AND path NOT IN (SELECT path FROM entries_staging WHERE session_id = ?)
 			`, rootPath, scopePath, scopePath, scanID); err != nil {
 				return rootPath

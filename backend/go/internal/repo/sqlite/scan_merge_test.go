@@ -1047,3 +1047,67 @@ func TestMergeUpsertContentRevIncrementSemantics(t *testing.T) {
 		t.Errorf("expected NULL bitrate for changed entry (cleared), got %v", changedBitrate.Int64)
 	}
 }
+
+// TestMergeScopedCleanupKeepsTheScopeAndItsNeighbours covers the two boundaries
+// a folder scan's stale cleanup has to respect: the directory that was scanned
+// keeps its own row (a folder scan reports the folder's contents, never the
+// folder itself), and a scope whose name contains SQL wildcard characters
+// matches only its own subtree — `%` and `_` are ordinary characters in a
+// directory name, not patterns.
+func TestMergeScopedCleanupKeepsTheScopeAndItsNeighbours(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo, err := NewRepository(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	defer repo.Close()
+
+	if _, err := repo.db.Exec(`
+		INSERT INTO scan_sessions (session_id, root_path, scope_path, kind, status, started_at)
+		VALUES ('scan-wild', '/music', '/music/100%_hits', 'folder', 'running', datetime('now'))
+	`); err != nil {
+		t.Fatalf("create scan session: %v", err)
+	}
+
+	// The scanned directory, a stale file inside it, a fresh file inside it, and
+	// a sibling that a LIKE pattern would read as a match for the scope.
+	if _, err := repo.db.Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime)
+		VALUES
+			('/music/100%_hits', '/music', '/music', '100%_hits', 1, 0, 0),
+			('/music/100%_hits/gone.mp3', '/music', '/music/100%_hits', 'gone.mp3', 0, 1, 1),
+			('/music/100ZZhits/other.mp3', '/music', '/music/100ZZhits', 'other.mp3', 0, 1, 1),
+			('/music/album', '/music', '/music', 'album', 1, 0, 0)
+	`); err != nil {
+		t.Fatalf("seed entries: %v", err)
+	}
+	if _, err := repo.db.Exec(`
+		INSERT INTO entries_staging (session_id, path, root_path, parent_path, name, is_dir, size, mtime, operation)
+		VALUES ('scan-wild', '/music/100%_hits/kept.mp3', '/music', '/music/100%_hits', 'kept.mp3', 0, 1, 1, 'upsert')
+	`); err != nil {
+		t.Fatalf("seed staging: %v", err)
+	}
+
+	if err := repo.MergeStagingSimple("scan-wild", "/music"); err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+
+	for _, want := range []struct {
+		path string
+		kept bool
+	}{
+		{"/music/100%_hits", true},           // the scanned directory keeps its row
+		{"/music/100%_hits/kept.mp3", true},  // …and what the scan saw
+		{"/music/100%_hits/gone.mp3", false}, // …what it no longer sees is stale
+		{"/music/100ZZhits/other.mp3", true}, // a neighbour the wildcards must not reach
+		{"/music/album", true},               // everything else is untouched
+	} {
+		var count int
+		if err := repo.db.QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", want.path).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", want.path, err)
+		}
+		if kept := count == 1; kept != want.kept {
+			t.Errorf("entries[%s] kept=%v, want %v", want.path, kept, want.kept)
+		}
+	}
+}
