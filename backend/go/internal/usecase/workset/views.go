@@ -98,7 +98,6 @@ func (s *serviceImpl) view(w *sqlite.Workset) (*WorksetView, error) {
 	for _, m := range members {
 		out.Members = append(out.Members, MemberView{
 			MemberID:   m.MemberID,
-			FolderID:   m.FolderID,
 			FolderPath: m.FolderPath,
 			FolderName: m.FolderName,
 			RelPath:    m.RelPath,

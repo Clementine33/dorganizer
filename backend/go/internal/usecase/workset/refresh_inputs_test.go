@@ -24,7 +24,7 @@ func TestGenerationRefreshesInputsBeforePlanning(t *testing.T) {
 		return nil
 	})
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("刷新输入", ids...)
+	ws := f.createCurrent("刷新输入", ids...)
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" {
@@ -52,7 +52,7 @@ func TestSessionFailsWhenTheRefreshFails(t *testing.T) {
 	})
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music", 1024, 1000)
-	ws := f.createWorkset("扫描失败", ids...)
+	ws := f.createCurrent("扫描失败", ids...)
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "failed" || gen.ErrorCode != "SCAN_FAILED" {

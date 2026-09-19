@@ -376,10 +376,12 @@ func (s *serviceImpl) persistExecution(
 		ReportJSON:      mustJSON(report),
 		CreatedAt:       time.Now(),
 	}
-	createErr := s.repo.CreateExecutionGuarded(exec, sqlite.ExecutionGuards{
-		ExpectedOperationVersion: op.Version,
-		ExpectedCurrentRevision:  planID,
-		ExpectedDraftHash:        revisionDraftHash,
+	createErr := s.enqueue(func() error {
+		return s.repo.CreateExecutionGuarded(exec, sqlite.ExecutionGuards{
+			ExpectedOperationVersion: op.Version,
+			ExpectedCurrentRevision:  planID,
+			ExpectedDraftHash:        revisionDraftHash,
+		})
 	})
 	if err := createErr; err != nil {
 		if errors.Is(err, sqlite.ErrExecutionIdemConflict) {

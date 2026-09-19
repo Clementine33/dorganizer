@@ -64,7 +64,7 @@ func (f *fixture) resolvedFrom(ws *worksetusecase.WorksetView, planID string) ma
 func TestDesignExampleInheritance(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("jia", "yi", "bing")
-	ws := f.createWorkset("样例", ids...)
+	ws := f.createCurrent("样例", ids...)
 	memberIDs := map[string]string{}
 	for _, m := range ws.Members {
 		memberIDs[m.RelPath] = m.MemberID
@@ -228,7 +228,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 func TestSparseOverridesSurviveRoundTrip(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("a", "b")
-	ws := f.createWorkset("稀疏", ids...)
+	ws := f.createCurrent("稀疏", ids...)
 	var first, second string
 	for _, m := range ws.Members {
 		if m.RelPath == "a" {
@@ -262,7 +262,7 @@ func TestSparseOverridesSurviveRoundTrip(t *testing.T) {
 func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("clear", "restore")
-	ws := f.createWorkset("清空", ids...)
+	ws := f.createCurrent("清空", ids...)
 	byPath := map[string]string{}
 	for _, m := range ws.Members {
 		byPath[m.RelPath] = m.MemberID
@@ -288,7 +288,7 @@ func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
 func TestEqualValueDifferentSource(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("inherit", "explicit")
-	ws := f.createWorkset("来源", ids...)
+	ws := f.createCurrent("来源", ids...)
 	byPath := map[string]string{}
 	for _, m := range ws.Members {
 		byPath[m.RelPath] = m.MemberID
@@ -328,7 +328,7 @@ func TestEqualValueDifferentSource(t *testing.T) {
 func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("only")
-	ws := f.createWorkset("全排除", ids...)
+	ws := f.createCurrent("全排除", ids...)
 	doc := draftDoc()
 	doc.Members = []tasksconversion.DraftMember{{MemberID: ws.Members[0].MemberID, Excluded: true}}
 	view := f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
@@ -355,7 +355,7 @@ func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("a")
-	ws := f.createWorkset("历史", ids...)
+	ws := f.createCurrent("历史", ids...)
 	byPath := ws.Members[0].MemberID
 	tags := []string{"old"}
 	doc := draftDoc()

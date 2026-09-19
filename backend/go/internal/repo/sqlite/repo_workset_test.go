@@ -15,14 +15,15 @@ func newOperationFixture(
 	t.Helper()
 	now := time.Now()
 	w := &Workset{
-		ID:          "ws-test-" + title,
-		Title:       title,
-		LibraryID:   libID,
-		RootPath:    "/music",
-		RootPathKey: "/music",
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            "ws-test-" + title,
+		Title:         title,
+		LibraryID:     libID,
+		OperationType: "conversion",
+		RootPath:      "/music",
+		RootPathKey:   "/music",
+		Version:       1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	members := []WorksetMember{
 		{
@@ -30,7 +31,6 @@ func newOperationFixture(
 			MemberID:    "m-test-a-" + title,
 			MemberIndex: 0,
 			RelPath:     "albumA",
-			FolderID:    "f-a",
 			FolderPath:  "/music/albumA",
 			FolderName:  "albumA",
 		},
@@ -39,7 +39,6 @@ func newOperationFixture(
 			MemberID:    "m-test-b-" + title,
 			MemberIndex: 1,
 			RelPath:     "albumB",
-			FolderID:    "f-b",
 			FolderPath:  "/music/albumB",
 			FolderName:  "albumB",
 		},
@@ -62,13 +61,16 @@ func newOperationFixture(
 	return w, members, op, draft
 }
 
+// insertLibrary creates one library whose root is unique per id, so a test can
+// hold several libraries side by side.
 func insertLibrary(t *testing.T, repo *Repository, id string) {
 	t.Helper()
 	now := time.Now().Format(timeFormat)
+	root := "/music-" + id
 	_, err := repo.db.Exec(`
 		INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, id, "lib-"+id, "/music", "/music", now, now)
+	`, id, "lib-"+id, root, root, now, now)
 	if err != nil {
 		t.Fatalf("insert library: %v", err)
 	}
@@ -79,8 +81,8 @@ func TestWorksetCRUD(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "crud")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 
 	got, err := repo.GetWorkset(w.ID)
@@ -124,27 +126,31 @@ func TestWorksetCRUD(t *testing.T) {
 	}
 }
 
-func TestCreateWorksetIdempotency(t *testing.T) {
+func TestReplaceCurrentWorksetIdempotency(t *testing.T) {
 	repo := newTestRepository(t)
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "idem")
 	w.CreationIdemKey = "key-1"
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	replayed, err := repo.GetWorksetByCreationIdemKey("key-1")
 	if err != nil || replayed == nil || replayed.ID != w.ID {
 		t.Fatalf("idempotency lookup: %+v err=%v", replayed, err)
 	}
 
-	w2, members2, op2, draft2 := newOperationFixture(t, "lib-1", "idem2")
+	// The key belongs to one record, whichever pair that record belongs to: a
+	// second record cannot be created with it.
+	insertLibrary(t, repo, "lib-2")
+	w2, members2, op2, draft2 := newOperationFixture(t, "lib-2", "idem2")
 	w2.CreationIdemKey = "key-1"
-	if err := repo.CreateWorkset(
+	if err := repo.ReplaceCurrentWorkset(
 		w2,
 		members2,
 		[]Operation{op2},
 		[]OperationDraft{draft2},
+		"",
 	); !errors.Is(
 		err,
 		ErrWorksetIdemConflict,
@@ -165,8 +171,8 @@ func TestClearExpiredWorksetIdemKey(t *testing.T) {
 	w.CreationIdemKey = "key-old"
 	w.CreatedAt = time.Now().Add(-60 * 24 * time.Hour)
 	w.UpdatedAt = w.CreatedAt
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.ClearExpiredWorksetIdemKey(w.ID, time.Now().Add(-30*24*time.Hour)); err != nil {
 		t.Fatalf("ClearExpiredWorksetIdemKey: %v", err)
@@ -185,8 +191,8 @@ func TestWorksetVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "guard")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.RenameWorkset(w.ID, "新名字", 1, time.Now()); err != nil {
 		t.Fatalf("RenameWorkset: %v", err)
@@ -213,8 +219,8 @@ func TestOperationDraftSaveVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "draft")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.SaveOperationDraft(w.ID, "conversion", 1, `{"a":1}`, "hash-2", 1, time.Now()); err != nil {
 		t.Fatalf("SaveOperationDraft: %v", err)
@@ -263,8 +269,8 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "rev")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 
 	now := time.Now()
@@ -378,21 +384,82 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 	); persistErr != nil {
 		t.Fatalf("PersistOperationRevision 2: %v", persistErr)
 	}
-	rev2, _ := repo.GetOperationRevision(w.ID, "conversion", "plan-2")
-	if rev2.RevisionIndex != 2 {
-		t.Fatalf("revision 2 index = %d, want 2", rev2.RevisionIndex)
+	rev2, err := repo.GetOperationRevision(w.ID, "conversion", "plan-2")
+	if err != nil {
+		t.Fatalf("GetOperationRevision(plan-2): %v", err)
+	}
+	opAfter2, _ := repo.GetOperation(w.ID, "conversion")
+	if opAfter2.CurrentRevisionID != "plan-2" {
+		t.Fatalf("the new plan must be the current one: %+v", opAfter2)
+	}
+	// Publishing a plan retires the one it replaced, in the same commit: the
+	// record keeps exactly one plan, and no history is left behind.
+	if _, replacedErr := repo.GetOperationRevision(
+		w.ID,
+		"conversion",
+		"plan-1",
+	); !errors.Is(
+		replacedErr,
+		ErrRevisionNotFound,
+	) {
+		t.Fatalf("the replaced revision must be gone, got %v", replacedErr)
+	}
+	if _, planErr := repo.GetPlanDetail("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+		t.Fatalf("the replaced plan payload must be gone, got %v", planErr)
+	}
+	if len(rev2.PlanID) == 0 {
+		t.Fatalf("revision 2: %+v", rev2)
+	}
+}
+
+// TestPersistOperationRevisionRetiresTheReplacedExecution pins the other half
+// of the one-plan rule: the executions recorded for the plan that is replaced
+// go with it, so nothing keeps answering for a plan that no longer exists.
+func TestPersistOperationRevisionRetiresTheReplacedExecution(t *testing.T) {
+	repo := newTestRepository(t)
+	insertLibrary(t, repo, "lib-1")
+	w, members, op, draft := newOperationFixture(t, "lib-1", "retire-exec")
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
+	}
+	now := time.Now()
+	seedGeneration(t, repo, "gen-r1", w.ID)
+	if err := repo.PersistOperationRevision("gen-r1", w.ID, "conversion", now, OperationRevisionPersist{
+		PlanID: "plan-r1", RootPath: "/music", SnapshotToken: "snap-r1", LibraryID: "lib-1",
+	}); err != nil {
+		t.Fatalf("PersistOperationRevision(plan-r1): %v", err)
+	}
+	if err := repo.CreateExecutionGuarded(&PlanExecution{
+		ExecutionID:   "exec-r1",
+		WorksetID:     w.ID,
+		OperationType: "conversion",
+		PlanID:        "plan-r1",
+		Status:        "succeeded",
+		RequestJSON:   "{}",
+		ReportJSON:    "[]",
+		CreatedAt:     now,
+	}, ExecutionGuards{
+		ExpectedOperationVersion: 2,
+		ExpectedCurrentRevision:  "plan-r1",
+		ExpectedDraftHash:        "hash-1",
+	}); err != nil {
+		t.Fatalf("CreateExecutionGuarded: %v", err)
 	}
 
-	revs, err := repo.ListOperationRevisions(w.ID, "conversion", 0, 10)
-	if err != nil {
-		t.Fatalf("ListOperationRevisions: %v", err)
+	seedGeneration(t, repo, "gen-r2", w.ID)
+	if err := repo.PersistOperationRevision(
+		"gen-r2",
+		w.ID,
+		"conversion",
+		now.Add(time.Second),
+		OperationRevisionPersist{
+			PlanID: "plan-r2", RootPath: "/music", SnapshotToken: "snap-r2", LibraryID: "lib-1",
+		},
+	); err != nil {
+		t.Fatalf("PersistOperationRevision(plan-r2): %v", err)
 	}
-	if len(revs) != 2 || revs[0].PlanID != "plan-2" || revs[1].PlanID != "plan-1" {
-		t.Fatalf("revision history: %+v", revs)
-	}
-	page, err := repo.ListOperationRevisions(w.ID, "conversion", 2, 10)
-	if err != nil || len(page) != 1 || page[0].PlanID != "plan-1" {
-		t.Fatalf("revision page: %+v err=%v", page, err)
+	if _, err := repo.GetExecution("exec-r1"); !errors.Is(err, ErrExecutionNotFound) {
+		t.Fatalf("the replaced plan's execution must be gone, got %v", err)
 	}
 }
 
@@ -401,8 +468,8 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "gen")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	now := time.Now()
 	gen := &PlanGeneration{
@@ -479,8 +546,8 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "fail")
-	if err := repo.CreateWorkset(w, members, []Operation{op}, []OperationDraft{draft}); err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	now := time.Now()
 	gen := &PlanGeneration{GenerationID: "gen-fail", WorksetID: w.ID, OperationType: "conversion", CreatedAt: now}

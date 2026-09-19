@@ -12,7 +12,7 @@ import (
 func TestCreateReturnsStableMemberIdentities(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA", "albumB")
-	ws := f.createWorkset("身份", ids...)
+	ws := f.createCurrent("身份", ids...)
 
 	if len(ws.Members) != 2 {
 		t.Fatalf("members = %+v", ws.Members)

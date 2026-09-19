@@ -14,7 +14,7 @@ func TestStaleValidationIgnoresNonAudioChanges(t *testing.T) {
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
 	f.insertNonAudioEntry("/music/albumA/cover.jpg", "/music/albumA", 2048, 1000)
-	ws := f.createWorkset("测试正交", ids...)
+	ws := f.createCurrent("测试正交", ids...)
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" {
@@ -50,7 +50,12 @@ func TestStaleValidationIgnoresNonAudioChanges(t *testing.T) {
 func TestMissingRootIsBlockedButNotStaleUntilAudioAppears(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumMissing")
-	ws := f.createWorkset("缺失根测试", ids...)
+	ws := f.createCurrent("缺失根测试", ids...)
+
+	// The directory is gone from the disk, so the next scan of the library
+	// drops its subtree from the inventory. The record keeps its member: the
+	// scope is fixed, the facts about it are not.
+	f.exec("DELETE FROM entries WHERE path = '/music/albumMissing' OR path LIKE '/music/albumMissing/%'")
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" {
@@ -74,30 +79,45 @@ func TestMissingRootIsBlockedButNotStaleUntilAudioAppears(t *testing.T) {
 	}
 }
 
-// TestRevisionHistoryIsOperationScoped covers the history paging contract.
-func TestRevisionHistoryIsOperationScoped(t *testing.T) {
+// TestOnlyTheCurrentPlanSurvivesTheNextGeneration covers R3: generating a new
+// plan publishes it and retires the one it replaced, in that order — a record
+// keeps one plan, and a failed or canceled generation never touches it.
+func TestOnlyTheCurrentPlanSurvivesTheNextGeneration(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("历史", ids...)
+	ws := f.createCurrent("当前计划", ids...)
 	f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
+	firstPlan := f.operation(ws.WorksetID).CurrentRevision.PlanID
 
 	doc := draftDoc()
 	doc.ClassifierTags = []string{"第二个"}
 	saved := f.saveDraft(ws.WorksetID, doc, f.operation(ws.WorksetID).Version)
+	if _, err := f.svc.GetRevision(
+		f.ctx,
+		ws.WorksetID,
+		worksetusecase.OperationTypeConversion,
+		firstPlan,
+	); err != nil {
+		t.Fatalf("the old plan must stay readable while the new one is being generated: %v", err)
+	}
 	f.runGeneration(ws.WorksetID, saved.Version)
 
-	page, err := f.svc.ListRevisions(f.ctx, ws.WorksetID, worksetusecase.OperationTypeConversion, 0, 10)
-	if err != nil {
-		t.Fatalf("ListRevisions: %v", err)
+	secondPlan := f.operation(ws.WorksetID).CurrentRevision.PlanID
+	if secondPlan == firstPlan {
+		t.Fatal("the new generation must publish a new plan")
 	}
-	if len(page.Revisions) != 2 {
-		t.Fatalf("revisions = %d, want 2", len(page.Revisions))
+	if _, err := f.svc.GetRevision(
+		f.ctx,
+		ws.WorksetID,
+		worksetusecase.OperationTypeConversion,
+		firstPlan,
+	); err == nil {
+		t.Fatal("the replaced plan must not be readable")
 	}
-	if page.Revisions[0].RevisionIndex <= page.Revisions[1].RevisionIndex {
-		t.Fatalf("history must be newest-first: %+v", page.Revisions)
-	}
-	if _, err := f.svc.ListRevisions(f.ctx, ws.WorksetID, "rename", 0, 10); err == nil {
-		t.Fatal("an unknown operation type must not list revisions")
+	var plans int
+	f.queryInt(&plans, "SELECT COUNT(*) FROM plans WHERE workset_id = ?", ws.WorksetID)
+	if plans != 1 {
+		t.Fatalf("a record must keep exactly one plan, found %d", plans)
 	}
 }

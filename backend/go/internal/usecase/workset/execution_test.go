@@ -73,7 +73,7 @@ func newExecFixtureWithTask(
 	f := &execFixture{
 		t:         t,
 		repo:      repo,
-		svc:       worksetusecase.NewService(repo, 1, encodeConcurrency, tasks, scan),
+		svc:       worksetusecase.NewService(repo, 1, encodeConcurrency, tasks, scan, nil),
 		root:      root,
 		libraryID: "lib-1",
 		members:   map[string]worksetusecase.MemberView{},
@@ -88,26 +88,29 @@ func newExecFixtureWithTask(
 	`, f.libraryID, root, pathnorm.RootPathKey(root), now, now); insertErr != nil {
 		t.Fatalf("insert library: %v", insertErr)
 	}
-	folderIDs := make([]string, 0, 2)
+	members := make([]string, 0, 2)
 	for _, name := range []string{"albumA", "albumB"} {
 		dir := filepath.Join(root, name)
 		if dirErr := os.MkdirAll(dir, 0o755); dirErr != nil {
 			t.Fatalf("mkdir %s: %v", dir, dirErr)
 		}
-		id := "f-" + name
-		if _, folderErr := repo.DB().Exec(`
-			INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-		`, id, f.libraryID, dir, name, name, now, now); folderErr != nil {
-			t.Fatalf("insert folder: %v", folderErr)
-		}
-		folderIDs = append(folderIDs, id)
+		// The record is created from the scanned inventory, so every member
+		// directory carries one inventory row of its own plus one audio row:
+		// a directory the inventory does not know cannot be a member. The
+		// files the tests work with are written afterwards.
+		insertInventoryDir(t, repo, filepath.ToSlash(root), name)
+		insertInventoryAudio(t, repo, filepath.ToSlash(dir), "__member__.flac")
+		members = append(members, name)
 	}
-	res, err := f.svc.CreateWorkset(context.Background(), worksetusecase.CreateRequest{
-		LibraryID: f.libraryID, Title: "実行", FolderIDs: folderIDs,
+	res, err := f.svc.CreateCurrentWorkset(context.Background(), worksetusecase.CreateCurrentRequest{
+		LibraryID:      f.libraryID,
+		OperationType:  worksetusecase.OperationTypeConversion,
+		Title:          "実行",
+		FolderPaths:    members,
+		IdempotencyKey: "create-exec-fixture",
 	})
 	if err != nil {
-		t.Fatalf("CreateWorkset: %v", err)
+		t.Fatalf("CreateCurrentWorkset: %v", err)
 	}
 	f.worksetID = res.Workset.WorksetID
 	for _, m := range res.Workset.Members {
@@ -142,6 +145,30 @@ func (f *execFixture) operation() *worksetusecase.OperationView {
 		f.t.Fatalf("GetOperation: %v", err)
 	}
 	return view
+}
+
+// insertInventoryDir records one directory in the scanned inventory.
+func insertInventoryDir(t *testing.T, repo *sqlite.Repository, root, name string) {
+	t.Helper()
+	now := time.Now().Format(timeFmt)
+	if _, err := repo.DB().Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format, content_rev, updated_at)
+		VALUES (?, ?, ?, ?, 1, 0, 0, '', 1, ?)
+	`, root+"/"+name, root, root, name, now); err != nil {
+		t.Fatalf("insert inventory dir: %v", err)
+	}
+}
+
+// insertInventoryAudio records one audio file in the scanned inventory.
+func insertInventoryAudio(t *testing.T, repo *sqlite.Repository, dir, name string) {
+	t.Helper()
+	now := time.Now().Format(timeFmt)
+	if _, err := repo.DB().Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format, content_rev, updated_at)
+		VALUES (?, '', ?, ?, 0, 0, 0, 'flac', 1, ?)
+	`, filepath.ToSlash(filepath.Join(dir, name)), filepath.ToSlash(dir), name, now); err != nil {
+		t.Fatalf("insert inventory audio: %v", err)
+	}
 }
 
 // writeAudio writes a real file and records its scan row.
@@ -200,7 +227,7 @@ func (f *execFixture) liveFingerprint(root string) (string, int) {
 func (f *execFixture) seedUnpromotedRevision(planID string) {
 	f.t.Helper()
 	if err := sqlite.CreatePlanTx(
-		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
+		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID, f.worksetID,
 		nil, nil, nil,
 	); err != nil {
 		f.t.Fatalf("CreatePlanTx: %v", err)
@@ -284,7 +311,7 @@ func (f *execFixture) seedRevision(planID string, comps ...seedComponent) {
 		StepSummaryJSON: `{"component_count":` + strconv.Itoa(len(comps)) + `,"summary_reason":"ACTIONABLE"}`,
 	}}
 	if err := sqlite.CreatePlanTx(
-		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID,
+		f.repo.DB(), planID, "conversion", 1, filepath.ToSlash(f.root), "snap-"+planID, f.libraryID, f.worksetID,
 		steps, roots, compsRecords,
 	); err != nil {
 		f.t.Fatalf("CreatePlanTx: %v", err)
@@ -461,11 +488,34 @@ func TestStartExecutionGates(t *testing.T) {
 		}
 	})
 
-	t.Run("orphaned_workset", func(t *testing.T) {
+	t.Run("gone_library", func(t *testing.T) {
+		// Deleting a library takes its records with it (spec L1), so a session
+		// start against that record has nothing to address: the record is gone,
+		// not orphaned into a readable read-only state.
 		f := newExecFixture(t)
-		f.seedRevision("plan-or")
+		f.seedRevision("plan-gone")
 		if err := f.repo.DeleteLibrary(f.libraryID); err != nil {
 			t.Fatalf("DeleteLibrary: %v", err)
+		}
+		// Addressed directly: the record's own version is not readable anymore,
+		// so the helper that reads it cannot be the one that asks.
+		_, err := f.svc.StartExecution(
+			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, "plan-gone",
+			worksetusecase.StartExecutionRequest{IfMatchVersion: 1, IdempotencyKey: "k-gone"},
+		)
+		code, _ := errorDetail(t, err)
+		if code != "WORKSET_NOT_FOUND" {
+			t.Fatalf("err code = %s, want WORKSET_NOT_FOUND", code)
+		}
+	})
+
+	t.Run("orphaned_workset", func(t *testing.T) {
+		// A record whose library row vanished outside the delete path stays
+		// readable and refuses writes (ADR 0004 §2, D07).
+		f := newExecFixture(t)
+		f.seedRevision("plan-or")
+		if _, err := f.repo.DB().Exec("UPDATE worksets SET library_id = NULL WHERE id = ?", f.worksetID); err != nil {
+			t.Fatalf("orphan record: %v", err)
 		}
 		_, err := f.startExecution("plan-or", "k-or")
 		code, _ := errorDetail(t, err)

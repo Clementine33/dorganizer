@@ -192,3 +192,51 @@ func TestTruncatePathComponentsToBytes_UTF8Boundary(t *testing.T) {
 		}
 	}
 }
+
+// TestRelPath is the containment contract every scoped route rests on: a
+// relative path is a plain descendant chain, and everything that could name
+// something outside the root it will be joined to is refused.
+func TestRelPath(t *testing.T) {
+	accepted := map[string]string{
+		"albumA":          "albumA",
+		"albumA/disc2":    "albumA/disc2",
+		"albumA/disc2/01": "albumA/disc2/01",
+		"with space/日本語":  "with space/日本語",
+		"100%_hits":       "100%_hits",
+	}
+	for input, want := range accepted {
+		got, ok := pathnorm.RelPath(input)
+		if !ok || got != want {
+			t.Errorf("RelPath(%q) = %q, %v; want %q, true", input, got, ok, want)
+		}
+	}
+
+	refused := []string{
+		"", ".", "..", "./x", "../x", "x/../y", "x//y", "/x", "/", "//server/share",
+		`x\y`, "C:/music", "x/", "x/./y", "a\x00b",
+	}
+	for _, input := range refused {
+		if got, ok := pathnorm.RelPath(input); ok {
+			t.Errorf("RelPath(%q) = %q, want refused", input, got)
+		}
+	}
+}
+
+// TestJoinRel pins the join: cleaned POSIX form, root trailing slashes
+// tolerated, always a descendant of the root.
+func TestJoinRel(t *testing.T) {
+	cases := []struct{ root, rel, want string }{
+		{"/music", "albumA", "/music/albumA"},
+		{"/music/", "albumA", "/music/albumA"},
+		{`C:\music`, "albumA", "C:/music/albumA"},
+		{"/music", "albumA/disc2", "/music/albumA/disc2"},
+	}
+	for _, tc := range cases {
+		if got := pathnorm.JoinRel(tc.root, tc.rel); got != tc.want {
+			t.Errorf("JoinRel(%q, %q) = %q, want %q", tc.root, tc.rel, got, tc.want)
+		}
+		if !pathnorm.IsWithinRoot(tc.root, pathnorm.JoinRel(tc.root, tc.rel)) {
+			t.Errorf("JoinRel(%q, %q) left the root", tc.root, tc.rel)
+		}
+	}
+}

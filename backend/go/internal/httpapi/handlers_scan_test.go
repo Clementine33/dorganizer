@@ -71,13 +71,14 @@ func TestScanSSEHappyPath(t *testing.T) {
 		t.Errorf("completed event data missing files_scanned (body=%s)", body)
 	}
 
-	// The library_folders table must now be populated for the library.
-	folders, err := repo.ListLibraryFolders(lib.ID)
+	// The overview listing reads the scanned inventory, so the scan is what
+	// makes the library's folders visible.
+	dirs, err := repo.ListLibraryDirs(lib.RootPath)
 	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
-	if len(folders) == 0 {
-		t.Error("expected library_folders populated after scan")
+	if len(dirs) == 0 {
+		t.Error("expected the scanned inventory to list the library's folders")
 	}
 }
 
@@ -214,12 +215,12 @@ func TestScanSSERejectsRootOutsideLibrary(t *testing.T) {
 	if strings.Contains(w.Body.String(), "event:") {
 		t.Fatalf("rejected scan must not start SSE (body=%s)", w.Body.String())
 	}
-	folders, err := repo.ListLibraryFolders(libID)
+	dirs, err := repo.ListLibraryDirs(libraryRoot)
 	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
-	if len(folders) != 0 {
-		t.Fatalf("rejected scan persisted %d folders", len(folders))
+	if len(dirs) != 0 {
+		t.Fatalf("rejected scan persisted %d directories", len(dirs))
 	}
 }
 

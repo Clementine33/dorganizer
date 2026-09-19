@@ -285,7 +285,7 @@ func (s *serviceImpl) persistGeneration(
 		TotalRoots:           len(s.participatingMembers(input)),
 		CreatedAt:            now,
 	}
-	if err := s.repo.CreateGeneration(gen); err != nil {
+	if err := s.enqueue(func() error { return s.repo.CreateGeneration(gen) }); err != nil {
 		if errors.Is(err, sqlite.ErrGenerationIdemConflict) {
 			existing, loadErr := s.repo.GetGenerationByOperationKey(op.WorksetID, op.OperationType, key)
 			if loadErr == nil && existing != nil {

@@ -15,7 +15,7 @@ func TestGenerationPublishesRevisionAndReplays(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("生成", ids...)
+	ws := f.createCurrent("生成", ids...)
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" || gen.RevisionID == "" {
@@ -90,7 +90,7 @@ func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("脏检查", ids...)
+	ws := f.createCurrent("脏检查", ids...)
 
 	first := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if first.Status != "completed" {
@@ -117,7 +117,7 @@ func TestGenerationFailureKeepsCurrentRevision(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("失败", ids...)
+	ws := f.createCurrent("失败", ids...)
 
 	first := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if first.Status != "completed" {
@@ -153,7 +153,7 @@ func TestCancelQueuedSessionIsNotPublished(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("取消", ids...)
+	ws := f.createCurrent("取消", ids...)
 	op := f.operation(ws.WorksetID)
 	genID := f.startGeneration(ws.WorksetID, op.Version)
 
@@ -178,7 +178,7 @@ func TestSingleActiveSessionPerOperation(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("单会话", ids...)
+	ws := f.createCurrent("单会话", ids...)
 	op := f.operation(ws.WorksetID)
 	f.startGeneration(ws.WorksetID, op.Version)
 
@@ -203,7 +203,7 @@ func TestSingleActiveSessionPerOperation(t *testing.T) {
 func TestGenerationRejectsScanInProgress(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("扫描中", ids...)
+	ws := f.createCurrent("扫描中", ids...)
 	f.exec(`
 		INSERT INTO scan_sessions (session_id, root_path, kind, status, started_at)
 		VALUES ('scan-1', '/music', 'full', 'running', ?)
@@ -232,8 +232,12 @@ func TestGenerationScopedAddressing(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("作用域", ids...)
-	other := f.createWorkset("另一个", ids...)
+	ws := f.createCurrent("作用域", ids...)
+	// A second record of another library, for the cross-record addressing
+	// checks: one library holds one conversion record at a time.
+	f.insertLibrary("lib-2", "/music2")
+	f.insertDir("/music2", "albumC", true)
+	other := f.createCurrentFor("lib-2", "另一个", "albumC")
 
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" {
@@ -273,7 +277,7 @@ func TestGenerationIdempotencyKeyReuseIsScoped(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("幂等", ids...)
+	ws := f.createCurrent("幂等", ids...)
 	op := f.operation(ws.WorksetID)
 
 	first, err := f.svc.StartGeneration(

@@ -35,7 +35,7 @@ func seedRevision(
 		t.Fatalf("MarshalDraft: %v", err)
 	}
 	if err := sqlite.CreatePlanTx(
-		repo.DB(), planID, "conversion", 1, "/music", "snap-"+planID, libID,
+		repo.DB(), planID, "conversion", 1, "/music", "snap-"+planID, libID, worksetID,
 		nil, nil, nil,
 	); err != nil {
 		t.Fatalf("CreatePlanTx: %v", err)
@@ -70,31 +70,18 @@ func getOperationVersion(t *testing.T, svc worksetusecase.Service, worksetID str
 func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	libID := seedLibrary(t, repo)
-	seedFolder(t, repo, libID)
-	w := req(t, h, http.MethodPost, "/api/v1/worksets", testToken,
-		map[string]any{"library_id": libID, "title": "実行", "folder_ids": []string{"f-a"}})
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create workset: %d %s", w.Code, w.Body.String())
-	}
-	var created struct {
-		Workset struct {
-			WorksetID string `json:"workset_id"`
-		} `json:"workset"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode workset: %v", err)
-	}
-	wsID := created.Workset.WorksetID
+	seedMember(t, repo, "albumA")
+	wsID := createRecord(t, h, libID, "create-exec-http")
 	svc := worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 		tasksconversion.New(t.TempDir()),
-	}, nil)
+	}, nil, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
 
 	// A promoted revision is directly executable; only the If-Match race gate
 	// can refuse the start.
 	version := seedRevision(t, repo, svc, libID, wsID, "plan-http")
-	w = reqWithIdempotencyAndIfMatch(
+	w := reqWithIdempotencyAndIfMatch(
 		t, h, http.MethodPost, execPath, testToken, nil, "exec-http-1", strconv.Itoa(version-1),
 	)
 	if w.Code != http.StatusConflict || !containsCode(w.Body.Bytes(), "VERSION_CONFLICT") {

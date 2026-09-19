@@ -37,25 +37,32 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.Handle("PATCH /api/v1/libraries/{id}", protect(http.HandlerFunc(s.patchLibrary)))
 	mux.Handle("DELETE /api/v1/libraries/{id}", protect(http.HandlerFunc(s.deleteLibrary)))
 	mux.Handle("POST /api/v1/libraries/{id}/scans", protect(http.HandlerFunc(s.postLibraryScan)))
-	mux.Handle("GET /api/v1/libraries/{id}/folders", protect(http.HandlerFunc(s.listLibraryFolders)))
-	mux.Handle("GET /api/v1/libraries/{id}/folders/{folderId}/tree", protect(http.HandlerFunc(s.getFolderTree)))
+	// The current processing record of one (library, operation): at most one
+	// exists, and creating it replaces the one the caller saw.
+	mux.Handle(
+		"GET /api/v1/libraries/{id}/operations/{type}/current",
+		protect(http.HandlerFunc(s.getCurrentRecord)),
+	)
+	mux.Handle(
+		"PUT /api/v1/libraries/{id}/operations/{type}/current",
+		protect(http.HandlerFunc(s.putCurrentRecord)),
+	)
 	mux.Handle("GET /api/v1/policy-slots", protect(http.HandlerFunc(s.listPolicySlots)))
 	mux.Handle("PUT /api/v1/policy-slots/{slot}", protect(http.HandlerFunc(s.putPolicySlot)))
 	mux.Handle("GET /api/v1/classifier-tags", protect(http.HandlerFunc(s.listClassifierTags)))
 	mux.Handle("POST /api/v1/classifier-tags", protect(http.HandlerFunc(s.addClassifierTag)))
 	mux.Handle("DELETE /api/v1/classifier-tags/{id}", protect(http.HandlerFunc(s.deleteClassifierTag)))
-	mux.Handle("POST /api/v1/worksets", protect(http.HandlerFunc(s.createWorkset)))
 	mux.Handle("GET /api/v1/worksets", protect(http.HandlerFunc(s.listWorksets)))
 	mux.Handle("GET /api/v1/worksets/{id}", protect(http.HandlerFunc(s.getWorkset)))
 	mux.Handle("PATCH /api/v1/worksets/{id}", protect(http.HandlerFunc(s.patchWorkset)))
 	// Workset operations: every mutable planning resource is addressed through
 	// its (workset, operation type) ownership. There is no workset-level draft,
-	// planning session or revision route.
+	// planning session or revision route, and no revision-history route: a
+	// record keeps exactly one plan, the current one.
 	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}", protect(http.HandlerFunc(s.getOperation)))
 	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}/draft", protect(http.HandlerFunc(s.getOperationDraft)))
 	mux.Handle("PUT /api/v1/worksets/{id}/operations/{type}/draft", protect(http.HandlerFunc(s.putOperationDraft)))
 	mux.Handle("POST /api/v1/worksets/{id}/operations/{type}/revisions", protect(http.HandlerFunc(s.startGeneration)))
-	mux.Handle("GET /api/v1/worksets/{id}/operations/{type}/revisions", protect(http.HandlerFunc(s.listRevisions)))
 	mux.Handle(
 		"GET /api/v1/worksets/{id}/operations/{type}/revisions/{planId}",
 		protect(http.HandlerFunc(s.getRevision)),

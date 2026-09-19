@@ -93,12 +93,11 @@ type LibraryRef struct {
 	RootPath  string
 }
 
-// MemberView is one album-folder member. MemberID is the stable identity
-// persisted on the member row; participation and overrides belong to an
-// operation, not to the member.
+// MemberView is one member directory. MemberID is the stable identity
+// persisted on the member row and RelPath is the durable library-relative
+// path; participation and overrides belong to an operation, not to the member.
 type MemberView struct {
 	MemberID   string
-	FolderID   string
 	FolderPath string
 	FolderName string
 	RelPath    string
@@ -126,14 +125,6 @@ type RevisionSummary struct {
 	Counts          RevisionCounts
 	ValidationState string // valid | stale | unavailable
 	Stale           *bool  // nil when validation_state == unavailable
-}
-
-// RevisionListResult is one page of revision history plus its keyset cursor.
-// NextBeforeIndex is the revision_index of the last row of this page; a value
-// of 0 means the page reached the oldest revision (no more pages).
-type RevisionListResult struct {
-	Revisions       []*RevisionSummary
-	NextBeforeIndex int
 }
 
 // GenerationProgress is root-level progress of an active session.
@@ -186,18 +177,48 @@ type WorksetView struct {
 	UpdatedAt  time.Time
 }
 
-// CreateRequest is the POST /worksets payload.
-type CreateRequest struct {
-	LibraryID      string
-	Title          string
-	FolderIDs      []string
-	IdempotencyKey string
+// CreateCurrentRequest is the create-or-replace payload of the current record
+// of one (library, operation) pair. FolderPaths are library-relative member
+// directory paths — never scan-scoped ids — and ExpectedCurrentID is the
+// record the caller saw as current ("" when it saw none), which is what makes
+// a concurrent replace a conflict instead of an overwrite.
+type CreateCurrentRequest struct {
+	LibraryID         string
+	OperationType     string
+	Title             string
+	FolderPaths       []string
+	ExpectedCurrentID string
+	IdempotencyKey    string
 }
 
-// CreateResult distinguishes a fresh creation from an idempotent replay.
-type CreateResult struct {
+// Skipped folder reasons: a selected directory that did not become a member,
+// reported so the created scope is never silently wider or narrower than what
+// the caller asked for.
+const (
+	SkipNoAudio       = "no_audio"
+	SkipMissing       = "missing"
+	SkipRecoveryDir   = "recovery_dir"
+	SkipDuplicate     = "duplicate"
+	SkipInvalidPath   = "invalid_path"
+	SkipNotDirect     = "not_direct_child"
+	SkipOutsideMember = "outside_member"
+)
+
+// SkippedFolder is one selected directory left out of the record.
+type SkippedFolder struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// CreateCurrentResult distinguishes a fresh creation from an idempotent
+// replay, and reports the scope that was actually recorded.
+type CreateCurrentResult struct {
 	Workset *WorksetView
 	Created bool
+	// Recorded is the number of members actually written.
+	Recorded int
+	// Skipped lists the selected directories that were left out, with why.
+	Skipped []SkippedFolder
 }
 
 // ListQuery is the workset list input.
@@ -352,7 +373,8 @@ type Dispatcher interface {
 // workset id alone.
 type Service interface {
 	DispatcherHandle() Dispatcher
-	CreateWorkset(ctx context.Context, req CreateRequest) (*CreateResult, error)
+	CreateCurrentWorkset(ctx context.Context, req CreateCurrentRequest) (*CreateCurrentResult, error)
+	GetCurrentWorkset(ctx context.Context, libraryID, operationType string) (*WorksetView, error)
 	ListWorksets(ctx context.Context, q ListQuery) ([]*WorksetView, string, error)
 	GetWorkset(ctx context.Context, id string) (*WorksetView, error)
 	RenameWorkset(ctx context.Context, id string, req RenameRequest) (*WorksetView, error)
@@ -371,11 +393,6 @@ type Service interface {
 		worksetID, operationType, generationID string,
 		emit func(event string, data any) error,
 	) error
-	ListRevisions(
-		ctx context.Context,
-		worksetID, operationType string,
-		beforeIndex, limit int,
-	) (*RevisionListResult, error)
 	GetRevision(ctx context.Context, worksetID, operationType, planID string) (*RevisionView, error)
 	StartExecution(
 		ctx context.Context,

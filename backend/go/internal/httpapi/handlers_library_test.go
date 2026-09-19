@@ -131,10 +131,10 @@ func TestPatchLibraryRootInvalidatesDerivedFolders(t *testing.T) {
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
 
 	if _, err := repo.DB().Exec(`
-		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
-		VALUES ('folder-old', ?, '/music/album', 'album', 'album', 1)
-	`, libID); err != nil {
-		t.Fatalf("seed library folder: %v", err)
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format)
+		VALUES ('/music/album', '/music', '/music', 'album', 1, 0, 0, '')
+	`); err != nil {
+		t.Fatalf("seed library directory: %v", err)
 	}
 	if err := repo.UpdateLibraryScanState(libID, "completed", "", time.Now()); err != nil {
 		t.Fatalf("UpdateLibraryScanState failed: %v", err)
@@ -153,17 +153,15 @@ func TestPatchLibraryRootInvalidatesDerivedFolders(t *testing.T) {
 		t.Fatalf("scan state was not reset: %+v", updated)
 	}
 
-	w = doRequest(t, engine, http.MethodGet, "/api/v1/libraries/"+libID+"/folders", nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("folders status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	// The inventory of the old root is gone: the listing endpoint arrives with
+	// the workbench routes, so this asserts the storage fact.
+	var stale int
+	if scanErr := repo.DB().QueryRow(
+		"SELECT COUNT(*) FROM entries WHERE root_path = '/music'",
+	).Scan(&stale); scanErr != nil {
+		t.Fatalf("count stale entries: %v", scanErr)
 	}
-	var folders struct {
-		Folders []folderResponse `json:"folders"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &folders); err != nil {
-		t.Fatalf("decode folders: %v", err)
-	}
-	if len(folders.Folders) != 0 {
-		t.Fatalf("root change retained %d stale folders", len(folders.Folders))
+	if stale != 0 {
+		t.Fatalf("root change retained %d stale entries", stale)
 	}
 }

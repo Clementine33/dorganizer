@@ -181,7 +181,7 @@ func runServer(
 	}, func(scanCtx context.Context, folderPath, rootPath string) error {
 		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
 		return scanErr
-	})
+	}, nil)
 
 	// Startup recovery: any session left queued/running by a previous process
 	// is marked interrupted before the dispatcher starts from an empty queue.

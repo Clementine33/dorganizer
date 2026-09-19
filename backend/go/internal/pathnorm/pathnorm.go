@@ -12,6 +12,21 @@ func NormalizeToPOSIX(p string) string {
 	return strings.ReplaceAll(p, "\\", "/")
 }
 
+// RecoveryDirName is the library-root-level recovery directory of soft
+// deletion: removed media is preserved at <library root>/Delete/<relative
+// path>. It is the single definition of the name — the writer (soft delete)
+// and every reader (the workbench listing, the conversion planner's
+// leftover detection) agree on it. It is not a member of any library.
+const RecoveryDirName = "Delete"
+
+// IsWindowsCaseInsensitivePath reports whether a path is syntactically a
+// Windows path (drive, UNC or device form), where component names compare
+// case-insensitively regardless of the host the backend runs on.
+func IsWindowsCaseInsensitivePath(p string) bool {
+	normalized := NormalizeToPOSIX(p)
+	return IsWindowsUNCPath(p) || isWindowsDrivePath(normalized) || strings.HasPrefix(normalized, "//?/")
+}
+
 // IsWithinRoot reports whether candidate is root itself or one of its
 // descendants. Paths are compared in their persisted POSIX form, with lexical
 // cleaning and component boundaries so sibling prefixes and parent traversal
@@ -96,6 +111,51 @@ func IsResolvedWithinRoot(root, candidate string) (bool, error) {
 		!filepath.IsAbs(relative), nil
 }
 
+// RelPath validates a library-relative path and returns its cleaned POSIX
+// form. A relative path is a plain descendant chain: it never names the root
+// itself, and it may not be absolute, carry a drive or device prefix, contain a
+// backslash (the separator of a foreign filesystem) or NUL byte, or hold an
+// empty, "." or ".." segment. Everything the caller can reach through the
+// result is therefore inside the root it will be joined to, which is what makes
+// a traversal attempt a rejection instead of a containment question.
+func RelPath(rel string) (string, bool) {
+	if rel == "" || strings.ContainsRune(rel, 0) {
+		return "", false
+	}
+	// The separator of a foreign filesystem is refused in its own form, before
+	// normalization would turn it into a legal-looking separator.
+	if strings.Contains(rel, `\`) {
+		return "", false
+	}
+	normalized := NormalizeToPOSIX(rel)
+	if strings.HasPrefix(normalized, "/") {
+		return "", false
+	}
+	// A drive- or device-prefixed path is absolute wherever it is read, so it
+	// is never a relative one.
+	if isWindowsDrivePath(normalized) {
+		return "", false
+	}
+	segments := strings.Split(normalized, "/")
+	for _, seg := range segments {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", false
+		}
+	}
+	cleaned := path.Join(segments...)
+	if cleaned == "" || cleaned == "." || strings.HasPrefix(cleaned, "/") {
+		return "", false
+	}
+	return cleaned, true
+}
+
+// JoinRel resolves a validated relative path against a root. The caller must
+// have validated the relative path with RelPath; this joins in the persisted
+// POSIX form so the result matches the paths the scanner stores.
+func JoinRel(rootPath, relPath string) string {
+	return path.Join(NormalizeToPOSIX(rootPath), relPath)
+}
+
 // CleanRootPath normalizes a library root for storage: backslashes become
 // forward slashes, `.`/`..` elements and repeated separators are collapsed,
 // and root forms (`/`, `C:/`, `//server/share`) keep their trailing structure.
@@ -137,8 +197,7 @@ func CleanRootPath(p string) string {
 // the host OS, so `C:/Music` and `c:/music` collide wherever the backend runs.
 func RootPathKey(p string) string {
 	cleaned := CleanRootPath(p)
-	normalized := NormalizeToPOSIX(p)
-	if IsWindowsUNCPath(p) || isWindowsDrivePath(normalized) || strings.HasPrefix(normalized, "//?/") {
+	if IsWindowsCaseInsensitivePath(p) {
 		return strings.ToLower(cleaned)
 	}
 	return cleaned

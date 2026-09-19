@@ -15,16 +15,14 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 
 	// albumA holds a wav+mp3 pair (one matched component), albumB a lone wav
 	// (one unmatched component). Parent directories are required for grouping.
-	f.insertDirEntry("/music/albumA")
-	f.insertDirEntry("/music/albumA/wav")
-	f.insertDirEntry("/music/albumA/mp3")
+	f.insertNestedDir("/music/albumA/wav")
+	f.insertNestedDir("/music/albumA/mp3")
 	f.insertAudioEntry("/music/albumA/wav/test1.wav", "/music/albumA", 1024, 1000)
 	f.insertAudioEntry("/music/albumA/mp3/test1.mp3", "/music/albumA", 2048, 1000)
-	f.insertDirEntry("/music/albumB")
-	f.insertDirEntry("/music/albumB/wav")
+	f.insertNestedDir("/music/albumB/wav")
 	f.insertAudioEntry("/music/albumB/wav/track.wav", "/music/albumB", 4096, 1000)
 
-	ws := f.createWorkset("双专辑", ids...)
+	ws := f.createCurrent("双专辑", ids...)
 	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
 	if gen.Status != "completed" || gen.RevisionID == "" {
 		t.Fatalf("generation did not complete: %+v", gen)
@@ -79,8 +77,9 @@ func TestRevisionComponentRootOwnership(t *testing.T) {
 	}
 }
 
-// insertDirEntry inserts a directory row for the planner's component grouping.
-func (f *fixture) insertDirEntry(path string) {
+// insertNestedDir inserts a directory row for the planner's component
+// grouping.
+func (f *fixture) insertNestedDir(path string) {
 	f.t.Helper()
 	now := time.Now().Format(timeFmt)
 	f.exec(`

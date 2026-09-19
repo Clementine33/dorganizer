@@ -13,7 +13,7 @@ import (
 func TestDraftSaveAdvancesOperationVersion(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("版本", ids...)
+	ws := f.createCurrent("版本", ids...)
 
 	saved := f.saveDraft(ws.WorksetID, draftDoc(), ws.Operations[0].Version)
 	if saved.Version != ws.Operations[0].Version+1 {
@@ -52,7 +52,7 @@ func TestDraftSaveAdvancesOperationVersion(t *testing.T) {
 func TestDraftSaveAllowsIncompleteButGenerationRejects(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("不完整", ids...)
+	ws := f.createCurrent("不完整", ids...)
 
 	doc := draftDoc()
 	doc.ClassifierTags = []string{} // no classifier tag: saveable, not plannable
@@ -79,7 +79,7 @@ func TestDraftSaveAllowsIncompleteButGenerationRejects(t *testing.T) {
 func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("成员校验", ids...)
+	ws := f.createCurrent("成员校验", ids...)
 	version := ws.Operations[0].Version
 
 	unknown := draftDoc()
@@ -131,7 +131,7 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("字段校验", ids...)
+	ws := f.createCurrent("字段校验", ids...)
 	version := ws.Operations[0].Version
 
 	badMode := draftDoc()
@@ -182,7 +182,7 @@ func TestDraftEditRejectedWhileGenerating(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
 	f.insertAudioEntry("/music/albumA/01.mp3", "/music/albumA", 1024, 1000)
-	ws := f.createWorkset("生成中", ids...)
+	ws := f.createCurrent("生成中", ids...)
 	version := f.operation(ws.WorksetID).Version
 
 	_, err := f.svc.StartGeneration(

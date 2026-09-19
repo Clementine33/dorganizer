@@ -27,6 +27,9 @@ type fixture struct {
 	ctx  context.Context
 
 	startOnce sync.Once
+	// placeholders are the fixture's own audio rows, removed once a record is
+	// created from them.
+	placeholders []string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -54,8 +57,16 @@ func newFixtureWithScan(t *testing.T, scan worksetusecase.FolderScan) *fixture {
 		repo: repo,
 		svc: worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 			tasksconversion.New(tmp),
-		}, scan),
+		}, scan, nil),
 		ctx: context.Background(),
+	}
+}
+
+// queryInt reads one integer from the fixture's database.
+func (f *fixture) queryInt(dest *int, query string, args ...any) {
+	f.t.Helper()
+	if err := f.repo.DB().QueryRow(query, args...).Scan(dest); err != nil {
+		f.t.Fatalf("query %q: %v", query, err)
 	}
 }
 
@@ -75,13 +86,73 @@ func (f *fixture) insertLibrary(id, root string) {
 	`, id, id, root, root, now, now)
 }
 
-func (f *fixture) insertFolder(libID, id, path, rel, name string) {
+// insertDir seeds one directory of the scanned inventory. A member directory
+// exists in the inventory the same way a scan would leave it: the directory
+// row, and at least one audio file beneath it.
+//
+// A placeholder audio row is remembered rather than left behind: a record can
+// only be created from a directory the inventory knows to hold audio, and the
+// tests that assert on a plan's contents want the inventory they built
+// themselves. clearPlaceholders removes them once the record exists.
+func (f *fixture) insertDir(root, rel string, withAudio bool) {
+	f.t.Helper()
+	abs := root + "/" + rel
+	f.insertDirEntry(abs, root, rel)
+	if withAudio {
+		placeholder := abs + "/__member__.flac"
+		f.insertAudioEntry(placeholder, root, 1024, 0)
+		f.placeholders = append(f.placeholders, placeholder)
+	}
+}
+
+// ensurePlaceholders restores the fixture's placeholder audio rows, which a
+// later creation in the same test needs again.
+func (f *fixture) ensurePlaceholders() {
+	f.t.Helper()
+	for _, path := range f.placeholders {
+		f.exec(`
+			INSERT OR IGNORE INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format)
+			VALUES (?, ?, ?, '__member__.flac', 0, 1024, 0, 'flac')
+		`, path, f.rootOf(path), f.parentOf(path))
+	}
+}
+
+// clearPlaceholders drops the fixture's own placeholder audio rows, so the
+// inventory that remains is exactly what the test wrote.
+func (f *fixture) clearPlaceholders() {
+	f.t.Helper()
+	for _, path := range f.placeholders {
+		f.exec("DELETE FROM entries WHERE path = ?", path)
+	}
+}
+
+// rootOf is the library root a placeholder path belongs to.
+func (f *fixture) rootOf(path string) string {
+	for _, root := range []string{"/music", "/music2"} {
+		if len(path) > len(root) && path[:len(root)+1] == root+"/" {
+			return root
+		}
+	}
+	return "/music"
+}
+
+// parentOf is the directory a placeholder path sits in.
+func (f *fixture) parentOf(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			return path[:i]
+		}
+	}
+	return path
+}
+
+func (f *fixture) insertDirEntry(abs, root, name string) {
 	f.t.Helper()
 	now := time.Now().Format(timeFmt)
 	f.exec(`
-		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-	`, id, libID, path, name, rel, now, now)
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 1, 0, 0, '', ?, ?)
+	`, abs, root, root, name, now, now)
 }
 
 func (f *fixture) insertAudioEntry(path, root string, size, mtime int64) {
@@ -102,30 +173,93 @@ func (f *fixture) insertNonAudioEntry(path, root string, size, mtime int64) {
 	`, path, root, filepath.Dir(path), filepath.Base(path), size, mtime, now, now)
 }
 
-// standardLibrary creates one library with the given folders and returns the
-// folder ids in order.
+// standardLibrary creates one library with the given member directories,
+// seeded into the scanned inventory with audio, and returns their
+// library-relative paths in order.
 func (f *fixture) standardLibrary(folderNames ...string) []string {
 	f.t.Helper()
 	f.insertLibrary("lib-1", "/music")
-	ids := make([]string, 0, len(folderNames))
-	for i, name := range folderNames {
-		id := "f-" + name
-		f.insertFolder("lib-1", id, "/music/"+name, name, name)
-		ids = append(ids, id)
-		_ = i
+	rels := make([]string, 0, len(folderNames))
+	for _, name := range folderNames {
+		f.insertDir("/music", name, true)
+		rels = append(rels, name)
 	}
-	return ids
+	return rels
 }
 
-func (f *fixture) createWorkset(title string, folderIDs ...string) *worksetusecase.WorksetView {
+// createCurrent creates the library's current record for the conversion
+// operation and returns its view.
+func (f *fixture) createCurrent(title string, relPaths ...string) *worksetusecase.WorksetView {
 	f.t.Helper()
-	res, err := f.svc.CreateWorkset(f.ctx, worksetusecase.CreateRequest{
-		LibraryID: "lib-1", Title: title, FolderIDs: folderIDs,
+	return f.createCurrentFor("lib-1", title, relPaths...)
+}
+
+// createCurrentFor is createCurrent for a named library, so a test can hold
+// records of two libraries at once.
+func (f *fixture) createCurrentFor(libraryID, title string, relPaths ...string) *worksetusecase.WorksetView {
+	f.t.Helper()
+	f.ensurePlaceholders()
+	view, err := f.svc.CreateCurrentWorkset(f.ctx, worksetusecase.CreateCurrentRequest{
+		LibraryID:         libraryID,
+		OperationType:     worksetusecase.OperationTypeConversion,
+		Title:             title,
+		FolderPaths:       relPaths,
+		ExpectedCurrentID: f.currentID(libraryID),
+		IdempotencyKey:    "create-" + title,
 	})
 	if err != nil {
-		f.t.Fatalf("CreateWorkset: %v", err)
+		f.t.Fatalf("CreateCurrentWorkset: %v", err)
 	}
-	return res.Workset
+	f.clearPlaceholders()
+	return view.Workset
+}
+
+// createCurrentOperation creates a record for the given operation type, so a
+// test can drive the generic seam with another task.
+func (f *fixture) createCurrentOperation(
+	libraryID, operationType string,
+	relPaths ...string,
+) *worksetusecase.WorksetView {
+	f.t.Helper()
+	f.ensurePlaceholders()
+	view, err := f.svc.CreateCurrentWorkset(f.ctx, worksetusecase.CreateCurrentRequest{
+		LibraryID:         libraryID,
+		OperationType:     operationType,
+		FolderPaths:       relPaths,
+		ExpectedCurrentID: f.currentIDFor(libraryID, operationType),
+		IdempotencyKey:    "create-" + operationType,
+	})
+	if err != nil {
+		f.t.Fatalf("CreateCurrentWorkset(%s): %v", operationType, err)
+	}
+	f.clearPlaceholders()
+	return view.Workset
+}
+
+// currentIDFor is the current record id of one (library, operation) pair.
+func (f *fixture) currentIDFor(libraryID, operationType string) string {
+	f.t.Helper()
+	view, err := f.svc.GetCurrentWorkset(f.ctx, libraryID, operationType)
+	if err != nil {
+		f.t.Fatalf("GetCurrentWorkset(%s): %v", operationType, err)
+	}
+	if view == nil {
+		return ""
+	}
+	return view.WorksetID
+}
+
+// currentID is the id of the library's current record, "" when it has none.
+func (f *fixture) currentID(libraryID string) string {
+	f.t.Helper()
+	view, err := f.svc.GetCurrentWorkset(f.ctx, libraryID, worksetusecase.OperationTypeConversion)
+	if err != nil {
+		f.t.Fatalf("GetCurrentWorkset: %v", err)
+	}
+	if view == nil {
+		return ""
+	}
+	return view.WorksetID
 }
 
 // mustDraft parses the task's opaque draft payload for assertions.

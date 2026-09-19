@@ -2,21 +2,17 @@ package sqlite
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
-
-	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
 // timeFormat is the format used for storing timestamps in SQLite.
@@ -84,6 +80,17 @@ type Repository struct {
 	BitrateWriteMu sync.Mutex
 }
 
+// schemaVersion is the on-disk schema generation this build reads and writes.
+// The marker row in schema_meta is what makes an older database recognisable:
+// a database without it (or with another version) is refused at open time, and
+// neither migrated nor cleared (ADR 0007 §7, spec D2).
+const schemaVersion = "2"
+
+// ErrIncompatibleDatabase marks a database this build must not open: it was
+// created by a different schema generation, so the operator has to point
+// ONSEI_DATA_DIR at a new directory.
+var ErrIncompatibleDatabase = errors.New("incompatible database")
+
 func NewRepository(dbPath string) (*Repository, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -106,9 +113,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, err
 	}
 
-	// Pre-task-seam databases are reset before the current schema is created:
-	// the whole plan/revision/execution domain is intermediate state.
-	if err := resetLegacyPlanSchema(db); err != nil {
+	if err := checkSchemaCompatibility(db, dbPath); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -118,276 +123,70 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, err
 	}
 
-	if err := migrateLibraryRootPathKeys(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if err := migrateWorksetSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if err := migrateRetireStandalonePlanSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
 	return &Repository{db: db}, nil
 }
 
-// migrateRetireStandalonePlanSchema drops the tables of the retired standalone
-// plan-execute flow. Fresh databases never create them; legacy databases drop
-// them here so no stale rows or foreign keys survive the retirement.
-func migrateRetireStandalonePlanSchema(db *sql.DB) error {
-	for _, table := range []string{
-		"execute_sessions",
-		"plan_items",
-		"plan_errors",
-		"plan_successful_folders",
-		"error_events",
-	} {
-		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-			return fmt.Errorf("retire standalone plan schema: drop %s: %w", table, err)
-		}
-	}
-	return nil
-}
-
-// tableHasColumn reports whether a column exists in a table.
-func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, ctype string
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
-}
-
-// migrateLibraryRootPathKeys adds libraries.root_path_key to pre-key schemas,
-// backfills it from the canonical root identity, and then enforces uniqueness.
-// If existing rows canonicalize to the same key (e.g. `/music` and `/music/.`,
-// or `C:/Music` and `c:/music`), the migration fails with an explicit
-// diagnostic naming the conflicting libraries instead of silently merging or
-// dropping data.
-func migrateLibraryRootPathKeys(db *sql.DB) error {
-	if _, err := db.Exec("ALTER TABLE libraries ADD COLUMN root_path_key TEXT NOT NULL DEFAULT ''"); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			return err
-		}
-	}
-
-	rows, err := db.Query("SELECT id, root_path FROM libraries")
+// checkSchemaCompatibility refuses to open a database that was not created by
+// this schema generation. An empty file is a fresh database and passes; a file
+// with tables but no marker, a missing marker row, or a different version is
+// reported with the path and the way out (a new data directory), never by
+// rewriting or emptying what is there.
+func checkSchemaCompatibility(db *sql.DB, dbPath string) error {
+	tables, err := userTables(db)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	type libRow struct{ id, root string }
-	var libs []libRow
-	for rows.Next() {
-		var l libRow
-		if err := rows.Scan(&l.id, &l.root); err != nil {
-			return err
-		}
-		libs = append(libs, l)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	seen := make(map[string]string, len(libs)) // key -> first library id
-	for _, l := range libs {
-		key := pathnorm.RootPathKey(l.root)
-		if first, ok := seen[key]; ok {
-			return fmt.Errorf(
-				"library root canonicalization collision: libraries %q (%q) and %q (%q) resolve to the same root identity %q; resolve the duplicate libraries before opening this database",
-				first,
-				l.root,
-				l.id,
-				l.root,
-				key,
-			)
-		}
-		seen[key] = l.id
-		if _, err := db.Exec("UPDATE libraries SET root_path_key = ? WHERE id = ?", key, l.id); err != nil {
-			return err
-		}
-	}
-
-	if _, err := db.Exec(
-		"CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key)",
-	); err != nil {
-		return err
-	}
-	return nil
-}
-
-// resetLegacyPlanSchema removes every pre-task-seam revision and execution
-// state and drops the legacy plan-domain tables. Compatibility is declined
-// (rapid-iteration phase): the whole plan/revision/execution domain is
-// intermediate state, while libraries, entries, scans, worksets, members,
-// operations, drafts and policy slots are preserved. It runs before
-// initSchema, which then recreates the current shapes.
-func resetLegacyPlanSchema(db *sql.DB) error {
-	hasCurrent, err := tableHasColumn(db, "plans", "task_schema_version")
-	if err != nil {
-		return err
-	}
-	if hasCurrent {
+	if len(tables) == 0 {
 		return nil
 	}
-	// Children first: drops stay safe with foreign keys enabled. Legacy and
-	// current table names are both listed so either vintage converges.
-	for _, table := range []string{
-		"plan_executions",
-		"plan_generations",
-		"workset_operation_confirmations",
-		"workset_operation_revisions",
-		"conversion_components",
-		"plan_components",
-		"conversion_steps",
-		"plan_workflow_steps",
-		"plan_roots",
-		"plans",
-	} {
-		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-			return fmt.Errorf("reset legacy plan schema: drop %s: %w", table, err)
-		}
+	if _, ok := tables["schema_meta"]; !ok {
+		return fmt.Errorf(
+			"%w: %s holds %d tables but no schema marker, so it was created by an older version; point ONSEI_DATA_DIR at a new directory instead (this build does not migrate and never clears existing data)",
+			ErrIncompatibleDatabase,
+			dbPath,
+			len(tables),
+		)
 	}
-	// Operations survive the reset; their revision pointers must not dangle.
-	if has, err := tableHasColumn(db, "workset_operations", "current_revision_id"); err != nil {
-		return err
-	} else if has {
-		if _, err := db.Exec("UPDATE workset_operations SET current_revision_id = NULL"); err != nil {
-			return fmt.Errorf("reset legacy plan schema: clear current revisions: %w", err)
+	var version string
+	if queryErr := db.QueryRow(`SELECT value FROM schema_meta WHERE key = 'schema_version'`).
+		Scan(&version); queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fmt.Errorf(
+				"%w: %s has no schema_version row; point ONSEI_DATA_DIR at a new directory instead",
+				ErrIncompatibleDatabase,
+				dbPath,
+			)
 		}
+		return queryErr
+	}
+	if version != schemaVersion {
+		return fmt.Errorf(
+			"%w: %s is schema version %q and this build reads %q; point ONSEI_DATA_DIR at a new directory instead",
+			ErrIncompatibleDatabase,
+			dbPath,
+			version,
+			schemaVersion,
+		)
 	}
 	return nil
 }
 
-// migrateWorksetSchema converges databases created before the operation model
-// onto the columns the current code reads. Tables themselves come from
-// initSchema's CREATE IF NOT EXISTS; this only adds columns that a legacy
-// database cannot have. Retired pre-operation workset tables (workset_drafts,
-// workset_revisions, workset_confirmations) are left untouched and unread:
-// ADR 0004 requires no legacy-data migration and forbids deleting user data.
-func migrateWorksetSchema(db *sql.DB) error {
-	if _, err := db.Exec("ALTER TABLE plans ADD COLUMN workset_id TEXT NOT NULL DEFAULT ''"); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			return err
-		}
-	}
-	if err := migrateWorksetMemberIDs(db); err != nil {
-		return err
-	}
-	if err := addColumn(db, "plan_generations", "operation_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	for _, decl := range []string{
-		"root_status TEXT NOT NULL DEFAULT 'ok'",
-		"root_error_code TEXT NOT NULL DEFAULT ''",
-		"root_error_message TEXT NOT NULL DEFAULT ''",
-	} {
-		if _, err := db.Exec("ALTER TABLE plan_roots ADD COLUMN " + decl); err != nil {
-			if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// migrateWorksetMemberIDs adds workset_members.member_id and backfills it
-// once for pre-identity rows in member_index order. The backfill is
-// idempotent: rows that already carry a member_id are never regenerated, so
-// repeated opens, restarts, and member reorders keep identities stable. The
-// unique index is created only after the backfill so legacy duplicate-free
-// rows pass.
-func migrateWorksetMemberIDs(db *sql.DB) error {
-	if err := addColumn(db, "workset_members", "member_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	rows, err := db.Query(`
-		SELECT workset_id, member_index FROM workset_members
-		WHERE member_id = '' ORDER BY workset_id, member_index
-	`)
+// userTables lists the application tables of the database.
+func userTables(db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
-		return fmt.Errorf("scan members without member_id: %w", err)
+		return nil, err
 	}
-	type key struct {
-		worksetID string
-		index     int
-	}
-	var pending []key
+	defer rows.Close()
+	out := map[string]struct{}{}
 	for rows.Next() {
-		var k key
-		if err := rows.Scan(&k.worksetID, &k.index); err != nil {
-			rows.Close()
-			return err
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
-		pending = append(pending, k)
+		out[name] = struct{}{}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-
-	if len(pending) > 0 {
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		for _, k := range pending {
-			if _, err := tx.Exec(
-				"UPDATE workset_members SET member_id = ? WHERE workset_id = ? AND member_index = ?",
-				"m-"+newMigrationToken(), k.worksetID, k.index,
-			); err != nil {
-				return fmt.Errorf("backfill member_id: %w", err)
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit member_id backfill: %w", err)
-		}
-	}
-	const memberIDIndex = `CREATE UNIQUE INDEX IF NOT EXISTS idx_workset_members_id ON workset_members(workset_id, member_id)`
-	if _, err := db.Exec(memberIDIndex); err != nil {
-		return fmt.Errorf("create member_id unique index: %w", err)
-	}
-	return nil
-}
-
-// addColumn adds a column when absent, tolerating the duplicate-column error
-// on already-migrated databases.
-func addColumn(db *sql.DB, table, column, decl string) error {
-	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			return err
-		}
-	}
-	return nil
-}
-
-// newMigrationToken mints one opaque identity token for a backfilled row.
-func newMigrationToken() string {
-	var rnd [4]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 10)
-	}
-	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
+	return out, rows.Err()
 }
 
 // CanonicalJSONHash hashes JSON canonically: objects are recursively
@@ -491,11 +290,20 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     finished_at TEXT
 );
 
--- Persisted plans: one immutable revision snapshot of one workset operation.
--- Everything task-specific is opaque here: task_kind names the Task that owns
--- the payload and task_schema_version is that payload's schema version. The
--- legacy standalone plan columns (plan_type, slim_mode) are gone, and
--- pre-task-seam databases are reset by resetLegacyPlanSchema.
+-- On-disk schema marker. A database without it (or with another version) was
+-- created by a different generation and is refused at open time rather than
+-- migrated or reset (ADR 0007 §7).
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+
+-- Persisted plans: one immutable snapshot of the current plan of one
+-- processing record. Everything task-specific is opaque here: task_kind names
+-- the Task that owns the payload and task_schema_version is that payload's
+-- schema version. Only the current plan of a record is kept: publishing a new
+-- one deletes the plan it replaced and that plan's execution rows in the same
+-- transaction.
 CREATE TABLE IF NOT EXISTS plans (
     plan_id TEXT PRIMARY KEY,
     root_path TEXT NOT NULL,
@@ -586,54 +394,47 @@ CREATE TABLE IF NOT EXISTS libraries (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path ON libraries(root_path);
--- idx_libraries_root_path_key is created in migrateLibraryRootPathKeys after
--- the column exists on both new and legacy schemas.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_libraries_root_path_key ON libraries(root_path_key);
 
--- Library folders derived from scanned entries
-CREATE TABLE IF NOT EXISTS library_folders (
-    id TEXT PRIMARY KEY,
-    library_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    name TEXT NOT NULL DEFAULT '',
-    relative_path TEXT NOT NULL DEFAULT '',
-    audio_file_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_lib_path ON library_folders(library_id, path);
-
--- Worksets: long-lived aggregates owned by a library (nullable once the
--- library is deleted). title duplicates are allowed. version is the metadata
--- concurrency counter (rename only); drafts and generations
+-- Worksets: the current processing record of one (library, operation). At
+-- most one row per pair — the unique index below is the storage-level
+-- guarantee, not an application check. library_id is only NULL for a record
+-- whose library row vanished outside the delete path; the delete path removes
+-- the record instead of orphaning it. title duplicates are allowed. version is
+-- the metadata concurrency counter (rename only); drafts and generations
 -- advance their operation's own version (workset_operations.version).
--- creation_idem_key enables replay of workset creation for up to 30 days
--- (expired keys are cleared, never the row).
+-- creation_idem_key enables replay of a creation request for up to 30 days;
+-- creation_request_hash is the canonical hash of the request that owns the
+-- key, so a replay with different content is a conflict, not a second record.
 CREATE TABLE IF NOT EXISTS worksets (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
     library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL,
+    operation_type TEXT NOT NULL DEFAULT '',
     root_path TEXT NOT NULL DEFAULT '',
     root_path_key TEXT NOT NULL DEFAULT '',
     version INTEGER NOT NULL DEFAULT 1,
     creation_idem_key TEXT,
+    creation_request_hash TEXT NOT NULL DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worksets_idem ON worksets(creation_idem_key) WHERE creation_idem_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worksets_library_operation
+    ON worksets(library_id, operation_type) WHERE library_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_worksets_library_updated ON worksets(library_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_worksets_updated ON worksets(updated_at);
 
--- Ordered album-folder membership. rel_path (normalized library-relative
--- path) is the durable member identity; folder_id/path/name are display
--- snapshots that may churn across rescans.
+-- Ordered member directories. rel_path (normalized library-relative path) is
+-- the durable member identity — the workbench addresses a member by it, and a
+-- rescan cannot change it. folder_path/folder_name are display snapshots of
+-- the same directory, derived from the root and the relative path.
 CREATE TABLE IF NOT EXISTS workset_members (
     workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
+    member_id TEXT NOT NULL DEFAULT '',
     member_index INTEGER NOT NULL,
     rel_path TEXT NOT NULL,
-    folder_id TEXT NOT NULL DEFAULT '',
     folder_path TEXT NOT NULL DEFAULT '',
     folder_name TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (workset_id, member_index),
@@ -824,7 +625,15 @@ func initSchema(db *sql.DB) error {
 	}
 	// Fixed three policy slots exist from initialization (storage-level
 	// cardinality invariant; there is no insert/delete API).
-	_, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`)
+	if _, err := db.Exec(`INSERT OR IGNORE INTO policy_slots (slot_index) VALUES (1), (2), (3)`); err != nil {
+		return err
+	}
+	// The marker is written once, when the database is created. An existing
+	// marker is never rewritten: a different version is refused before this
+	// point, never upgraded in place.
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '` + schemaVersion + `')`,
+	)
 	return err
 }
 

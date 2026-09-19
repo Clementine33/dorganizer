@@ -147,36 +147,35 @@ func (stubTask) ReviewRevision(in worksetusecase.RevisionFacts) (worksetusecase.
 	return out, nil
 }
 
-// TestCreateWorksetMaterializesRegisteredTasks covers the registry contract:
-// creating a workset writes one operation plus its seeded draft for every
-// registered task, in registration order.
-func TestCreateWorksetMaterializesRegisteredTasks(t *testing.T) {
+// TestCreateCurrentMaterializesOnlyTheRequestedTask covers the registry
+// contract: creating a record writes the operation that was requested and its
+// seeded draft, and never a task nobody asked for (ADR 0007 §1).
+func TestCreateCurrentMaterializesOnlyTheRequestedTask(t *testing.T) {
 	f := newFixture(t)
 	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{
 		stubTask{kind: worksetusecase.OperationTypeConversion, seed: `{"schema_version":1,"classifier_tags":[]}`},
 		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`},
 	})
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("多任务", ids...)
+	ws := f.createCurrentOperation("lib-1", "rename", ids...)
 
-	if len(ws.Operations) != 2 {
-		t.Fatalf("operations = %+v, want one per registered task", ws.Operations)
+	if len(ws.Operations) != 1 || ws.Operations[0].OperationType != "rename" {
+		t.Fatalf("operations = %+v, want only the requested one", ws.Operations)
 	}
-	if ws.Operations[0].OperationType != worksetusecase.OperationTypeConversion ||
-		ws.Operations[1].OperationType != "rename" {
-		t.Fatalf("operation order = %+v", ws.Operations)
+	draft, err := f.repo.GetOperationDraft(ws.WorksetID, "rename")
+	if err != nil || draft == nil {
+		t.Fatalf("draft for rename: %+v err=%v", draft, err)
 	}
-	for _, want := range []struct{ kind, seed string }{
-		{worksetusecase.OperationTypeConversion, `{"schema_version":1,"classifier_tags":[]}`},
-		{"rename", `{"schema_version":1,"template":"{title}"}`},
-	} {
-		draft, err := f.repo.GetOperationDraft(ws.WorksetID, want.kind)
-		if err != nil || draft == nil {
-			t.Fatalf("draft for %s: %+v err=%v", want.kind, draft, err)
-		}
-		if draft.DraftJSON != want.seed || draft.DraftHash != "hash-"+want.kind {
-			t.Fatalf("seeded draft for %s = %+v", want.kind, draft)
-		}
+	if draft.DraftJSON != `{"schema_version":1,"template":"{title}"}` || draft.DraftHash != "hash-rename" {
+		t.Fatalf("seeded draft = %+v", draft)
+	}
+	if _, convErr := f.repo.GetOperation(ws.WorksetID, worksetusecase.OperationTypeConversion); convErr == nil {
+		t.Fatal("an operation nobody requested must not be materialized")
+	}
+	// The conversion record of the same library is a different record.
+	conv := f.createCurrent("转换", ids...)
+	if conv.WorksetID == ws.WorksetID {
+		t.Fatal("operations are separate records")
 	}
 }
 
@@ -186,7 +185,7 @@ func TestCreateWorksetMaterializesRegisteredTasks(t *testing.T) {
 func TestUnknownTaskKindHasNoAddressableState(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("未注册", ids...)
+	ws := f.createCurrent("未注册", ids...)
 
 	if _, err := f.svc.GetDraft(f.ctx, ws.WorksetID, "rename"); err == nil {
 		t.Fatal("an unregistered operation type must not resolve")
@@ -276,7 +275,7 @@ func TestSecondTaskRunsTheFullChain(t *testing.T) {
 		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`},
 	})
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("第二任务", ids...)
+	ws := f.createCurrentOperation("lib-1", "rename", ids...)
 
 	f.saveRenameDraft(ws.WorksetID)
 	op := f.operationFor(ws.WorksetID, "rename")
@@ -319,7 +318,7 @@ func TestSecondTaskMovedInputRefusesExecute(t *testing.T) {
 		stubTask{kind: "rename", seed: `{"schema_version":1,"template":"{title}"}`},
 	})
 	ids := f.standardLibrary("albumA")
-	ws := f.createWorkset("拒绝", ids...)
+	ws := f.createCurrentOperation("lib-1", "rename", ids...)
 
 	f.saveRenameDraft(ws.WorksetID)
 	op := f.operationFor(ws.WorksetID, "rename")

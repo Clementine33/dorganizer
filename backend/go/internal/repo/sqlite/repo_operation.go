@@ -258,58 +258,6 @@ func (r *Repository) GetOperationRevision(worksetID, operationType, planID strin
 	return &rev, nil
 }
 
-// ListOperationRevisions returns revision associations newest-first (keyset on
-// revision_index, at most limit rows).
-func (r *Repository) ListOperationRevisions(
-	worksetID, operationType string,
-	beforeIndex int,
-	limit int,
-) ([]*OperationRevision, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	query := `
-		SELECT plan_id, workset_id, operation_type, revision_index, draft_hash, member_hash,
-		       operation_version, excluded_scope, draft_snapshot, created_at
-		FROM workset_operation_revisions WHERE workset_id = ? AND operation_type = ?`
-	args := []any{worksetID, operationType}
-	if beforeIndex > 0 {
-		query += ` AND revision_index < ?`
-		args = append(args, beforeIndex)
-	}
-	query += ` ORDER BY revision_index DESC LIMIT ?`
-	args = append(args, limit)
-
-	rows, err := r.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*OperationRevision
-	for rows.Next() {
-		var rev OperationRevision
-		var createdAt string
-		if err := rows.Scan(
-			&rev.PlanID,
-			&rev.WorksetID,
-			&rev.OperationType,
-			&rev.RevisionIndex,
-			&rev.DraftHash,
-			&rev.MemberHash,
-			&rev.OperationVersion,
-			&rev.ExcludedScope,
-			&rev.DraftSnapshot,
-			&createdAt,
-		); err != nil {
-			return nil, err
-		}
-		rev.CreatedAt = parseTimestamp(createdAt)
-		out = append(out, &rev)
-	}
-	return out, rows.Err()
-}
-
 // OperationRevisionPersist bundles the atomic completion payload: the plan
 // plan snapshot inserts, the revision association, the operation's
 // current-revision promotion and the generation completion. DraftHash and
@@ -344,6 +292,12 @@ type OperationRevisionPersist struct {
 // operation), the operation's current-revision promotion with the operation
 // version bump, and the generation terminal state. A partial revision is never
 // visible.
+//
+// Publishing the new plan also retires the plan it replaced: the old plan, its
+// roots, units and revision row, and every execution session recorded for it
+// are deleted in the same transaction. A record keeps exactly one plan — the
+// current one — so a failed, canceled or interrupted generation leaves the
+// previous plan untouched and a successful one leaves nothing behind.
 func (r *Repository) PersistOperationRevision(
 	genID, worksetID, operationType string,
 	now time.Time,
@@ -355,6 +309,15 @@ func (r *Repository) PersistOperationRevision(
 	}
 	defer tx.Rollback()
 
+	var replacedPlanID sql.NullString
+	if readErr := tx.QueryRow(
+		"SELECT current_revision_id FROM workset_operations WHERE workset_id = ? AND operation_type = ?",
+		worksetID,
+		operationType,
+	).Scan(&replacedPlanID); readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+		return fmt.Errorf("read current revision: %w", readErr)
+	}
+
 	taskKind := operationType
 	if insertErr := InsertPlanTx(
 		tx,
@@ -364,6 +327,7 @@ func (r *Repository) PersistOperationRevision(
 		p.RootPath,
 		p.SnapshotToken,
 		p.LibraryID,
+		worksetID,
 		p.Steps,
 		p.Roots,
 		p.Components,
@@ -401,5 +365,24 @@ func (r *Repository) PersistOperationRevision(
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrGenerationNotFound
 	}
+	if replacedPlanID.Valid && replacedPlanID.String != "" && replacedPlanID.String != p.PlanID {
+		if cleanupErr := deletePlanDataTx(tx, replacedPlanID.String); cleanupErr != nil {
+			return cleanupErr
+		}
+	}
 	return tx.Commit()
+}
+
+// deletePlanDataTx removes one retired plan with its payload rows and every
+// execution session recorded for it. Executions are deleted explicitly: their
+// plan_id is a plain column, so a plan delete would leave them behind and they
+// would keep answering requests for a plan that no longer exists.
+func deletePlanDataTx(tx *sql.Tx, planID string) error {
+	if _, err := tx.Exec(`DELETE FROM plan_executions WHERE plan_id = ?`, planID); err != nil {
+		return fmt.Errorf("delete plan executions: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM plans WHERE plan_id = ?`, planID); err != nil {
+		return fmt.Errorf("delete plan: %w", err)
+	}
+	return nil
 }

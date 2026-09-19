@@ -12,12 +12,10 @@ import (
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
-// RecoveryDirName is the in-root recovery folder of the soft-delete
-// The recovery directory name is the legacy convention: soft-removed media is
-// preserved at <recoveryRoot>/Delete/<relative path>. It is the single
-// definition of the folder name; the conversion task reads it to tell real
-// media in their scanned place from temp leftovers.
-const RecoveryDirName = "Delete"
+// RecoveryDirName is the in-root recovery folder of soft deletion: removed
+// media is preserved at <recoveryRoot>/Delete/<relative path>. The name is
+// defined once in pathnorm, so every reader and writer agrees on it.
+const RecoveryDirName = pathnorm.RecoveryDirName
 
 // maxRecoveryNameAttempts bounds unique-name generation below Delete/.
 const maxRecoveryNameAttempts = 100

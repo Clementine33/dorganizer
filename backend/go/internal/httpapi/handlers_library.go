@@ -7,6 +7,20 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
+// library loads the library of the request path.
+func (s *Server) library(w http.ResponseWriter, r *http.Request) (*sqlite.Library, bool) {
+	lib, err := s.deps.Repo.GetLibrary(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
+		return nil, false
+	}
+	return lib, true
+}
+
 func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 	libs, err := s.deps.Repo.ListLibraries()
 	if err != nil {
@@ -96,7 +110,7 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 				w,
 				http.StatusConflict,
 				"LIBRARY_HAS_WORKSETS",
-				"cannot change the library root while worksets are linked; delete the library to orphan its worksets first",
+				"cannot change the library root while it still has a processing record; replace the record's scope or delete the library first",
 			)
 			return
 		}

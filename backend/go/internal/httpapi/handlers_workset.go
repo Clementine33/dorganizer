@@ -10,13 +10,6 @@ import (
 
 // ==================== DTOs ====================
 
-// worksetCreateRequest is the POST /api/v1/worksets payload.
-type worksetCreateRequest struct {
-	LibraryID string   `json:"library_id"`
-	Title     string   `json:"title"`
-	FolderIDs []string `json:"folder_ids"`
-}
-
 // worksetPatchRequest is the PATCH /api/v1/worksets/{id} payload.
 type worksetPatchRequest struct {
 	Title string `json:"title"`
@@ -33,7 +26,6 @@ type libraryRefResponse struct {
 // operation state, not member state.
 type memberResponse struct {
 	MemberID   string `json:"member_id"`
-	FolderID   string `json:"folder_id"`
 	FolderPath string `json:"folder_path"`
 	FolderName string `json:"folder_name"`
 	RelPath    string `json:"rel_path"`
@@ -165,7 +157,6 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 	for _, m := range v.Members {
 		out.Members = append(out.Members, memberResponse{
 			MemberID:   m.MemberID,
-			FolderID:   m.FolderID,
 			FolderPath: m.FolderPath,
 			FolderName: m.FolderName,
 			RelPath:    m.RelPath,
@@ -235,39 +226,6 @@ func streamSessionEvents(
 		}
 		_ = sw.Send("error", map[string]string{"code": "INTERNAL", "message": "streaming failed"})
 	}
-}
-
-// createWorkset handles POST /api/v1/worksets.
-func (s *Server) createWorkset(w http.ResponseWriter, r *http.Request) {
-	svc, err := s.worksetService()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
-		return
-	}
-	var req worksetCreateRequest
-	if decodeErr := decodeJSON(w, r, &req); decodeErr != nil {
-		writeDecodeError(w, decodeErr, "invalid workset payload")
-		return
-	}
-	idemKey := r.Header.Get("Idempotency-Key")
-	res, err := svc.CreateWorkset(r.Context(), worksetusecase.CreateRequest{
-		LibraryID:      req.LibraryID,
-		Title:          req.Title,
-		FolderIDs:      req.FolderIDs,
-		IdempotencyKey: idemKey,
-	})
-	if err != nil {
-		writeWorksetError(w, err)
-		return
-	}
-	status := http.StatusCreated
-	if !res.Created {
-		status = http.StatusOK
-	}
-	writeJSON(w, status, struct {
-		Workset worksetResponse `json:"workset"`
-		Created bool            `json:"created"`
-	}{Workset: toWorksetResponse(res.Workset), Created: res.Created})
 }
 
 // listWorksets handles GET /api/v1/worksets.

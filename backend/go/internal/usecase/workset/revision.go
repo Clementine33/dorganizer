@@ -127,64 +127,6 @@ func revisionCounts(detail *sqlite.PlanDetail, review PlanReview) RevisionCounts
 	}
 }
 
-// ListRevisions returns one page of revision summaries newest-first with a
-// keyset on revision_index plus the next-page cursor.
-func (s *serviceImpl) ListRevisions(
-	ctx context.Context,
-	worksetID, operationType string,
-	beforeIndex, limit int,
-) (*RevisionListResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = DefaultPageLimit
-	}
-	if limit > MaxPageLimit {
-		limit = MaxPageLimit
-	}
-	op, err := s.loadOperation(worksetID, operationType)
-	if err != nil {
-		return nil, err
-	}
-	w, err := s.repo.GetWorkset(worksetID)
-	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load workset", err)
-	}
-	revs, err := s.repo.ListOperationRevisions(worksetID, operationType, beforeIndex, limit)
-	if err != nil {
-		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to list revisions", err)
-	}
-	out := make([]*RevisionSummary, 0, len(revs))
-	for _, r := range revs {
-		detail, derr := s.repo.GetPlanDetail(r.PlanID)
-		if derr != nil {
-			continue // detached plan rows are skipped rather than failing the page
-		}
-		stale, validation := s.validateRevision(operationType, w.LibraryID == "", detail)
-		review, reviewErr := s.revisionReview(operationType, detail)
-		if reviewErr != nil {
-			continue
-		}
-		out = append(out, &RevisionSummary{
-			PlanID:          r.PlanID,
-			RevisionIndex:   r.RevisionIndex,
-			CreatedAt:       r.CreatedAt,
-			Status:          detail.Plan.Status,
-			SummaryReason:   revisionSummaryReason(detail),
-			Counts:          revisionCounts(detail, review),
-			ValidationState: validation,
-			Stale:           stale,
-		})
-	}
-	next := 0
-	if len(revs) > 0 && len(revs) == limit {
-		next = revs[len(revs)-1].RevisionIndex
-	}
-	_ = op
-	return &RevisionListResult{Revisions: out, NextBeforeIndex: next}, nil
-}
-
 // GetRevision returns the immutable nested review detail. Members are resolved
 // from the revision's frozen sparse draft, so a historical revision shows the
 // configuration and inheritance sources it was planned with — never the

@@ -146,16 +146,10 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record the derived direct-child folders, then the scan outcome, and
-	// signal completion.
-	if _, err := s.deps.Repo.ReplaceLibraryFolders(lib.ID, result.RootPath); err != nil {
-		_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "failed", err.Error(), time.Now())
-		_ = sw.Send(
-			"error",
-			scanEventData{Stage: "scan", Code: "INTERNAL", Message: "failed to persist library folders"},
-		)
-		return
-	}
+	// Record the scan outcome and signal completion. The scanned inventory is
+	// the overview's whole input: there is no separate derived folder table to
+	// rebuild, which is why a rescan cannot renumber anything the workbench
+	// navigates by.
 	_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now())
 	_ = sw.Send("completed", scanEventData{
 		Stage:        "scan",

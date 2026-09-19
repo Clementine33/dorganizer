@@ -33,7 +33,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	}
 	svc := worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
 		tasksconversion.New(tmp),
-	}, nil)
+	}, nil, nil)
 	handler := NewServer(Dependencies{
 		Repo:           repo,
 		ConfigDir:      tmp,
@@ -84,10 +84,53 @@ func seedLibrary(t *testing.T, repo *sqlite.Repository) string {
 	return "lib-1"
 }
 
-func seedFolder(t *testing.T, repo *sqlite.Repository, libID string) {
+// seedMember records one library member in the scanned inventory — the
+// directory row and an audio row beneath it — which is what a record's scope
+// is resolved against.
+func seedMember(t *testing.T, repo *sqlite.Repository, rel string) {
 	t.Helper()
-	_, _ = repo.DB().
-		Exec(`INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at) VALUES ('f-a', ?, '/music/albumA', 'albumA', 'albumA', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, libID)
+	_ = rel
+	for _, stmt := range []string{
+		`INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format)
+		 VALUES ('/music/albumA', '/music', '/music', 'albumA', 1, 0, 0, '')`,
+		`INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, format)
+		 VALUES ('/music/albumA/01.flac', '/music', '/music/albumA', '01.flac', 0, 1024, 0, 'flac')`,
+	} {
+		if _, err := repo.DB().Exec(stmt); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+}
+
+// createRecord creates the current conversion record of a library through the
+// API and returns its id, failing the test when the creation is refused.
+func createRecord(t *testing.T, h http.Handler, libID, key string) string {
+	t.Helper()
+	w := reqWithIdempotency(t, h, http.MethodPut, recordsPath(libID), testToken, map[string]any{
+		"folder_paths": []string{"albumA"},
+	}, key)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create record: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		Workset struct {
+			WorksetID string `json:"workset_id"`
+		} `json:"workset"`
+		Created  bool `json:"created"`
+		Recorded int  `json:"recorded"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode record: %v", err)
+	}
+	if !created.Created || created.Workset.WorksetID == "" || created.Recorded != 1 {
+		t.Fatalf("create record resp: %+v", created)
+	}
+	return created.Workset.WorksetID
+}
+
+// recordsPath is the current-record route of one library's conversion.
+func recordsPath(libID string) string {
+	return "/api/v1/libraries/" + libID + "/operations/conversion/current"
 }
 
 // draftDocumentFixture is a complete operation draft document.
@@ -106,15 +149,29 @@ func draftDocumentFixture() map[string]any {
 	}
 }
 
-//nolint:gocyclo,cyclop,funlen // one HTTP lifecycle walk covering every operation route
+//nolint:cyclop,gocognit,gocyclo,funlen // one HTTP lifecycle walk covering every operation route
 func TestWorksetHTTPLifecycle(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	libID := seedLibrary(t, repo)
-	seedFolder(t, repo, libID)
+	seedMember(t, repo, "albumA")
 
-	// POST create.
-	createBody := map[string]any{"library_id": libID, "title": "夏季整理", "folder_ids": []string{"f-a"}}
-	w := req(t, h, http.MethodPost, "/api/v1/worksets", testToken, createBody)
+	// The library has no record yet; the current-record read says so without
+	// making it an error.
+	var none struct {
+		Workset *json.RawMessage `json:"workset"`
+	}
+	empty := req(t, h, http.MethodGet, recordsPath(libID), testToken, nil)
+	if empty.Code != http.StatusOK {
+		t.Fatalf("empty current record status = %d", empty.Code)
+	}
+	if err := json.Unmarshal(empty.Body.Bytes(), &none); err != nil || none.Workset != nil {
+		t.Fatalf("empty current record body = %s (err=%v)", empty.Body.String(), err)
+	}
+
+	// PUT create: the record of this (library, operation) pair, with the scope
+	// it actually recorded.
+	createBody := map[string]any{"folder_paths": []string{"albumA"}}
+	w := reqWithIdempotency(t, h, http.MethodPut, recordsPath(libID), testToken, createBody, "create-http-1")
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body=%s", w.Code, w.Body.String())
 	}
@@ -123,13 +180,44 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 			WorksetID string `json:"workset_id"`
 			Version   int    `json:"version"`
 		} `json:"workset"`
-		Created bool `json:"created"`
+		Created  bool `json:"created"`
+		Recorded int  `json:"recorded"`
+		Skipped  []struct {
+			Path   string `json:"path"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if createResp.Workset.WorksetID == "" || !createResp.Created {
+	if createResp.Workset.WorksetID == "" || !createResp.Created || createResp.Recorded != 1 {
 		t.Fatalf("create resp: %+v", createResp)
+	}
+	// A retried create answers with the same record instead of a second one.
+	replay := reqWithIdempotency(t, h, http.MethodPut, recordsPath(libID), testToken, createBody, "create-http-1")
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, body=%s", replay.Code, replay.Body.String())
+	}
+	var replayResp struct {
+		Workset struct {
+			WorksetID string `json:"workset_id"`
+		} `json:"workset"`
+		Created bool `json:"created"`
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayResp); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if replayResp.Created || replayResp.Workset.WorksetID != createResp.Workset.WorksetID {
+		t.Fatalf("replay resp: %+v", replayResp)
+	}
+	// The current-record read answers the same record.
+	current := req(t, h, http.MethodGet, recordsPath(libID), testToken, nil)
+	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), createResp.Workset.WorksetID) {
+		t.Fatalf("current record = %d %s", current.Code, current.Body.String())
+	}
+	// The creation carries no title: the caller is not asked to name a record.
+	if strings.Contains(w.Body.String(), `"title":""`) {
+		t.Fatalf("a record without a title must still be created with a usable one: %s", w.Body.String())
 	}
 	wsPath := "/api/v1/worksets/" + createResp.Workset.WorksetID
 	opPath := wsPath + "/operations/conversion"
@@ -268,22 +356,14 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 		t.Fatalf("unknown operation = %d, want 404", got.Code)
 	}
 
-	// Cancel the queued session; history stays empty.
+	// Cancel the queued session; a canceled session publishes nothing.
 	if got := req(t, h, http.MethodPost, genPath+"/cancel", testToken, nil); got.Code != http.StatusOK {
 		t.Fatalf("cancel status = %d body=%s", got.Code, got.Body.String())
 	}
-	w = req(t, h, http.MethodGet, opPath+"/revisions", testToken, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("revisions status = %d", w.Code)
-	}
-	var history struct {
-		Revisions []any `json:"revisions"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &history); err != nil {
-		t.Fatalf("decode revisions: %v", err)
-	}
-	if len(history.Revisions) != 0 {
-		t.Fatalf("history after a canceled session = %+v", history.Revisions)
+	// There is no route to a record's revision history: a record keeps the
+	// current plan only, and the old list route is gone (spec R3, I1).
+	if got := req(t, h, http.MethodGet, opPath+"/revisions", testToken, nil); got.Code == http.StatusOK {
+		t.Fatalf("a record's revision history must not be readable: %s", got.Body.String())
 	}
 
 	// Renaming uses the workset metadata version only.
@@ -348,15 +428,9 @@ func reqWithIdempotencyAndIfMatch(
 func TestWorksetAuthRequired(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	seedLibrary(t, repo)
-	seedFolder(t, repo, "lib-1")
-	w := req(
-		t,
-		h,
-		http.MethodPost,
-		"/api/v1/worksets",
-		"",
-		map[string]any{"library_id": "lib-1", "title": "t", "folder_ids": []string{"f-a"}},
-	)
+	seedMember(t, repo, "albumA")
+	w := reqWithIdempotency(t, h, http.MethodPut, recordsPath("lib-1"), "",
+		map[string]any{"folder_paths": []string{"albumA"}}, "create-auth")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth status = %d, want 401", w.Code)
 	}
@@ -368,7 +442,7 @@ func TestWorksetAuthRequired(t *testing.T) {
 func TestPolicySlotsListAndUpdate(t *testing.T) {
 	h, repo := newWorksetServer(t)
 	seedLibrary(t, repo)
-	seedFolder(t, repo, "lib-1")
+	seedMember(t, repo, "albumA")
 
 	w := req(t, h, http.MethodGet, "/api/v1/policy-slots", testToken, nil)
 	if w.Code != http.StatusOK {

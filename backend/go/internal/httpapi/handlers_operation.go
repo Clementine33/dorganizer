@@ -55,14 +55,6 @@ type draftResponse struct {
 	UpdatedAt     string            `json:"updated_at"`
 }
 
-// revisionListResponse is the revision history payload. NextBeforeIndex is the
-// keyset cursor for the next (older) page; 0 means the page reached the oldest
-// revision.
-type revisionListResponse struct {
-	Revisions       []currentRevisionResponse `json:"revisions"`
-	NextBeforeIndex int                       `json:"next_before_index"`
-}
-
 // revisionMemberResponse is one member of a frozen revision: its effective
 // settings plus, per unit, whether they came from the member or the common
 // settings. Equal values with different sources stay distinguishable.
@@ -162,27 +154,6 @@ func (s *Server) putOperationDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toOperationResponse(view))
-}
-
-// listRevisions handles GET /api/v1/worksets/{id}/operations/{type}/revisions.
-func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
-	svc, err := s.worksetService()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
-		return
-	}
-	limit := min(queryInt(r, "limit", 50), 200)
-	before := queryInt(r, "before_index", 0)
-	result, err := svc.ListRevisions(r.Context(), r.PathValue("id"), r.PathValue("type"), before, limit)
-	if err != nil {
-		writeWorksetError(w, err)
-		return
-	}
-	out := make([]currentRevisionResponse, 0, len(result.Revisions))
-	for _, rv := range result.Revisions {
-		out = append(out, *toCurrentRevisionResponse(rv))
-	}
-	writeJSON(w, http.StatusOK, revisionListResponse{Revisions: out, NextBeforeIndex: result.NextBeforeIndex})
 }
 
 // getRevision handles

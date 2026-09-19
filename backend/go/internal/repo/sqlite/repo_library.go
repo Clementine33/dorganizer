@@ -25,17 +25,16 @@ type Library struct {
 	LastScanError  string
 }
 
-// LibraryFolder represents a direct child folder of a library root that
-// contains at least one audio file somewhere beneath it.
-type LibraryFolder struct {
-	ID             string
-	LibraryID      string
+// LibraryDir is one direct child directory of a library root as the workbench
+// overview lists it: identity is the library-relative path (stable across
+// rescans), and the audio count is a status fact — a directory without audio
+// is still listed and still browsable.
+type LibraryDir struct {
 	Path           string
 	Name           string
-	RelativePath   string
+	RelPath        string
 	AudioFileCount int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	FileCount      int
 }
 
 // EntryRow is a row from the entries table used for building folder trees.
@@ -57,8 +56,6 @@ var (
 	ErrLibraryExists = errors.New("library already exists")
 	// ErrLibraryNotFound is returned when a library cannot be found.
 	ErrLibraryNotFound = errors.New("library not found")
-	// ErrLibraryFolderNotFound is returned when a library folder cannot be found.
-	ErrLibraryFolderNotFound = errors.New("library folder not found")
 )
 
 // audioExtCond is a SQL predicate matching file entries whose name has one of
@@ -159,10 +156,12 @@ var ErrLibraryHasWorksets = errors.New("library has worksets")
 var ErrGenerationInProgress = errors.New("generation in progress")
 
 // UpdateLibrary updates a library's name and root path and returns the
-// updated row. Changing the root invalidates the materialized folder list and
-// prior scan state in the same transaction so no stale paths remain attached.
-// A root-path change is rejected with ErrLibraryHasWorksets while any workset
-// is still linked to the library; name edits stay allowed.
+// updated row. Changing the root drops the scanned inventory of the old root
+// and the prior scan state in the same transaction, so no stale paths remain
+// attached and the next scan starts from nothing. A root-path change is
+// rejected with ErrLibraryHasWorksets while a processing record still belongs
+// to the library (L1: a record keeps its root until it is replaced); name
+// edits stay allowed.
 func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) {
 	candidateRoot := pathnorm.CleanRootPath(rootPath)
 	rootPathKey := pathnorm.RootPathKey(candidateRoot)
@@ -210,7 +209,10 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 		return nil, err
 	}
 	if rootChanged {
-		if _, err := tx.Exec("DELETE FROM library_folders WHERE library_id = ?", id); err != nil {
+		// The inventory of the previous root is not the inventory of the new
+		// one: drop it and let the next scan rebuild it, so nothing reads a
+		// stale listing as if it described the new root (L1).
+		if _, err := tx.Exec("DELETE FROM entries WHERE root_path = ?", currentRoot); err != nil {
 			return nil, err
 		}
 	}
@@ -220,14 +222,19 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	return r.GetLibrary(id)
 }
 
-// DeleteLibrary removes a library and orphans its worksets in one transaction.
-// It fails with ErrGenerationInProgress while any owned workset has a queued
-// or running planning session and with ErrExecutionInProgress while any owned
-// workset has a queued or running execution (the client must cancel first), and
-// with ErrLibraryNotFound when the library does not exist. The active-session
-// checks happen inside the write transaction; claim/complete updates serialize
-// on the same SQLite writer, so a delete that commits cannot race a session
-// that would start against the deleted library.
+// DeleteLibrary removes a library together with every processing record it
+// owns, in one transaction: the records' plans, executions, members, drafts and
+// sessions go with them, so no orphaned record survives its library. Media
+// files and the library-level recovery directory on disk are never touched
+// (L1).
+//
+// It fails with ErrGenerationInProgress while a record has a queued or running
+// planning session and with ErrExecutionInProgress while one has a queued or
+// running execution (the client cancels first), and with ErrLibraryNotFound
+// when the library does not exist. The active-session checks happen inside the
+// write transaction: claim/complete updates serialize on the same SQLite
+// writer, so a delete that commits cannot race a session that would start
+// against the deleted library.
 func (r *Repository) DeleteLibrary(id string) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -236,38 +243,64 @@ func (r *Repository) DeleteLibrary(id string) error {
 	defer tx.Rollback()
 
 	var exists int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM libraries WHERE id = ?", id).Scan(&exists); err != nil {
-		return err
+	if countErr := tx.QueryRow("SELECT COUNT(*) FROM libraries WHERE id = ?", id).Scan(&exists); countErr != nil {
+		return countErr
 	}
 	if exists == 0 {
 		return ErrLibraryNotFound
 	}
 
 	var active int
-	if err := tx.QueryRow(`
+	if countErr := tx.QueryRow(`
 		SELECT COUNT(*) FROM plan_generations g
 		JOIN worksets w ON w.id = g.workset_id
 		WHERE w.library_id = ? AND g.status IN ('queued','running')
-	`, id).Scan(&active); err != nil {
-		return err
+	`, id).Scan(&active); countErr != nil {
+		return countErr
 	}
 	if active > 0 {
 		return ErrGenerationInProgress
 	}
 
-	if err := tx.QueryRow(`
+	if countErr := tx.QueryRow(`
 		SELECT COUNT(*) FROM plan_executions e
 		JOIN worksets w ON w.id = e.workset_id
 		WHERE w.library_id = ? AND e.status IN ('queued','running')
-	`, id).Scan(&active); err != nil {
-		return err
+	`, id).Scan(&active); countErr != nil {
+		return countErr
 	}
 	if active > 0 {
 		return ErrExecutionInProgress
 	}
 
-	if _, err := tx.Exec("UPDATE worksets SET library_id = NULL WHERE library_id = ?", id); err != nil {
+	rows, err := tx.Query("SELECT id FROM worksets WHERE library_id = ?", id)
+	if err != nil {
 		return err
+	}
+	var recordIDs []string
+	for rows.Next() {
+		var recordID string
+		if scanErr := rows.Scan(&recordID); scanErr != nil {
+			rows.Close()
+			return scanErr
+		}
+		recordIDs = append(recordIDs, recordID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, recordID := range recordIDs {
+		// Plans are linked by column, not by foreign key, so they are deleted
+		// explicitly; members, operations, drafts and sessions cascade.
+		if _, err := tx.Exec("DELETE FROM plans WHERE workset_id = ?", recordID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM worksets WHERE id = ?", recordID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec("DELETE FROM libraries WHERE id = ?", id); err != nil {
 		return err
@@ -310,157 +343,115 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	return &l, nil
 }
 
-// ==================== Library Folders ====================
+// ==================== Overview listing ====================
 
-// ReplaceLibraryFolders rebuilds the direct-child folder list for a library
-// from the entries table in a single transaction. A folder is kept only if it
-// contains at least one audio file anywhere beneath it. Returns the number of
-// folders written.
-func (r *Repository) ReplaceLibraryFolders(libraryID, rootPath string) (int, error) {
+// ListLibraryDirs returns the direct child directories of a library root that
+// the workbench overview shows: every directory the last scan saw, whether or
+// not it holds audio, with the audio and file counts of its subtree. The
+// library-level recovery directory is not a member and is left out. Order is
+// by path, so the caller sees a stable listing.
+//
+// The listing comes from the scanned inventory rather than from the disk, so
+// it describes exactly the state the rest of the workbench reads, and its
+// identity is the library-relative path, which a rescan cannot change.
+func (r *Repository) ListLibraryDirs(rootPath string) ([]*LibraryDir, error) {
 	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
 	if len(rootPath) > 1 {
 		rootPath = strings.TrimRight(rootPath, "/")
 	}
-
-	tx, err := r.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	if _, deleteErr := tx.Exec("DELETE FROM library_folders WHERE library_id = ?", libraryID); deleteErr != nil {
-		return 0, deleteErr
-	}
-
-	rows, err := tx.Query(`
+	rows, err := r.db.Query(`
 		SELECT d.path, d.name,
 		       (SELECT COUNT(*) FROM entries f
-		         WHERE f.is_dir = 0
-		           AND `+subtreeFilePredicateSQL+`
-		           AND `+audioExtCond+`) AS audio_count
+		         WHERE f.is_dir = 0 AND `+subtreeFilePredicateSQL+` AND `+audioExtCond+`) AS audio_count,
+		       (SELECT COUNT(*) FROM entries f
+		         WHERE f.is_dir = 0 AND `+subtreeFilePredicateSQL+`) AS file_count
 		FROM entries d
 		WHERE d.is_dir = 1
 		  AND d.parent_path = ?
-		  AND EXISTS (
-		    SELECT 1 FROM entries f
-		    WHERE f.is_dir = 0
-		      AND `+subtreeFilePredicateSQL+`
-		      AND `+audioExtCond+`
-		  )
 		ORDER BY d.path
 	`, rootPath)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer rows.Close()
-
-	type folderCandidate struct {
-		path  string
-		name  string
-		audio int
-	}
-	var dirs []folderCandidate
-	for rows.Next() {
-		var d folderCandidate
-		if err := rows.Scan(&d.path, &d.name, &d.audio); err != nil {
-			return 0, err
-		}
-		dirs = append(dirs, d)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
 
 	prefix := rootPath
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	now := time.Now().Format(timeFormat)
-	count := 0
-	for _, d := range dirs {
-		name := d.name
-		if name == "" {
-			if idx := strings.LastIndex(d.path, "/"); idx >= 0 {
-				name = d.path[idx+1:]
-			}
+	var out []*LibraryDir
+	for rows.Next() {
+		var d LibraryDir
+		if err := rows.Scan(&d.Path, &d.Name, &d.AudioFileCount, &d.FileCount); err != nil {
+			return nil, err
 		}
-		rel := strings.TrimPrefix(d.path, prefix)
-		if _, err := tx.Exec(`
-			INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, uuid.NewString(), libraryID, d.path, name, rel, d.audio, now, now); err != nil {
-			return 0, err
+		d.RelPath = strings.TrimPrefix(pathnorm.NormalizeToPOSIX(d.Path), prefix)
+		if isRecoveryDirName(rootPath, d.Name) {
+			continue
 		}
-		count++
+		out = append(out, &d)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return count, nil
+	return out, rows.Err()
 }
 
-// ListLibraryFolders returns the folders of a library ordered by path.
-func (r *Repository) ListLibraryFolders(libraryID string) ([]*LibraryFolder, error) {
+// isRecoveryDirName reports whether a direct child of the root is the
+// library-level recovery directory. The name is the recovery convention's
+// ("Delete"); on a case-insensitive filesystem the comparison folds case so
+// `delete/` is recognized as the same directory the writer uses.
+func isRecoveryDirName(rootPath, name string) bool {
+	if name == pathnorm.RecoveryDirName {
+		return true
+	}
+	if pathnorm.IsWindowsCaseInsensitivePath(rootPath) {
+		return strings.EqualFold(name, pathnorm.RecoveryDirName)
+	}
+	return false
+}
+
+// DirAudioCounts returns the subtree audio-file count of each requested
+// library-relative directory, keyed by the relative path as given. A path the
+// scanned inventory does not know as a directory of the library root is absent
+// from the result — the caller resolves that absence as "not a member
+// directory" rather than as the count zero.
+func (r *Repository) DirAudioCounts(rootPath string, relPaths []string) (map[string]int, error) {
+	out := make(map[string]int, len(relPaths))
+	if len(relPaths) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(relPaths))
+	placeholders := make([]string, 0, len(relPaths))
+	byPath := make(map[string]string, len(relPaths))
+	for _, rel := range relPaths {
+		if _, ok := byPath[rel]; ok {
+			continue
+		}
+		abs := pathnorm.JoinRel(rootPath, rel)
+		byPath[abs] = rel
+		args = append(args, abs)
+		placeholders = append(placeholders, "?")
+	}
 	rows, err := r.db.Query(`
-		SELECT id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at
-		FROM library_folders WHERE library_id = ? ORDER BY path
-	`, libraryID)
+		SELECT d.path,
+		       (SELECT COUNT(*) FROM entries f
+		         WHERE f.is_dir = 0 AND `+subtreeFilePredicateSQL+` AND `+audioExtCond+`) AS audio_count
+		FROM entries d
+		WHERE d.is_dir = 1 AND d.path IN (`+strings.Join(placeholders, ", ")+`)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var folders []*LibraryFolder
 	for rows.Next() {
-		f, err := scanLibraryFolder(rows)
-		if err != nil {
+		var abs string
+		var count int
+		if err := rows.Scan(&abs, &count); err != nil {
 			return nil, err
 		}
-		folders = append(folders, f)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return folders, nil
-}
-
-// GetLibraryFolder retrieves a single folder within a library.
-func (r *Repository) GetLibraryFolder(libraryID, folderID string) (*LibraryFolder, error) {
-	row := r.db.QueryRow(`
-		SELECT id, library_id, path, name, relative_path, audio_file_count, created_at, updated_at
-		FROM library_folders WHERE library_id = ? AND id = ?
-	`, libraryID, folderID)
-	f, err := scanLibraryFolder(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrLibraryFolderNotFound
+		if rel, ok := byPath[abs]; ok {
+			out[rel] = count
 		}
-		return nil, err
 	}
-	return f, nil
-}
-
-// scanLibraryFolder decodes a library_folders row from a row or rows-based
-// scanner.
-func scanLibraryFolder(row interface{ Scan(...any) error }) (*LibraryFolder, error) {
-	var f LibraryFolder
-	var createdAtStr, updatedAtStr string
-	if err := row.Scan(
-		&f.ID,
-		&f.LibraryID,
-		&f.Path,
-		&f.Name,
-		&f.RelativePath,
-		&f.AudioFileCount,
-		&createdAtStr,
-		&updatedAtStr,
-	); err != nil {
-		return nil, err
-	}
-	f.CreatedAt = parseTimestamp(createdAtStr)
-	f.UpdatedAt = parseTimestamp(updatedAtStr)
-	return &f, nil
+	return out, rows.Err()
 }
 
 // ListEntriesUnderPath returns entries under a path prefix (including the

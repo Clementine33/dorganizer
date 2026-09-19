@@ -3,9 +3,55 @@ package sqlite //nolint:testpackage // white-box tests exercise unexported inter
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+// insertEntryAtRoot inserts an entry belonging to another library root, so a
+// test can assert that a change scoped to one root leaves the others alone.
+func insertEntryAtRoot(t *testing.T, repo *Repository, path, parentPath, name string, isDir bool) {
+	t.Helper()
+	isDirInt := 0
+	if isDir {
+		isDirInt = 1
+	}
+	root := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		root = path[:idx]
+	}
+	_, err := repo.DB().Exec(`
+		INSERT INTO entries (path, root_path, parent_path, name, is_dir, size, mtime, scan_id, content_rev)
+		VALUES (?, ?, ?, ?, ?, 0, 0, 'scan-1', 1)
+	`, path, root, parentPath, name, isDirInt)
+	if err != nil {
+		t.Fatalf("failed to insert entry %s: %v", path, err)
+	}
+}
+
+// seedRecordWithPlan creates a processing record with a member, an operation,
+// a draft and a plan, so delete/cleanup paths have something to remove.
+func seedRecordWithPlan(t *testing.T, repo *Repository, libraryID, worksetID, planID string) error {
+	t.Helper()
+	now := time.Now().Format(timeFormat)
+	for _, stmt := range []string{
+		`INSERT INTO worksets (id, title, library_id, operation_type, root_path, root_path_key, created_at, updated_at)
+		 VALUES ('` + worksetID + `', 'Music', '` + libraryID + `', 'conversion', '/music', '/music', '` + now + `', '` + now + `')`,
+		`INSERT INTO workset_members (workset_id, member_id, member_index, rel_path, folder_path, folder_name)
+		 VALUES ('` + worksetID + `', 'm-1', 0, 'albumA', '/music/albumA', 'albumA')`,
+		`INSERT INTO workset_operations (workset_id, operation_type, version, created_at, updated_at)
+		 VALUES ('` + worksetID + `', 'conversion', 1, '` + now + `', '` + now + `')`,
+		`INSERT INTO workset_operation_drafts (workset_id, operation_type, schema_version, draft_json, draft_hash, updated_at)
+		 VALUES ('` + worksetID + `', 'conversion', 1, '{}', 'h', '` + now + `')`,
+		`INSERT INTO plans (plan_id, root_path, scan_root_path, workset_id, snapshot_token, task_kind, task_schema_version, created_at)
+		 VALUES ('` + planID + `', '/music', '/music', '` + worksetID + `', 'snap', 'conversion', 1, '` + now + `')`,
+	} {
+		if _, err := repo.DB().Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // insertEntry inserts a row into the entries table with a fixed root_path of
 // /music, mirroring how scan results are stored.
@@ -127,12 +173,10 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 		t.Errorf("expected ErrLibraryNotFound on update of unknown id, got %v", err)
 	}
 
-	// Seed a folder row so DeleteLibrary can cascade it away.
-	if _, err := repo.DB().Exec(`
-		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
-		VALUES ('folder-1', ?, '/music/albumA', 'albumA', 'albumA', 1)
-	`, lib1.ID); err != nil {
-		t.Fatalf("failed to seed library_folder: %v", err)
+	// A processing record (with its members, operation, draft and plan) is
+	// deleted with the library: no orphaned record survives its library.
+	if err := seedRecordWithPlan(t, repo, lib1.ID, "ws-1", "plan-1"); err != nil {
+		t.Fatalf("seed record: %v", err)
 	}
 
 	if err := repo.DeleteLibrary(lib1.ID); err != nil {
@@ -142,15 +186,26 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 		t.Errorf("expected ErrLibraryNotFound after delete, got %v", err)
 	}
 
-	// FK cascade should have removed the folder row.
-	var folderCount int
-	if err := repo.DB().
-		QueryRow(`SELECT COUNT(*) FROM library_folders WHERE library_id = ?`, lib1.ID).
-		Scan(&folderCount); err != nil {
-		t.Fatalf("failed to count library_folders: %v", err)
-	}
-	if folderCount != 0 {
-		t.Errorf("expected cascade delete of library_folders, got %d rows remaining", folderCount)
+	for _, query := range []struct {
+		name string
+		sql  string
+	}{
+		{"records", `SELECT COUNT(*) FROM worksets WHERE library_id = ?`},
+		{"plans", `SELECT COUNT(*) FROM plans WHERE plan_id = 'plan-1'`},
+		{"members", `SELECT COUNT(*) FROM workset_members WHERE workset_id = 'ws-1'`},
+		{"drafts", `SELECT COUNT(*) FROM workset_operation_drafts WHERE workset_id = 'ws-1'`},
+	} {
+		var n int
+		args := []any{}
+		if strings.Contains(query.sql, "?") {
+			args = append(args, lib1.ID)
+		}
+		if err := repo.DB().QueryRow(query.sql, args...).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", query.name, err)
+		}
+		if n != 0 {
+			t.Errorf("expected no %s left after deleting the library, got %d", query.name, n)
+		}
 	}
 
 	// Deleting an unknown library must fail with ErrLibraryNotFound.
@@ -165,12 +220,10 @@ func TestUpdateLibraryRootClearsDerivedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	if _, seedErr := repo.DB().Exec(`
-		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
-		VALUES ('folder-old', ?, '/music/album', 'album', 'album', 1)
-	`, lib.ID); seedErr != nil {
-		t.Fatalf("seed library folder: %v", seedErr)
-	}
+	insertEntry(t, repo, "/music", "", "music", true)
+	insertEntry(t, repo, "/music/album", "/music", "album", true)
+	insertEntry(t, repo, "/music/album/01.flac", "/music/album", "01.flac", false)
+	insertEntryAtRoot(t, repo, "/movies", "/movies", "movie.mp4", false)
 	if stateErr := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); stateErr != nil {
 		t.Fatalf("UpdateLibraryScanState failed: %v", stateErr)
 	}
@@ -185,123 +238,80 @@ func TestUpdateLibraryRootClearsDerivedState(t *testing.T) {
 	if updated.LastScanAt != nil || updated.LastScanStatus != "" || updated.LastScanError != "" {
 		t.Fatalf("scan state was not reset: %+v", updated)
 	}
-	folders, err := repo.ListLibraryFolders(lib.ID)
-	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+	var stale int
+	if scanErr := repo.DB().QueryRow(
+		"SELECT COUNT(*) FROM entries WHERE root_path = '/music'",
+	).Scan(&stale); scanErr != nil {
+		t.Fatalf("count stale entries: %v", scanErr)
 	}
-	if len(folders) != 0 {
-		t.Fatalf("root change retained %d stale folders", len(folders))
+	if stale != 0 {
+		t.Fatalf("root change retained %d entries of the old root", stale)
 	}
 }
 
-func TestReplaceLibraryFolders(t *testing.T) {
+// TestListLibraryDirs lists every direct child directory of the root — with
+// audio, without audio, and empty — with the audio and file counts of each
+// subtree. The library-level recovery directory is not a member.
+func TestListLibraryDirs(t *testing.T) {
 	repo := newTestRepository(t)
 
-	lib, err := repo.CreateLibrary("Music", "/music")
+	insertEntry(t, repo, "/music", "", "music", true)
+	insertEntry(t, repo, "/music/albumA", "/music", "albumA", true)
+	insertEntry(t, repo, "/music/albumB", "/music", "albumB", true)
+	insertEntry(t, repo, "/music/docs", "/music", "docs", true)
+	insertEntry(t, repo, "/music/empty", "/music", "empty", true)
+	insertEntry(t, repo, "/music/Delete", "/music", "Delete", true)
+	insertEntry(t, repo, "/music/Delete/albumA", "/music/Delete", "albumA", true)
+	insertEntry(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false)
+	insertEntry(t, repo, "/music/albumA/disc2", "/music/albumA", "disc2", true)
+	insertEntry(t, repo, "/music/albumA/disc2/02.flac", "/music/albumA/disc2", "02.flac", false)
+	insertEntry(t, repo, "/music/docs/readme.txt", "/music/docs", "readme.txt", false)
+	insertEntry(t, repo, "/music/Delete/albumA/old.mp3", "/music/Delete/albumA", "old.mp3", false)
+	// A file directly in the root is not a member.
+	insertEntry(t, repo, "/music/loose.mp3", "/music", "loose.mp3", false)
+
+	dirs, err := repo.ListLibraryDirs("/music")
 	if err != nil {
-		t.Fatalf("CreateLibrary failed: %v", err)
+		t.Fatalf("ListLibraryDirs failed: %v", err)
+	}
+	got := map[string]LibraryDir{}
+	for _, d := range dirs {
+		got[d.RelPath] = *d
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected the four non-recovery child directories, got %+v", got)
+	}
+	if _, ok := got["Delete"]; ok {
+		t.Error("the recovery directory must not be a member")
+	}
+	if d := got["albumA"]; d.AudioFileCount != 2 || d.FileCount != 2 || d.Name != "albumA" {
+		t.Errorf("albumA counts = audio %d file %d name %q", d.AudioFileCount, d.FileCount, d.Name)
+	}
+	if d := got["albumB"]; d.AudioFileCount != 0 || d.FileCount != 0 {
+		t.Errorf("a directory without audio is still listed, with zero counts: %+v", d)
+	}
+	if d := got["empty"]; d.AudioFileCount != 0 || d.FileCount != 0 {
+		t.Errorf("an empty directory is still listed: %+v", d)
+	}
+	if d := got["docs"]; d.AudioFileCount != 0 || d.FileCount != 1 {
+		t.Errorf("docs counts = audio %d file %d, want 0/1", d.AudioFileCount, d.FileCount)
 	}
 
-	t.Run("keeps only direct children that contain audio", func(t *testing.T) {
-		// Root and child dirs.
-		insertEntry(t, repo, "/music", "", "music", true)
-		insertEntry(t, repo, "/music/albumA", "/music", "albumA", true)
-		insertEntry(t, repo, "/music/albumB", "/music", "albumB", true)
-		insertEntry(t, repo, "/music/docs", "/music", "docs", true)
-		// Audio under albumA, including a nested dir.
-		insertEntry(t, repo, "/music/albumA/01.flac", "/music/albumA", "01.flac", false)
-		insertEntry(t, repo, "/music/albumA/disc2", "/music/albumA", "disc2", true)
-		insertEntry(t, repo, "/music/albumA/disc2/02.flac", "/music/albumA/disc2", "02.flac", false)
-		// Non-audio files under docs.
-		insertEntry(t, repo, "/music/docs/readme.txt", "/music/docs", "readme.txt", false)
-		// albumB has no audio. A nested audio file alone must not surface disc2.
-
-		n, err := repo.ReplaceLibraryFolders(lib.ID, "/music")
-		if err != nil {
-			t.Fatalf("ReplaceLibraryFolders failed: %v", err)
-		}
-		if n != 1 {
-			t.Fatalf("expected 1 folder, got %d", n)
-		}
-
-		folders, err := repo.ListLibraryFolders(lib.ID)
-		if err != nil {
-			t.Fatalf("ListLibraryFolders failed: %v", err)
-		}
-		if len(folders) != 1 {
-			t.Fatalf("expected 1 folder, got %d", len(folders))
-		}
-		f := folders[0]
-		if f.Path != "/music/albumA" {
-			t.Errorf("expected path /music/albumA, got %q", f.Path)
-		}
-		if f.Name != "albumA" {
-			t.Errorf("expected name albumA, got %q", f.Name)
-		}
-		if f.RelativePath != "albumA" {
-			t.Errorf("expected relative_path albumA, got %q", f.RelativePath)
-		}
-		if f.AudioFileCount != 2 {
-			t.Errorf("expected audio_file_count 2 (01.flac + disc2/02.flac), got %d", f.AudioFileCount)
-		}
-
-		// GetLibraryFolder round-trip.
-		got, err := repo.GetLibraryFolder(lib.ID, f.ID)
-		if err != nil {
-			t.Fatalf("GetLibraryFolder failed: %v", err)
-		}
-		if got.ID != f.ID || got.Path != f.Path {
-			t.Errorf("GetLibraryFolder mismatch: got %+v", got)
-		}
-	})
-
-	t.Run("includes every direct child that has audio", func(t *testing.T) {
-		// Give albumB audio and replace again: albumA and albumB both qualify.
-		insertEntry(t, repo, "/music/albumB/track.mp3", "/music/albumB", "track.mp3", false)
-
-		n, err := repo.ReplaceLibraryFolders(lib.ID, "/music")
-		if err != nil {
-			t.Fatalf("ReplaceLibraryFolders failed: %v", err)
-		}
-		if n != 2 {
-			t.Fatalf("expected 2 folders, got %d", n)
-		}
-
-		folders, err := repo.ListLibraryFolders(lib.ID)
-		if err != nil {
-			t.Fatalf("ListLibraryFolders failed: %v", err)
-		}
-		if len(folders) != 2 {
-			t.Fatalf("expected 2 folders, got %d", len(folders))
-		}
-		if folders[0].Path != "/music/albumA" || folders[1].Path != "/music/albumB" {
-			t.Errorf("expected folders [albumA, albumB] by path, got [%s, %s]",
-				folders[0].Path, folders[1].Path)
-		}
-		if folders[1].AudioFileCount != 1 {
-			t.Errorf("expected albumB audio_file_count 1, got %d", folders[1].AudioFileCount)
-		}
-	})
-}
-
-func TestGetLibraryFolderNotFound(t *testing.T) {
-	repo := newTestRepository(t)
-
-	lib, err := repo.CreateLibrary("Music", "/music")
+	counts, err := repo.DirAudioCounts("/music", []string{"albumA", "albumB", "docs", "gone", "loose.mp3"})
 	if err != nil {
-		t.Fatalf("CreateLibrary failed: %v", err)
+		t.Fatalf("DirAudioCounts failed: %v", err)
 	}
-
-	_, err = repo.GetLibraryFolder(lib.ID, "no-such-folder")
-	if !errors.Is(err, ErrLibraryFolderNotFound) {
-		t.Errorf("expected ErrLibraryFolderNotFound for unknown folder id, got %v", err)
+	if counts["albumA"] != 2 || counts["albumB"] != 0 || counts["docs"] != 0 {
+		t.Errorf("DirAudioCounts = %+v", counts)
+	}
+	if _, ok := counts["gone"]; ok {
+		t.Error("a directory the inventory does not know must be absent, not zero")
+	}
+	if _, ok := counts["loose.mp3"]; ok {
+		t.Error("a file is not a member directory")
 	}
 }
 
-// TestListEntriesUnderPathEscapesWildcards verifies that LIKE wildcard
-// characters inside a path prefix (%, _) are treated literally, not as
-// patterns. Without escaping, a folder named "foo%bar" would match files
-// under a sibling like "foobazbar".
 func TestListEntriesUnderPathEscapesWildcards(t *testing.T) {
 	repo := newTestRepository(t)
 
@@ -336,16 +346,11 @@ func TestListEntriesUnderPathEscapesWildcards(t *testing.T) {
 	check("/music/a_b", []string{"/music/a_b", "/music/a_b/01.wav"})
 }
 
-// TestReplaceLibraryFoldersEscapesWildcardPaths verifies that a directory
-// whose name contains LIKE wildcard characters only collects its own audio:
-// the unescaped pattern would attribute sibling files to it.
-func TestReplaceLibraryFoldersEscapesWildcardPaths(t *testing.T) {
+// TestListLibraryDirsEscapesWildcardPaths verifies that a directory whose name
+// contains LIKE wildcard characters only collects its own audio: the unescaped
+// pattern would attribute sibling files to it.
+func TestListLibraryDirsEscapesWildcardPaths(t *testing.T) {
 	repo := newTestRepository(t)
-
-	lib, err := repo.CreateLibrary("Music", "/music")
-	if err != nil {
-		t.Fatalf("CreateLibrary failed: %v", err)
-	}
 
 	// A wildcard-named directory with NO audio of its own, plus a sibling
 	// whose files the unescaped pattern `/music/100%off/%` would match.
@@ -353,20 +358,19 @@ func TestReplaceLibraryFoldersEscapesWildcardPaths(t *testing.T) {
 	insertEntry(t, repo, "/music/100Xoff", "/music", "100Xoff", true)
 	insertEntry(t, repo, "/music/100Xoff/track.mp3", "/music/100Xoff", "track.mp3", false)
 
-	n, err := repo.ReplaceLibraryFolders(lib.ID, "/music")
+	dirs, err := repo.ListLibraryDirs("/music")
 	if err != nil {
-		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
+		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 folder, got %d", n)
+	counts := map[string]int{}
+	for _, d := range dirs {
+		counts[d.RelPath] = d.AudioFileCount
 	}
-
-	folders, err := repo.ListLibraryFolders(lib.ID)
-	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+	if counts["100%off"] != 0 {
+		t.Errorf("wildcard-named directory collected a sibling's audio: %+v", counts)
 	}
-	if len(folders) != 1 || folders[0].Path != "/music/100Xoff" {
-		t.Errorf("expected only folder /music/100Xoff, got %+v", folders)
+	if counts["100Xoff"] != 1 {
+		t.Errorf("100Xoff audio count = %d, want 1", counts["100Xoff"])
 	}
 }
 
@@ -395,12 +399,7 @@ func TestUpdateLibraryEquivalentRootKeepsDerivedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLibrary failed: %v", err)
 	}
-	if _, seedErr := repo.DB().Exec(`
-		INSERT INTO library_folders (id, library_id, path, name, relative_path, audio_file_count)
-		VALUES ('folder-1', ?, '/music/album', 'album', 'album', 1)
-	`, lib.ID); seedErr != nil {
-		t.Fatalf("seed library folder: %v", seedErr)
-	}
+	insertEntry(t, repo, "/music/album", "/music", "album", true)
 	if stateErr := repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now()); stateErr != nil {
 		t.Fatalf("UpdateLibraryScanState failed: %v", stateErr)
 	}
@@ -417,21 +416,19 @@ func TestUpdateLibraryEquivalentRootKeepsDerivedState(t *testing.T) {
 	if updated.LastScanAt == nil || updated.LastScanStatus != "completed" {
 		t.Errorf("scan state must be retained for spelling-only root update: %+v", updated)
 	}
-	folders, err := repo.ListLibraryFolders(lib.ID)
-	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+	var kept int
+	if scanErr := repo.DB().QueryRow(
+		"SELECT COUNT(*) FROM entries WHERE root_path = '/music'",
+	).Scan(&kept); scanErr != nil {
+		t.Fatalf("count entries: %v", scanErr)
 	}
-	if len(folders) != 1 {
-		t.Errorf("folder list must survive spelling-only root update, got %d folders", len(folders))
+	if kept != 1 {
+		t.Errorf("inventory must survive a spelling-only root update, got %d rows", kept)
 	}
 }
 
-func TestReplaceLibraryFoldersCaseSensitiveSiblings(t *testing.T) {
+func TestListLibraryDirsCaseSensitiveSiblings(t *testing.T) {
 	repo := newTestRepository(t)
-	lib, err := repo.CreateLibrary("Music", "/music")
-	if err != nil {
-		t.Fatalf("CreateLibrary failed: %v", err)
-	}
 
 	// Case-distinct sibling directories, each with one audio file. SQLite's
 	// ASCII-case-insensitive LIKE would attribute both files to both folders;
@@ -441,23 +438,15 @@ func TestReplaceLibraryFoldersCaseSensitiveSiblings(t *testing.T) {
 	insertEntry(t, repo, "/music/Rock/a.mp3", "/music/Rock", "a.mp3", false)
 	insertEntry(t, repo, "/music/rock/b.mp3", "/music/rock", "b.mp3", false)
 
-	n, err := repo.ReplaceLibraryFolders(lib.ID, "/music")
+	dirs, err := repo.ListLibraryDirs("/music")
 	if err != nil {
-		t.Fatalf("ReplaceLibraryFolders failed: %v", err)
-	}
-	if n != 2 {
-		t.Fatalf("expected 2 folders, got %d", n)
-	}
-
-	folders, err := repo.ListLibraryFolders(lib.ID)
-	if err != nil {
-		t.Fatalf("ListLibraryFolders failed: %v", err)
+		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
 	counts := map[string]int{}
-	for _, f := range folders {
-		counts[f.Path] = f.AudioFileCount
+	for _, d := range dirs {
+		counts[d.RelPath] = d.AudioFileCount
 	}
-	if counts["/music/Rock"] != 1 || counts["/music/rock"] != 1 {
+	if counts["Rock"] != 1 || counts["rock"] != 1 {
 		t.Errorf("expected each case-distinct folder to count only its own subtree, got %+v", counts)
 	}
 }

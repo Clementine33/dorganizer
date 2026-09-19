@@ -77,6 +77,22 @@ func doRequest(
 	return w
 }
 
+// createLibraryViaAPI creates a library through the API and returns its ID.
+// It is a shared helper: the library, record and tree tests all start here.
+func createLibraryViaAPI(t *testing.T, engine http.Handler, name, rootPath string) string {
+	t.Helper()
+	w := doRequest(t, engine, http.MethodPost, "/api/v1/libraries",
+		map[string]string{"name": name, "root_path": rootPath}, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (body=%s)", w.Code, w.Body.String())
+	}
+	var lib libraryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &lib); err != nil {
+		t.Fatalf("decode library: %v", err)
+	}
+	return lib.ID
+}
+
 // errorEnvelope decodes the standard error envelope body.
 func errorEnvelope(t *testing.T, w *httptest.ResponseRecorder) (code, message string) {
 	t.Helper()

@@ -163,7 +163,10 @@ type PlanDetail struct {
 const planColumns = `plan_id, root_path, scan_root_path, library_id, snapshot_token, status, task_kind, task_schema_version, created_at`
 
 // CreatePlanTx persists one plan and all of its payload, root and unit
-// snapshots in one transaction so a partial plan is never visible.
+// snapshots in one transaction so a partial plan is never visible. worksetID
+// is the record that owns the plan: plans are linked to their record by that
+// column alone (there is no foreign key), so every cleanup path deletes them
+// explicitly and every insert has to fill it in.
 func CreatePlanTx(
 	db *sql.DB,
 	planID string,
@@ -172,6 +175,7 @@ func CreatePlanTx(
 	rootPath string,
 	snapshotToken string,
 	libraryID string,
+	worksetID string,
 	steps []PlanStepRecord,
 	roots []PlanRootRecord,
 	components []PlanComponentRecord,
@@ -190,6 +194,7 @@ func CreatePlanTx(
 		rootPath,
 		snapshotToken,
 		libraryID,
+		worksetID,
 		steps,
 		roots,
 		components,
@@ -215,6 +220,7 @@ func InsertPlanTx(
 	rootPath string,
 	snapshotToken string,
 	libraryID string,
+	worksetID string,
 	steps []PlanStepRecord,
 	roots []PlanRootRecord,
 	components []PlanComponentRecord,
@@ -224,10 +230,10 @@ func InsertPlanTx(
 		libID = libraryID
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, snapshot_token, status, task_kind, task_schema_version, created_at)
-		VALUES (?, ?, ?, ?, ?, 'ready', ?, ?, ?)
+		INSERT INTO plans (plan_id, root_path, scan_root_path, library_id, snapshot_token, status, task_kind, task_schema_version, workset_id, created_at)
+		VALUES (?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)
 	`, planID, rootPath, rootPath, libID, snapshotToken,
-		taskKind, taskSchemaVersion, time.Now().Format(timeFormat)); err != nil {
+		taskKind, taskSchemaVersion, worksetID, time.Now().Format(timeFormat)); err != nil {
 		return fmt.Errorf("insert plan: %w", err)
 	}
 
