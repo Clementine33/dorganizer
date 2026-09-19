@@ -7,7 +7,7 @@ import type { RouteLocationRaw } from 'vue-router'
  * this one list, exactly as the global rail and bottom bar share
  * `global-nav` — two renderers, never two hard-coded entry lists (N20).
  * Entries carry only id/label/icon/to/children, and every location is built
- * from a *named* route plus `worksetId` (N18), so a path rename cannot quietly
+ * from a *named* route plus `libraryId` (N18), so a path rename cannot quietly
  * break navigation.
  */
 export type WorkbenchNavId = 'overview' | 'conversion' | 'conversion-settings'
@@ -22,25 +22,25 @@ export interface WorkbenchNavItem {
 
 /** The workbench's own entries for one workset: the two sections, and the
  *  settings page nested under 转换 (the only nesting this round defines). */
-export function workbenchNav(worksetId: string): WorkbenchNavItem[] {
+export function workbenchNav(libraryId: string): WorkbenchNavItem[] {
   return [
     {
       id: 'overview',
       label: '概览与成员',
       icon: '◱',
-      to: { name: 'workset-overview', params: { worksetId } },
+      to: { name: 'workbench-overview', params: { libraryId } },
     },
     {
       id: 'conversion',
       label: '转换',
       icon: '◈',
-      to: { name: 'conversion', params: { worksetId } },
+      to: { name: 'conversion', params: { libraryId } },
       children: [
         {
           id: 'conversion-settings',
           label: '转换全局设置',
           icon: '⚙',
-          to: { name: 'conversion-settings', params: { worksetId } },
+          to: { name: 'conversion-settings', params: { libraryId } },
         },
       ],
     },
@@ -49,8 +49,10 @@ export function workbenchNav(worksetId: string): WorkbenchNavItem[] {
 
 /** Route name → position in the workbench navigation (N21). */
 export type WorkbenchRouteName =
-  | 'workset-overview'
+  | 'workbench-overview'
+  | 'overview-files'
   | 'conversion'
+  | 'conversion-member-files'
   | 'conversion-settings'
   | 'conversion-member'
   | 'conversion-member-edit'
@@ -68,8 +70,10 @@ export interface WorkbenchNavPosition {
 }
 
 const POSITION_BY_ROUTE_NAME: Record<WorkbenchRouteName, WorkbenchNavPosition> = {
-  'workset-overview': { current: 'overview' },
+  'workbench-overview': { current: 'overview' },
+  'overview-files': { current: 'overview' },
   conversion: { current: 'conversion' },
+  'conversion-member-files': { current: 'conversion' },
   'conversion-settings': { current: 'conversion-settings', parent: 'conversion' },
   // The detail, batch and execution entries are carriers of the conversion
   // list, so the list stays the current entry and 转换全局设置 is never faked

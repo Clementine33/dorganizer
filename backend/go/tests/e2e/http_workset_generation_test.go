@@ -7,16 +7,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
 // TestHTTPWorksetGenerationLoop boots the real backend, creates and scans a
-// library, creates a workset from album folders, starts an async generation on
-// the seeded balanced draft, polls the generation detail to completion,
-// reviews the immutable revision, verifies unchanged-generation replay, then
-// deletes the library and checks the orphan workspace is read-only.
+// library, creates its current conversion record from the scanned album
+// folders, starts an async generation on the seeded balanced draft, polls the
+// generation detail to completion, reviews the immutable plan, verifies
+// unchanged-generation replay, then deletes the library and checks that its
+// record went with it while the media stayed on disk.
 //
 //nolint:gocognit,gocyclo,cyclop,funlen // e2e generation loop
 func TestHTTPWorksetGenerationLoop(t *testing.T) {
@@ -56,11 +58,11 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		t.Fatal("scan SSE missing completed")
 	}
 
-	var folders struct {
-		Folders []struct {
-			ID   string `json:"id"`
-			Path string `json:"path"`
-		} `json:"folders"`
+	var dirs struct {
+		Dirs []struct {
+			RelPath string `json:"rel_path"`
+			Path    string `json:"path"`
+		} `json:"dirs"`
 	}
 	if code := doJSON(
 		t,
@@ -68,26 +70,26 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		ctx,
 		base,
 		http.MethodGet,
-		"/api/v1/libraries/"+lib.ID+"/folders",
+		"/api/v1/libraries/"+lib.ID+"/dirs",
 		token,
 		nil,
-		&folders,
+		&dirs,
 	); code != http.StatusOK ||
-		len(folders.Folders) == 0 {
-		t.Fatalf("folders: code=%d n=%d", code, len(folders.Folders))
+		len(dirs.Dirs) == 0 {
+		t.Fatalf("dirs: code=%d n=%d", code, len(dirs.Dirs))
 	}
-	var albumFolderID string
-	for _, f := range folders.Folders {
-		if filepath.Base(filepath.FromSlash(f.Path)) == "albumA" {
-			albumFolderID = f.ID
+	albumRel := ""
+	for _, d := range dirs.Dirs {
+		if d.RelPath == "albumA" {
+			albumRel = d.RelPath
 		}
 	}
-	if albumFolderID == "" {
-		t.Fatal("albumA folder not found")
+	if albumRel == "" {
+		t.Fatal("albumA not found in the overview listing")
 	}
 
-	// Create a workset.
-	wsReq := map[string]any{"library_id": lib.ID, "title": "夏季整理", "folder_ids": []string{albumFolderID}}
+	// Create the library's current conversion record.
+	wsReq := map[string]any{"folder_paths": []string{albumRel}}
 	var wsResp struct {
 		Workset struct {
 			WorksetID string `json:"workset_id"`
@@ -95,18 +97,19 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		} `json:"workset"`
 		Created bool `json:"created"`
 	}
-	if code := doJSON(
+	if code := doJSONWithHeaders(
 		t,
 		client,
 		ctx,
 		base,
-		http.MethodPost,
-		"/api/v1/worksets",
+		http.MethodPut,
+		"/api/v1/libraries/"+lib.ID+"/operations/conversion/current",
 		token,
+		map[string]string{"Idempotency-Key": "create-e2e-1"},
 		wsReq,
 		&wsResp,
 	); code != http.StatusCreated {
-		t.Fatalf("create workset: %d", code)
+		t.Fatalf("create record: %d", code)
 	}
 	wsID := wsResp.Workset.WorksetID
 	if wsID == "" {
@@ -288,13 +291,12 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	); delCode != http.StatusNoContent {
 		t.Fatalf("delete library: %d", delCode)
 	}
+	// The library is gone with its record: the current-record read answers
+	// "none", the old record is not addressable, and its plans went with it
+	// (spec L1). The media on disk is untouched.
 	var orphan struct {
 		Operations []struct {
-			OperationType   string `json:"operation_type"`
-			PlanningState   string `json:"planning_state"`
-			CurrentRevision *struct {
-				ValidationState string `json:"validation_state"`
-			} `json:"current_revision"`
+			OperationType string `json:"operation_type"`
 		} `json:"operations"`
 	}
 	if getCode := doJSON(
@@ -307,16 +309,34 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 		token,
 		nil,
 		&orphan,
-	); getCode != http.StatusOK {
-		t.Fatalf("orphan detail: %d", getCode)
+	); getCode != http.StatusNotFound {
+		t.Fatalf("a deleted library's record must not resolve: %d", getCode)
 	}
-	if len(orphan.Operations) != 1 || orphan.Operations[0].PlanningState != "orphaned" ||
-		orphan.Operations[0].CurrentRevision == nil ||
-		orphan.Operations[0].CurrentRevision.ValidationState != "unavailable" {
-		t.Fatalf("orphan: %+v", orphan.Operations)
+	var current struct {
+		Workset *json.RawMessage `json:"workset"`
+	}
+	if getCode := doJSON(
+		t,
+		client,
+		ctx,
+		base,
+		http.MethodGet,
+		"/api/v1/libraries/"+lib.ID+"/operations/conversion/current",
+		token,
+		nil,
+		&current,
+	); getCode != http.StatusNotFound {
+		t.Fatalf("a deleted library must not answer for a record: %d", getCode)
 	}
 
-	// Orphaned workset rejects draft save.
+	// Deleting the library moved no media: the album folders are still there.
+	for _, name := range []string{"test1.mp3", "test1.flac"} {
+		if _, statErr := os.Stat(filepath.Join(rootPath, "albumA", name)); statErr != nil {
+			t.Fatalf("library deletion touched media: %v", statErr)
+		}
+	}
+
+	// The removed record rejects writes by not existing.
 	var draftResp struct {
 		Code string `json:"code"`
 	}
@@ -330,8 +350,8 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 			"unmatched":       map[string]any{"lossless": map[string]any{"codec": "wav"}},
 			"members":         []any{},
 		}, &draftResp)
-	if code != http.StatusConflict || draftResp.Code != "ORPHANED_WORKSET" {
-		t.Fatalf("orphan draft save: code=%d resp=%+v", code, draftResp)
+	if code != http.StatusNotFound {
+		t.Fatalf("a deleted record must reject writes: code=%d resp=%+v", code, draftResp)
 	}
 }
 

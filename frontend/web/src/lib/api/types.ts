@@ -29,22 +29,75 @@ export interface UpdateLibraryInput {
   root_path?: string
 }
 
-export interface Folder {
-  id: string
+/**
+ * One direct child directory of a library root. Its identity is the
+ * library-relative path — a rescan cannot renumber what the workbench
+ * navigates by — and the audio count is a status fact: a directory without
+ * audio is still listed and still browsable.
+ */
+export interface LibraryDir {
   name: string
   path: string
-  relative_path: string
+  rel_path: string
   audio_file_count: number
+  file_count: number
 }
 
 export interface TreeNode {
   name: string
   path: string
+  /** Path relative to the member root: what file management addresses. */
+  rel_path: string
   type: 'dir' | 'file'
   size?: number
   bitrate: number | null
   format: string
   children?: TreeNode[]
+}
+
+/** The member tree read: cached from the inventory, or just re-scanned. */
+export interface MemberTreeResponse {
+  tree: TreeNode
+  refreshed?: boolean
+}
+
+/** One item of a direct file-management request. */
+export interface FileOperationItem {
+  source: string
+  name?: string
+  target_dir?: string
+}
+
+export type FileOperation = 'rename' | 'move' | 'soft_delete'
+
+export type FileItemStatus = 'ok' | 'failed' | 'skipped' | 'not_attempted'
+
+export interface FileOperationItemResult {
+  source: string
+  status: FileItemStatus
+  code?: string
+  message?: string
+  /** Where a rename or move put the item, member-relative. */
+  target?: string
+  /** Where a soft delete put the item, relative to the library root. */
+  recovered_path?: string
+}
+
+/** The inventory refresh that follows a write; a failure here is reported, never hidden. */
+export interface RefreshState {
+  ok: boolean
+  code?: string
+  message?: string
+}
+
+export interface FileOperationResult {
+  operation: FileOperation
+  member_path: string
+  items: FileOperationItemResult[]
+  succeeded: number
+  failed: number
+  untouched: number
+  refresh: RefreshState
 }
 
 export interface ScanEventData {
@@ -141,9 +194,9 @@ export interface LibraryRef {
 
 export interface WorksetMember {
   member_id: string
-  folder_id: string
   folder_path: string
   folder_name: string
+  /** The durable library-relative path of the member directory. */
   rel_path: string
 }
 
@@ -213,10 +266,38 @@ export interface WorksetListResponse {
   next_cursor?: string
 }
 
-export interface CreateWorksetInput {
-  library_id: string
-  title: string
-  folder_ids: string[]
+/** Why a selected directory did not become a member of the record. */
+export type SkippedReason =
+  | 'no_audio'
+  | 'missing'
+  | 'recovery_dir'
+  | 'duplicate'
+  | 'invalid_path'
+  | 'not_direct_child'
+
+export interface SkippedFolder {
+  path: string
+  reason: SkippedReason
+}
+
+/** The create-or-replace payload of a library's current record. */
+export interface CreateRecordInput {
+  folder_paths: string[]
+  /** The record the caller saw as current; absent when it saw none. */
+  expected_current_id?: string
+  title?: string
+}
+
+export interface CreateRecordResponse {
+  workset: Workset
+  created: boolean
+  recorded: number
+  skipped: SkippedFolder[]
+}
+
+/** Zero or one record: a library without one is an ordinary state, not an error. */
+export interface CurrentRecordResponse {
+  workset: Workset | null
 }
 
 export interface ListWorksetsParams {
@@ -604,14 +685,29 @@ export interface ApiClientContract {
   updateLibrary(id: string, input: UpdateLibraryInput): Promise<Library>
   deleteLibrary(id: string): Promise<void>
   scanLibrary(id: string, signal: AbortSignal, rootPath?: string): AsyncIterable<ScanEvent>
-  listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]>
-  getFolderTree(libraryId: string, folderId: string, signal?: AbortSignal): Promise<TreeNode>
+  listDirs(libraryId: string, signal?: AbortSignal): Promise<LibraryDir[]>
+  getMemberTree(libraryId: string, folderRelPath: string, signal?: AbortSignal): Promise<MemberTreeResponse>
+  refreshMemberTree(libraryId: string, folderRelPath: string): Promise<MemberTreeResponse>
+  applyFileOperation(
+    libraryId: string,
+    input: { member_path: string; operation: FileOperation; items: FileOperationItem[] },
+  ): Promise<FileOperationResult>
   listPolicySlots(signal?: AbortSignal): Promise<PolicySlot[]>
   savePolicySlot(slot: number, input: SavePolicySlotInput): Promise<PolicySlot>
   listClassifierTags(signal?: AbortSignal): Promise<ClassifierTagLibraryResponse>
   addClassifierTag(tag: string): Promise<ClassifierCustomTag>
   deleteClassifierTag(id: number): Promise<void>
-  createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }>
+  getCurrentRecord(
+    libraryId: string,
+    operation: OperationType,
+    signal?: AbortSignal,
+  ): Promise<CurrentRecordResponse>
+  createCurrentRecord(
+    libraryId: string,
+    operation: OperationType,
+    input: CreateRecordInput,
+    idempotencyKey: string,
+  ): Promise<CreateRecordResponse>
   listWorksets(params?: ListWorksetsParams, signal?: AbortSignal): Promise<WorksetListResponse>
   getWorkset(id: string, signal?: AbortSignal): Promise<Workset>
   getOperation(worksetId: string, operation: OperationType, signal?: AbortSignal): Promise<Operation>
@@ -641,13 +737,6 @@ export interface ApiClientContract {
     generationId: string,
     signal: AbortSignal,
   ): AsyncIterable<GenerationEvent>
-  listRevisions(
-    worksetId: string,
-    operation: OperationType,
-    limit?: number,
-    beforeIndex?: number,
-    signal?: AbortSignal,
-  ): Promise<RevisionListResponse>
   getRevision(
     worksetId: string,
     operation: OperationType,

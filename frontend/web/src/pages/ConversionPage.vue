@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
+import { useQuery } from '@tanstack/vue-query'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet } from '@/components/ui/modal'
 import WorkbenchShell from '@/components/layout/WorkbenchShell.vue'
 import WorkbenchNav from '@/features/worksets/WorkbenchNav.vue'
 import OperationHeader from '@/features/worksets/OperationHeader.vue'
-import { workbenchNav } from '@/features/worksets/workbench-nav'
 import MemberList from '@/features/worksets/MemberList.vue'
 import {
   memberConclusion,
@@ -15,31 +15,39 @@ import {
   revisionComponents,
   type MemberConclusion,
 } from '@/features/worksets/plan-readers'
+import { useApiClient } from '@/lib/api/client'
+import { currentRecordQueryOptions } from '@/queries/worksets'
 import { useOperationContext } from '@/composables/use-operation-context'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
 import { useWorksetUiStore } from '@/stores/workset-ui'
-import type { ComponentOutcome, PlanningState, WorksetMember } from '@/lib/api/types'
+import type { ComponentOutcome, WorksetMember } from '@/lib/api/types'
 
 /**
- * The workset workspace: 概览与成员 and 转换 are the two sections of ONE page, so
- * reaching the operation is never a jump to another page and neither section
- * rebuilds the workbench (A1, R01). The URL picks the section —
- * `/worksets/:id` is the overview, `/worksets/:id/conversion` the operation —
- * and the contextual navigation switches between them.
+ * The conversion section of one library's workbench (spec N1, N2, R2).
+ *
+ * The page addresses the library, never a record id: the library's current
+ * conversion record is looked up, and its operation — draft, plan, sessions —
+ * is what everything below reads. A library without a record says so and
+ * points back to the overview, where a scope is chosen.
  *
  * Detail and edit entries are child routes rendered in the carrier the
  * container chose: inline beside the list on wide, a modal sheet on mid, the
- * full main view on narrow, one carrier at a time (R01, F09, §7.3).
+ * full main view on narrow, one carrier at a time. A member's file page takes
+ * the main area while the list stays mounted behind it, so returning keeps the
+ * selection, the filters and the scroll position.
  */
 const route = useRoute()
 const router = useRouter()
+const api = useApiClient()
 const ui = useWorksetUiStore()
 const editor = useWorksetEditorStore()
 
-const worksetId = computed(() => (route.params.worksetId as string) || null)
-const revisionPlanId = computed(() => (route.query.revision as string) || null)
+const libraryId = computed(() => (route.params.libraryId as string) || '')
+const recordQuery = useQuery(() => currentRecordQueryOptions(api, libraryId.value, 'conversion'))
+const record = computed(() => recordQuery.data.value?.workset ?? null)
+const worksetId = computed(() => record.value?.workset_id ?? null)
 const { workspace, generation, execution, executionView, applySession, startGeneration } =
-  useOperationContext(worksetId, 'conversion', revisionPlanId)
+  useOperationContext(worksetId, 'conversion')
 
 const workset = workspace.workset
 const operation = workspace.operation
@@ -47,17 +55,13 @@ const draft = workspace.draft
 const revision = workspace.revision
 
 const members = computed<WorksetMember[]>(() => workset.value?.members ?? [])
-const readOnly = computed(() => revisionPlanId.value !== null)
-const worksetPath = computed(() => `/worksets/${encodeURIComponent(worksetId.value ?? '')}`)
-const listPath = computed(() => `${worksetPath.value}/conversion`)
-/** Which section is in view; the route, not a local flag, decides. */
-const section = computed<'overview' | 'conversion'>(() =>
-  route.name === 'workset-overview' ? 'overview' : 'conversion',
-)
+const listPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+const overviewPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}`)
 /** A child route is active: it occupies the carrier of this container tier. */
 const detailOpen = computed(() => route.meta.carrier === true)
 const carrierTitle = computed(() => (route.meta.title as string | undefined) ?? '详情')
-/** The crumb names the subject: a member route is about that folder. */
+/** A member's file page takes the main area, not a carrier. */
+const filesOpen = computed(() => route.name === 'conversion-member-files')
 const carrierCrumb = computed(() => {
   if (route.name === 'conversion-member') {
     const id = route.params.memberId
@@ -73,7 +77,7 @@ watch(
   { immediate: true },
 )
 
-/** Components of one member in the revision being shown, normalized on read. */
+/** Components of one member in the current plan, normalized on read. */
 function memberComponents(member: WorksetMember): ComponentOutcome[] {
   const view = revision.value
   if (!view) return []
@@ -102,15 +106,13 @@ function conclusionFor(member: WorksetMember): MemberConclusion {
   })
 }
 
-/** The member's own page in the library it came from (gone when orphaned). */
-function memberLibraryHref(member: WorksetMember): string | null {
-  const library = workset.value?.library
-  if (!library) return null
-  return `/libraries/${encodeURIComponent(library.library_id)}/folders/${encodeURIComponent(member.folder_id)}`
+async function openMember(memberId: string) {
+  await router.push({ path: `${listPath.value}/members/${encodeURIComponent(memberId)}` })
 }
 
-async function openMember(memberId: string) {
-  await router.push({ path: `${listPath.value}/members/${encodeURIComponent(memberId)}`, query: route.query })
+/** A member's files: the shared module, in this workbench's main area. */
+async function openMemberFiles(memberId: string) {
+  await router.push(`${listPath.value}/members/${encodeURIComponent(memberId)}/files`)
 }
 
 async function closeDetail() {
@@ -155,8 +157,9 @@ const GENERATE_CODES: Record<string, string> = {
   NO_ACTIVE_MEMBERS: '所有文件夹都被排除，至少要恢复一个才能生成',
   SCAN_IN_PROGRESS: '媒体库正在扫描，等扫描结束后再生成',
   EXECUTION_IN_PROGRESS: '该操作已有执行在进行中，等它结束后再生成',
+  BUSY: '正在整理文件或已有任务在进行，稍后再生成',
   VERSION_CONFLICT: '操作版本已变化，请刷新后重试',
-  ORPHANED_WORKSET: '媒体库已删除：该工作集只读',
+  ORPHANED_WORKSET: '媒体库已删除：该记录只读',
   DRAFT_NOT_FOUND: '草稿不存在，请重新加载',
 }
 
@@ -180,9 +183,10 @@ const EXECUTE_CODES: Record<string, string> = {
   PLAN_NOT_EXECUTABLE: '该版本当前不可执行',
   EXECUTION_IN_PROGRESS: '该操作已有执行在进行中',
   SCAN_IN_PROGRESS: '媒体库正在扫描，稍后再执行',
+  BUSY: '正在整理文件或已有任务在进行，稍后再执行',
   VERSION_CONFLICT: '操作版本已变化，请刷新后重试',
   IDEMPOTENCY_KEY_REUSED: '该请求与之前的执行冲突，请刷新后重试',
-  ORPHANED_WORKSET: '媒体库已删除：该工作集只读',
+  ORPHANED_WORKSET: '媒体库已删除：该记录只读',
   INVALID_DELETE_MODE: '删除模式无效',
 }
 
@@ -194,7 +198,7 @@ const executeBlocked = computed(() => {
   // the reason it cannot run again, whatever else moved since.
   const ran = revision.value?.execution
   if (ran) return `该版本已执行（${EXECUTION_STATES[ran.status] ?? ran.status}），需重新生成新版本`
-  if (op.planning_state === 'orphaned') return '媒体库已删除：该工作集只读'
+  if (op.planning_state === 'orphaned') return '媒体库已删除：该记录只读'
   if (op.active_generation || op.planning_state === 'planning') return '生成中，完成后才能执行'
   if (op.planning_state === 'needs_planning') return '草稿已改变，需重新生成计划版本'
   if (op.current_revision.validation_state === 'stale') return '输入已变化，需重新生成计划版本'
@@ -215,7 +219,8 @@ async function onGenerate() {
   }
 }
 
-async function startExecution() {  const op = operation.value
+async function startExecution() {
+  const op = operation.value
   const planId = op?.current_revision?.plan_id
   if (!worksetId.value || !op || !planId) return
   executeError.value = null
@@ -227,15 +232,13 @@ async function startExecution() {  const op = operation.value
       ifMatchVersion: op.version,
       idempotencyKey: crypto.randomUUID(),
     })
-    // The run just started: open its detail carrier (inline on wide, sheet on
-    // mid, full page on narrow) instead of crowding the member list.
     await openExecution()
   } catch (error) {
     // The refusal is explained against refreshed state; the request is never
     // retried with a fresh key (that would be a second run attempt).
     const apiError = error as { code?: string; details?: string[]; message?: string }
     const reasons = (apiError.details ?? []).map((reason) => EXECUTE_REASONS[reason] ?? reason)
-    const head = apiError.code ? EXECUTE_REASONS[apiError.code] ?? EXECUTE_CODES[apiError.code] : undefined
+    const head = apiError.code ? (EXECUTE_REASONS[apiError.code] ?? EXECUTE_CODES[apiError.code]) : undefined
     executeError.value =
       reasons.length > 0
         ? `无法执行：${reasons.join('；')}`
@@ -266,59 +269,47 @@ watch(
   { immediate: true },
 )
 
-const OPERATION_STATES: Record<PlanningState, { tone: 'neutral' | 'brand' | 'success' | 'warning' | 'danger'; label: string }> = {
-  unplanned: { tone: 'neutral', label: '待规划' },
-  planning: { tone: 'brand', label: '规划中' },
-  planned: { tone: 'success', label: '已规划' },
-  needs_planning: { tone: 'warning', label: '需重新规划' },
-  orphaned: { tone: 'danger', label: '只读（媒体库已删除）' },
-}
-const operationState = computed(() => OPERATION_STATES[operation.value?.planning_state ?? 'unplanned'])
-const revisionLabel = computed(() => {
-  const index = operation.value?.current_revision?.revision_index
-  return index === undefined ? '尚无版本' : `当前版本 #${index}`
-})
-
 /**
- * Why 转换全局设置 cannot be edited right now — generating, orphaned or
- * historical (E09). The navigation entry is disabled with the reason instead of
- * opening a form whose save the server would refuse.
+ * Why 转换全局设置 cannot be edited right now — generating, orphaned or a
+ * frozen plan being reviewed. The navigation entry is disabled with the reason
+ * instead of opening a form whose save the server would refuse.
  */
 const settingsBlockedReason = computed(() => {
-  if (readOnly.value) return '历史版本只读：先回到当前草稿再编辑'
-  if (operation.value?.planning_state === 'orphaned') return '媒体库已删除：该工作集只读'
+  if (operation.value?.planning_state === 'orphaned') return '媒体库已删除：该记录只读'
   if (operation.value?.active_generation) return '正在生成计划版本：完成后才能修改设置'
   return null
 })
 
-/** The page in view, for the narrow header context (N31). Section labels come
- *  from the navigation definition, so a renamed section is renamed once. */
+/** The page in view, for the narrow header context (N31). */
 const currentPage = computed(() => {
+  if (filesOpen.value) return '文件'
   if (detailOpen.value) return carrierTitle.value
-  return workbenchNav(worksetId.value ?? '').find((item) => item.id === section.value)?.label ?? carrierTitle.value
+  return '转换'
 })
 
 /** The fixed parent of the current page (N32), never guessed from history. */
-const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
-  const id = worksetId.value ?? ''
-  // A carried-over revision stays read-only: the parent link keeps the query
-  // the carrier was opened with, exactly like closing the carrier does (R03).
+const parentLink = computed(() => {
   if (route.name === 'conversion-member-edit') {
     return {
-      to: { name: 'conversion-member', params: { worksetId: id, memberId: route.params.memberId }, query: route.query },
+      to: {
+        name: 'conversion-member',
+        params: { libraryId: libraryId.value, memberId: route.params.memberId },
+        query: route.query,
+      },
       label: '文件夹详情',
     }
   }
-  if (detailOpen.value) return { to: { name: 'conversion', params: { worksetId: id }, query: route.query }, label: '转换' }
-  if (section.value === 'conversion') return { to: { name: 'workset-overview', params: { worksetId: id } }, label: '概览与成员' }
-  return { to: { name: 'worksets' }, label: '工作集列表' }
+  if (filesOpen.value || detailOpen.value) {
+    return { to: { name: 'conversion', params: { libraryId: libraryId.value }, query: route.query }, label: '转换' }
+  }
+  return { to: { name: 'workbench-overview', params: { libraryId: libraryId.value } }, label: '概览与成员' }
 })
 </script>
 
 <template>
   <WorkbenchShell
-    :detail-column="section === 'conversion'"
-    :context-title="workset?.title ?? '…'"
+    :detail-column="!filesOpen"
+    :context-title="record?.title ?? '…'"
     :context-page="currentPage"
     :context-back-to="parentLink.to"
     :context-back-label="parentLink.label"
@@ -329,94 +320,70 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
           工作集
         </RouterLink>
         <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
-        <RouterLink :to="worksetPath" class="max-w-40 truncate rounded px-1 py-0.5 font-medium hover:bg-muted">
-          {{ workset?.title ?? '…' }}
+        <RouterLink :to="overviewPath" class="max-w-40 truncate rounded px-1 py-0.5 hover:bg-muted">
+          {{ record?.library?.name ?? '…' }}
         </RouterLink>
-        <template v-if="section === 'conversion'">
-          <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
-          <RouterLink
-            :to="listPath"
-            :class="detailOpen ? 'rounded px-1 py-0.5 hover:bg-muted' : 'rounded px-1 py-0.5 font-medium'"
-            :aria-current="detailOpen ? undefined : 'page'"
-          >
-            转换
-          </RouterLink>
-        </template>
+        <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
+        <RouterLink
+          :to="listPath"
+          :class="detailOpen || filesOpen ? 'rounded px-1 py-0.5 hover:bg-muted' : 'rounded px-1 py-0.5 font-medium'"
+          :aria-current="detailOpen || filesOpen ? undefined : 'page'"
+        >
+          转换
+        </RouterLink>
         <template v-if="detailOpen">
           <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
           <span class="max-w-40 truncate px-1 font-medium text-[var(--text-secondary)]" aria-current="page">
             {{ carrierCrumb }}
           </span>
         </template>
+        <template v-if="filesOpen">
+          <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
+          <span class="px-1 font-medium text-[var(--text-secondary)]" aria-current="page">文件</span>
+        </template>
       </nav>
     </template>
 
     <template #nav>
-      <WorkbenchNav :workset-id="worksetId ?? ''" :settings-blocked-reason="settingsBlockedReason" />
+      <WorkbenchNav :library-id="libraryId" :settings-blocked-reason="settingsBlockedReason" />
     </template>
 
     <template #main="{ tier }">
-      <!-- 概览与成员: the workset itself — identity, its operation and the
-           folders it holds (R07). -->
-      <section v-if="section === 'overview'" class="min-h-0 flex-1 overflow-y-auto" data-testid="workset-overview">
-        <div class="mx-auto max-w-3xl p-4">
-          <h1 class="font-heading text-base font-semibold tracking-tight">{{ workset?.title ?? '…' }}</h1>
-          <p v-if="workset?.library" class="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
-            {{ workset.library.name }} · {{ workset.library.root_path }}
+      <!-- The record is gone or the library has none: the workbench says which
+           and offers the one action that makes sense (spec R2). -->
+      <div
+        v-if="!recordQuery.isPending.value && !record"
+        class="grid min-h-0 flex-1 place-items-center px-6 text-center"
+        data-testid="no-record"
+      >
+        <div class="max-w-sm">
+          <h2 class="font-heading text-sm font-semibold">这个媒体库还没有转换记录</h2>
+          <p class="mt-1 text-xs leading-5 text-[var(--text-muted)]">
+            回到概览，勾选要转换的文件夹后点击“进入转换”。
           </p>
-
-          <section class="mt-4">
-            <h2 class="text-xs font-semibold text-[var(--text-secondary)]">操作</h2>
-            <RouterLink
-              :to="listPath"
-              class="mt-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 hover:border-[var(--brand-border)] focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:outline-none"
-              data-testid="overview-operation"
-            >
-              <span class="text-xs font-medium">转换</span>
-              <Badge :tone="operationState.tone">{{ operationState.label }}</Badge>
-              <span class="font-mono text-[10px] text-[var(--text-muted)]">{{ revisionLabel }}</span>
-              <span v-if="counts" class="text-[10px] text-[var(--text-muted)]">
-                {{ counts.changed }} 个有变化 · {{ counts.blocked }} 个阻塞
-              </span>
-              <span class="ml-auto text-[11px] text-[var(--brand-ink)]">进入转换 →</span>
-            </RouterLink>
-          </section>
-
-          <section class="mt-4">
-            <h2 class="text-xs font-semibold text-[var(--text-secondary)]">成员（{{ members.length }}）</h2>
-            <ul class="mt-1 divide-y divide-border rounded-lg border border-border bg-card" data-testid="overview-members">
-              <li v-for="member in members" :key="member.member_id">
-                <component
-                  :is="memberLibraryHref(member) ? RouterLink : 'div'"
-                  :to="memberLibraryHref(member) ?? undefined"
-                  class="block px-3 py-1.5"
-                  :class="memberLibraryHref(member) ? 'hover:bg-muted focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:outline-none' : ''"
-                  :title="memberLibraryHref(member) ? '在媒体库中查看' : undefined"
-                  data-testid="overview-member"
-                >
-                  <span class="block truncate text-xs">{{ member.folder_name }}</span>
-                  <span class="block truncate font-mono text-[10px] text-[var(--text-muted)]" :title="member.folder_path">
-                    {{ member.rel_path }}
-                  </span>
-                </component>
-              </li>
-              <li v-if="members.length === 0" class="px-3 py-2 text-[11px] text-[var(--text-muted)]">该工作集没有成员。</li>
-            </ul>
-          </section>
+          <Button class="mt-3" size="sm" data-testid="goto-overview" @click="router.push(overviewPath)">
+            返回概览
+          </Button>
         </div>
-      </section>
+      </div>
 
-      <!-- 转换: the operation itself. A narrow container shows one layer at a
-           time, so an open drill-down takes the main area (R06, §7.3). -->
-      <div v-else-if="tier !== 'narrow' || !detailOpen" class="flex min-h-0 flex-1 flex-col">
+      <div class="relative flex min-h-0 flex-1 flex-col">
+      <!-- The list is covered, never replaced, while a member's files are
+           open: it keeps its layout, and with it the selection, the filters
+           and the scroll position (N2). A narrow container shows one layer at
+           a time, so an open drill-down takes the main area there. -->
+      <div
+        v-show="record && (tier !== 'narrow' || !detailOpen)"
+        class="flex min-h-0 flex-1 flex-col"
+      >
         <section aria-label="转换" class="flex min-h-0 flex-1 flex-col">
           <OperationHeader
-            :title="workset?.title ?? '工作集'"
-            :library-name="workset?.library?.name ?? null"
+            :title="record?.title ?? '转换记录'"
+            :library-name="record?.library?.name ?? null"
             :operation="operation"
             :counts="counts"
-            :validation-state="revision ? null : operation?.current_revision?.validation_state ?? null"
-            :revision-label="revisionPlanId ? `历史版本 #${revision?.revision_index ?? ''}` : null"
+            :validation-state="operation?.current_revision?.validation_state ?? null"
+            :revision-label="null"
             :generating="generation.store.status === 'streaming'"
             :can-generate="canGenerate"
             :execute-blocked="executeBlocked"
@@ -428,7 +395,7 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             @execute="startExecution()"
             @open-execution="openExecution()"
             @cancel-execution="cancelExecution()"
-            @restore-current="revisionPlanId ? router.push({ path: listPath, query: {} }) : undefined"
+            @restore-current="undefined"
           />
 
           <!-- A refused start is stated in place; the request is never
@@ -456,7 +423,7 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             data-testid="batch-toolbar"
           >
             <span class="text-xs font-medium">已选 {{ ui.selectionCount }} 个文件夹</span>
-            <Button size="xs" variant="secondary" :disabled="readOnly" data-testid="batch-edit" @click="startBatchEdit">
+            <Button size="xs" variant="secondary" data-testid="batch-edit" @click="startBatchEdit">
               批量修改
             </Button>
             <Button size="xs" variant="ghost" @click="ui.clearSelection()">清除选择</Button>
@@ -500,28 +467,37 @@ const parentLink = computed<{ to: RouteLocationRaw; label: string }>(() => {
             :filter="ui.filter"
             :search="ui.search"
             :conclusion-for="conclusionFor"
-            :member-library-href="memberLibraryHref"
-            :historical="readOnly"
+            :historical="false"
             :compact="tier === 'narrow'"
             @toggle="ui.toggleMember($event)"
             @toggle-all="ui.toggleAllVisible($event)"
             @open="openMember($event)"
+            @files="openMemberFiles($event)"
             @update:filter="ui.setFilter($event)"
             @update:search="ui.setSearch($event)"
           />
-          <p v-else-if="!worksetId" class="p-3 text-xs text-[var(--danger-ink)]" role="alert">未知工作集地址。</p>
-          <p v-else class="p-3 text-xs text-[var(--text-muted)]">加载中…</p>
+          <p v-else-if="record" class="p-3 text-xs text-[var(--text-muted)]">加载中…</p>
         </section>
       </div>
 
-      <div v-else class="min-h-0 flex-1 overflow-y-auto">
+      <!-- Narrow: a carrier takes the main area, one layer at a time. It is
+           rendered outside the list container (which is hidden in this state)
+           so the drill-down is actually reachable. -->
+      <div v-if="tier === 'narrow' && detailOpen && record && !filesOpen" class="min-h-0 flex-1 overflow-y-auto">
         <RouterView />
+      </div>
+
+      <!-- A member's file page: the shared module, drawn over the list. It is
+           the only RouterView for this route, so the page mounts exactly once. -->
+      <div v-if="record && filesOpen" class="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
+        <RouterView />
+      </div>
       </div>
     </template>
 
     <template #detail>
-      <RouterView />
-      <p v-if="!detailOpen" class="p-3 text-[11px] text-[var(--text-muted)]">
+      <RouterView v-if="!filesOpen" />
+      <p v-if="!detailOpen && !filesOpen" class="p-3 text-[11px] text-[var(--text-muted)]">
         选择列表中的文件夹查看其冻结设置与计划结论。
       </p>
     </template>

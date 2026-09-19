@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { ExecutionView, Operation, Workset } from '@/lib/api/types'
 import { apiStub } from '@/test/api-stub'
 import { createTestQueryClient } from '@/test/query-client'
 import { queryKeys } from './query-keys'
 import {
-  createWorksetMutationOptions,
+  createCurrentRecordMutationOptions,
   saveOperationDraftMutationOptions,
   startExecutionMutationOptions,
   startGenerationMutationOptions,
@@ -60,18 +60,27 @@ const draftDocument = {
 }
 
 describe('workset mutation cache synchronization', () => {
-  it('create seeds the detail cache and refreshes the list prefix', async () => {
+  it('creating the current record seeds the pair entry and drops what it replaced', async () => {
     const client = createTestQueryClient()
-    client.setQueryData([...queryKeys.worksets.list(null), 'infinite'], { pages: [], pageParams: [] })
-    const api = apiStub({ createWorkset: vi.fn().mockResolvedValue({ workset, created: true }) })
-    const options = createWorksetMutationOptions(api, client)
+    client.setQueryData(queryKeys.worksets.detail('ws-old'), { marker: 'replaced' })
+    client.setQueryData(queryKeys.worksets.operation('ws-old', 'conversion'), { marker: 'replaced' })
+    client.setQueryData(queryKeys.worksets.draft('ws-old', 'conversion'), { marker: 'replaced' })
+    client.setQueryData(queryKeys.worksets.revisionsPrefix('ws-old', 'conversion'), { marker: 'replaced' })
+    const options = createCurrentRecordMutationOptions(apiStub(), client, 'lib-a', 'conversion')
 
-    await options.onSuccess({ workset, created: true })
+    options.onSuccess(
+      { workset, created: true, recorded: 1, skipped: [] },
+      { request: { folder_paths: ['albumA'], expected_current_id: 'ws-old' } },
+    )
     // The prefix refresh runs in a microtask; give it one turn before asserting.
     await flush()
 
-    expect(client.getQueryData(queryKeys.worksets.detail('ws-1'))).toEqual(workset)
-    expect(client.getQueryData([...queryKeys.worksets.list(null), 'infinite'])).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.current('lib-a', 'conversion'))).toEqual({ workset })
+    // The replaced record no longer exists: its caches are dropped, not
+    // refreshed into a 404.
+    expect(client.getQueryData(queryKeys.worksets.detail('ws-old'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.operation('ws-old', 'conversion'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.draft('ws-old', 'conversion'))).toBeUndefined()
   })
 
   it('draft save seeds the operation entry and refreshes only that operation', async () => {
@@ -111,7 +120,7 @@ describe('workset mutation cache synchronization', () => {
     const keys = [
       queryKeys.worksets.operation('ws-1', 'conversion'),
       queryKeys.worksets.draft('ws-1', 'conversion'),
-      queryKeys.worksets.revisionList('ws-1', 'conversion'),
+      queryKeys.worksets.revisionsPrefix('ws-1', 'conversion'),
     ]
     for (const key of keys) client.setQueryData(key, { marker: 'stale' })
 
@@ -176,12 +185,12 @@ describe('execution cache synchronization', () => {
   it('a refused execution start refreshes the operation and its revisions, never retrying', async () => {
     const client = createTestQueryClient()
     client.setQueryData(queryKeys.worksets.operation('ws-1', 'conversion'), operation)
-    client.setQueryData(queryKeys.worksets.revisionList('ws-1', 'conversion'), { marker: 'stale' })
+    client.setQueryData(queryKeys.worksets.revisionsPrefix('ws-1', 'conversion'), { marker: 'stale' })
 
     await syncAfterExecutionRefusal(client, 'ws-1', 'conversion')
 
     expect(client.getQueryData(queryKeys.worksets.operation('ws-1', 'conversion'))).toBeUndefined()
-    expect(client.getQueryData(queryKeys.worksets.revisionList('ws-1', 'conversion'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.worksets.revisionsPrefix('ws-1', 'conversion'))).toBeUndefined()
   })
 
   it('an execution terminal refreshes the session report, the operation, the revisions and the library inventory', async () => {
@@ -189,10 +198,10 @@ describe('execution cache synchronization', () => {
     client.setQueryData(queryKeys.worksets.detail('ws-1'), workset)
     const keys = [
       queryKeys.worksets.operation('ws-1', 'conversion'),
-      queryKeys.worksets.revisionList('ws-1', 'conversion'),
+      queryKeys.worksets.revisionsPrefix('ws-1', 'conversion'),
       queryKeys.worksets.executionsPrefix('ws-1', 'conversion'),
-      queryKeys.libraries.foldersPrefix('lib-a'),
-      queryKeys.libraries.treesPrefix('lib-a'),
+      queryKeys.libraries.dirsPrefix('lib-a'),
+      queryKeys.libraries.memberTreesPrefix('lib-a'),
     ]
     for (const key of keys) client.setQueryData(key, { marker: 'stale' })
 

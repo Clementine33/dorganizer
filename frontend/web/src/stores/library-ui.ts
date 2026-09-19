@@ -1,19 +1,33 @@
 import { defineStore } from 'pinia'
-import type { Folder, Library } from '@/lib/api/types'
+import type { Library, LibraryDir } from '@/lib/api/types'
 
-// UI-only store: active library and folder selection. Server-derived data
-// lives in Vue Query; this store never holds libraries, folders, loading, or
-// error state.
+/**
+ * UI-only store: the active library and the overview's directory selection.
+ * Server-derived data lives in Vue Query; this store never holds libraries,
+ * directories, loading, or error state.
+ *
+ * The selection is a set of library-relative paths, because that is the
+ * identity a record is created from — a folder id from an earlier scan would
+ * have been renumbered by the next one.
+ */
 export const useLibraryUiStore = defineStore('library-ui', {
   state: () => ({
     activeLibraryId: null as string | null,
-    selectedFolderIds: [] as string[],
+    selectedDirPaths: [] as string[],
+    /**
+     * The overview list's scroll offset, kept across a trip into a member's
+     * files and back: leaving the list must not lose the reader's place.
+     */
+    overviewScroll: 0,
   }),
   actions: {
     setActiveLibrary(id: string) {
       if (id === this.activeLibraryId) return
       this.activeLibraryId = id
-      this.selectedFolderIds = []
+      // N2: switching libraries clears the previous library's temporary
+      // selection; a scroll offset of another list means nothing here either.
+      this.selectedDirPaths = []
+      this.overviewScroll = 0
     },
     // Keeps the active ID valid against a freshly fetched library list: keep
     // the current ID when it still exists, otherwise fall back to the first
@@ -25,39 +39,41 @@ export const useLibraryUiStore = defineStore('library-ui', {
           : (libraries[0]?.id ?? null)
       if (next !== this.activeLibraryId) {
         this.activeLibraryId = next
-        this.selectedFolderIds = []
+        this.selectedDirPaths = []
       }
     },
-    // Drops selected folder IDs that no longer exist in a successful folder
-    // result. Results from another library are ignored so a late response or
-    // a background refetch can never mutate the current selection.
-    reconcileFolders(libraryId: string, folders: Folder[]) {
+    // Drops selected paths that no longer exist in a successful listing.
+    // Listings from another library are ignored, so a late response or a
+    // background refetch can never mutate the current selection.
+    reconcileDirs(libraryId: string, dirs: LibraryDir[]) {
       if (libraryId !== this.activeLibraryId) return
-      if (this.selectedFolderIds.length === 0) return
-      const ids = new Set(folders.map((folder) => folder.id))
-      const next = this.selectedFolderIds.filter((id) => ids.has(id))
-      if (next.length !== this.selectedFolderIds.length) this.selectedFolderIds = next
+      if (this.selectedDirPaths.length === 0) return
+      const paths = new Set(dirs.map((dir) => dir.rel_path))
+      const next = this.selectedDirPaths.filter((path) => paths.has(path))
+      if (next.length !== this.selectedDirPaths.length) this.selectedDirPaths = next
     },
-    // The optional `folders` argument restores the pre-migration existence
-    // guard: a click that lands after reconcileFolders dropped the folder
-    // (e.g. a scan-sync refresh removed it right before the event) must not
-    // push a stale ID into the selection — the backend would reject it.
-    toggleFolder(id: string, folders?: Folder[]) {
-      if (this.selectedFolderIds.includes(id)) {
-        this.selectedFolderIds = this.selectedFolderIds.filter((selected) => selected !== id)
+    // The optional `dirs` argument restores the existence guard: a click that
+    // lands after reconcileDirs dropped a path (a scan-sync refresh removed it
+    // right before the event) must not push a stale path into the selection.
+    toggleDir(relPath: string, dirs?: LibraryDir[]) {
+      if (this.selectedDirPaths.includes(relPath)) {
+        this.selectedDirPaths = this.selectedDirPaths.filter((selected) => selected !== relPath)
       } else {
-        if (folders && !folders.some((folder) => folder.id === id)) return
-        this.selectedFolderIds.push(id)
+        if (dirs && !dirs.some((dir) => dir.rel_path === relPath)) return
+        this.selectedDirPaths.push(relPath)
       }
     },
-    setFolderSelected(id: string, selected: boolean, folders?: Folder[]) {
-      if (selected !== this.selectedFolderIds.includes(id)) this.toggleFolder(id, folders)
+    setDirSelected(relPath: string, selected: boolean, dirs?: LibraryDir[]) {
+      if (selected !== this.selectedDirPaths.includes(relPath)) this.toggleDir(relPath, dirs)
     },
-    selectAllFolders(folders: Folder[]) {
-      this.selectedFolderIds = folders.map((folder) => folder.id)
+    selectAllDirs(dirs: LibraryDir[]) {
+      this.selectedDirPaths = dirs.map((dir) => dir.rel_path)
     },
     clearSelection() {
-      this.selectedFolderIds = []
+      this.selectedDirPaths = []
+    },
+    setOverviewScroll(offset: number) {
+      this.overviewScroll = offset
     },
   },
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiClientContract, Folder, Library, TreeNode } from '@/lib/api/types'
+import type { ApiClientContract, Library, LibraryDir, TreeNode } from '@/lib/api/types'
 import { apiStub as sharedApiStub } from '@/test/api-stub'
 import { rootPathIdentityKey } from '@/lib/root-path-identity'
 import { createTestQueryClient } from '@/test/query-client'
@@ -25,13 +25,14 @@ const libADifferentRoot: Library = { ...libA, root_path: 'D:\\Audio\\Archive' }
 
 const newLibrary: Library = { ...libA, id: 'lib-new', name: 'New library' }
 
-const folders: Folder[] = [
-  { id: 'folder-a', name: 'Alpha', path: '/music/Alpha', relative_path: 'Alpha', audio_file_count: 4 },
+const dirs: LibraryDir[] = [
+  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', audio_file_count: 4, file_count: 6 },
 ]
 
 const treeRoot: TreeNode = {
   name: 'Alpha',
   path: '/music/Alpha',
+  rel_path: '',
   type: 'dir',
   format: '',
   bitrate: null,
@@ -43,9 +44,9 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
 }
 
 function seedDerivedCaches(client: ReturnType<typeof createTestQueryClient>) {
-  client.setQueryData(queryKeys.libraries.folders('lib-a', rootPathIdentityKey(libA.root_path)), folders)
+  client.setQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)), dirs)
   client.setQueryData(
-    queryKeys.libraries.tree('lib-a', rootPathIdentityKey(libA.root_path), 'folder-a'),
+    queryKeys.libraries.memberTree('lib-a', rootPathIdentityKey(libA.root_path), 'Alpha'),
     treeRoot,
   )
 }
@@ -87,8 +88,8 @@ describe('library mutation cache synchronization', () => {
     options.onSuccess?.(updated, { id: 'lib-a', input: { name: 'Renamed' } }, undefined)
 
     expect(client.getQueryData<Library[]>(queryKeys.libraries.list())).toContainEqual(renamed)
-    expect(client.getQueryData(queryKeys.libraries.folders('lib-a', rootPathIdentityKey(libA.root_path)))).toEqual(
-      folders,
+    expect(client.getQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)))).toEqual(
+      dirs,
     )
   })
 
@@ -103,8 +104,8 @@ describe('library mutation cache synchronization', () => {
     const updated = await options.mutationFn({ id: 'lib-a', input: { root_path: 'C:\\Audio\\archive' } })
     options.onSuccess?.(updated, { id: 'lib-a', input: { root_path: 'C:\\Audio\\archive' } }, undefined)
 
-    expect(client.getQueryData(queryKeys.libraries.folders('lib-a', rootPathIdentityKey(libA.root_path)))).toEqual(
-      folders,
+    expect(client.getQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)))).toEqual(
+      dirs,
     )
   })
 
@@ -120,9 +121,9 @@ describe('library mutation cache synchronization', () => {
 
     expect(client.getQueryData<Library[]>(queryKeys.libraries.list())).toContainEqual(libADifferentRoot)
     await vi.waitFor(() => {
-      expect(client.getQueryData(queryKeys.libraries.folders('lib-a', rootPathIdentityKey(libA.root_path)))).toBeUndefined()
+      expect(client.getQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)))).toBeUndefined()
       expect(
-        client.getQueryData(queryKeys.libraries.tree('lib-a', rootPathIdentityKey(libA.root_path), 'folder-a')),
+        client.getQueryData(queryKeys.libraries.memberTree('lib-a', rootPathIdentityKey(libA.root_path), 'Alpha')),
       ).toBeUndefined()
     })
   })
@@ -139,9 +140,9 @@ describe('library mutation cache synchronization', () => {
 
     expect(client.getQueryData<Library[]>(queryKeys.libraries.list())?.map((lib) => lib.id)).toEqual(['lib-new'])
     await vi.waitFor(() => {
-      expect(client.getQueryData(queryKeys.libraries.folders('lib-a', rootPathIdentityKey(libA.root_path)))).toBeUndefined()
+      expect(client.getQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)))).toBeUndefined()
       expect(
-        client.getQueryData(queryKeys.libraries.tree('lib-a', rootPathIdentityKey(libA.root_path), 'folder-a')),
+        client.getQueryData(queryKeys.libraries.memberTree('lib-a', rootPathIdentityKey(libA.root_path), 'Alpha')),
       ).toBeUndefined()
     })
   })

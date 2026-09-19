@@ -6,9 +6,8 @@ import CommonSettingsForm from '@/features/worksets/CommonSettingsForm.vue'
 import { classifierTagLibraryQueryOptions } from '@/queries/worksets'
 import { useApiClient } from '@/lib/api/client'
 import { useQuery } from '@tanstack/vue-query'
-import { useOperationContext } from '@/composables/use-operation-context'
+import { useCurrentConversion } from '@/composables/use-operation-context'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
-import { useWorksetUiStore } from '@/stores/workset-ui'
 
 /**
  * Common conversion settings. Each unit shows how many members it reaches, so
@@ -18,9 +17,8 @@ import { useWorksetUiStore } from '@/stores/workset-ui'
 const route = useRoute()
 const router = useRouter()
 const editor = useWorksetEditorStore()
-const ui = useWorksetUiStore()
-const worksetId = computed(() => (route.params.worksetId as string) || null)
-const { workspace, applySession } = useOperationContext(worksetId)
+const libraryId = computed(() => (route.params.libraryId as string) || '')
+const { worksetId, workspace, applySession } = useCurrentConversion(libraryId)
 const draft = workspace.draft
 const api = useApiClient()
 // 恢复默认 restores the deployment's literal tags, so the form needs them.
@@ -80,10 +78,11 @@ async function apply() {
 function cancel() {
   if (dirty.value && !window.confirm('放弃未应用的修改？')) return
   editor.close()
-  void router.push(`/worksets/${encodeURIComponent(worksetId.value ?? '')}/conversion`)
+  void router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
 }
 
-const listLink = computed(() => `/worksets/${encodeURIComponent(worksetId.value ?? '')}/conversion${ui.historyPlanId ? `?revision=${ui.historyPlanId}` : ''}`)
+/** Back to the conversion list: the library's record, at its own URL. */
+const listLink = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
 </script>
 
 <template>

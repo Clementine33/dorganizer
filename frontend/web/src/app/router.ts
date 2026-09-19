@@ -1,13 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import LibrariesPage from '@/pages/LibrariesPage.vue'
-import FolderDetailPage from '@/pages/FolderDetailPage.vue'
 import WorksetsPage from '@/pages/WorksetsPage.vue'
-import WorksetWorkspacePage from '@/pages/WorksetWorkspacePage.vue'
+import OverviewPage from '@/pages/OverviewPage.vue'
+import ConversionPage from '@/pages/ConversionPage.vue'
 import ConversionSettingsPage from '@/pages/ConversionSettingsPage.vue'
 import MemberDetailPage from '@/pages/MemberDetailPage.vue'
 import MemberEditPage from '@/pages/MemberEditPage.vue'
 import BatchEditPage from '@/pages/BatchEditPage.vue'
 import ExecutionDetailPage from '@/pages/ExecutionDetailPage.vue'
+import MemberFiles from '@/features/folders/MemberFiles.vue'
 
 /**
  * Route table (design §5.1). Desktop and mobile use the same routes: layout
@@ -23,34 +23,46 @@ import ExecutionDetailPage from '@/pages/ExecutionDetailPage.vue'
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/', redirect: '/libraries' },
-    { path: '/libraries', name: 'libraries', component: LibrariesPage },
-    {
-      path: '/libraries/:libraryId/folders/:folderId',
-      name: 'folder-detail',
-      component: FolderDetailPage,
-    },
+    // The product entry keeps the name 工作集 and selects a media library:
+    // everything below happens inside one library's workbench (spec N1, N2).
+    { path: '/', redirect: '/worksets' },
     { path: '/worksets', name: 'worksets', component: WorksetsPage },
-    // Entering a workset and opening its conversion operation are the same
-    // page: the overview is a section of the workspace, so the two URLs render
-    // one workspace instead of jumping between pages.
+
+    // The workbench of one library. The overview and a member's file page are
+    // the same page in two views, so returning from a member keeps the list's
+    // selection, filters and scroll position (N2).
     {
-      path: '/worksets/:worksetId',
-      name: 'workset-overview',
-      component: WorksetWorkspacePage,
+      path: '/worksets/libraries/:libraryId',
+      name: 'workbench-overview',
+      component: OverviewPage,
+      children: [
+        {
+          path: 'files',
+          name: 'overview-files',
+          component: MemberFiles,
+        },
+      ],
     },
+
     {
-      path: '/worksets/:worksetId/conversion',
+      path: '/worksets/libraries/:libraryId/conversion',
       name: 'conversion',
-      component: WorksetWorkspacePage,
-      // Every entry below is a detail/edit carrier of the same operation, so it
-      // is a child of the workspace: the list and the shell survive the jump,
-      // the carrier is chosen by the container tier (§7.3), and the edit is
-      // never a page of its own that rebuilds the workbench (R01, R06).
+      component: ConversionPage,
+      // Every entry below is a detail/edit carrier of the same record, so it is
+      // a child of the workspace: the list and the shell survive the jump, the
+      // carrier is chosen by the container tier (§7.3), and the edit is never
+      // a page of its own that rebuilds the workbench (R01, R06).
       // `carrier` marks the route as occupying a carrier; `title` names the
       // carrier (a modal sheet and the narrow drill-down have no page heading
       // of their own).
       children: [
+        {
+          // A member's files: the shared file module, addressed by the member's
+          // stable id and resolved to its directory by the record.
+          path: 'members/:memberId/files',
+          name: 'conversion-member-files',
+          component: MemberFiles,
+        },
         {
           path: 'members/:memberId',
           name: 'conversion-member',

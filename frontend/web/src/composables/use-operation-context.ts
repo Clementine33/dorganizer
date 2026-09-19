@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { useApiClient } from '@/lib/api/client'
 import { CONVERSION, type OperationType } from '@/lib/api/types'
 import {
+  currentRecordQueryOptions,
   executionQueryOptions,
   operationDraftQueryOptions,
   operationQueryOptions,
@@ -15,6 +16,23 @@ import { worksetDetailQueryOptions } from '@/queries/worksets'
 import { useWorksetGeneration } from '@/composables/use-workset-generation'
 import { useWorksetExecution } from '@/composables/use-workset-execution'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
+
+/**
+ * The library's current conversion record and its operation context.
+ *
+ * Carrier pages (settings, member edit, batch edit, execution) are entered
+ * from the conversion URL, which names a library — never a record: the record
+ * is looked up here, and every carrier therefore follows the same identity the
+ * workbench does.
+ */
+export function useCurrentConversion(libraryId: Ref<string>) {
+  const api = useApiClient()
+  const recordQuery = useQuery(() => currentRecordQueryOptions(api, libraryId.value, CONVERSION))
+  const record = computed(() => recordQuery.data.value?.workset ?? null)
+  const worksetId = computed(() => record.value?.workset_id ?? null)
+  const context = useOperationContext(worksetId, CONVERSION)
+  return { record, worksetId, ...context }
+}
 
 /**
  * Shared server-state context for the conversion workspace: the workset

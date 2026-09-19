@@ -6,30 +6,37 @@ describe('queryKeys', () => {
     expect(queryKeys.libraries.list()).toEqual(['libraries', 'list'])
   })
 
-  it('isolates folders by library and root identity', () => {
-    expect(queryKeys.libraries.folders('lib-a', 'root-a')).toEqual(['libraries', 'folders', 'lib-a', 'root-a'])
-    expect(queryKeys.libraries.folders('lib-a', 'root-b')).not.toEqual(
-      queryKeys.libraries.folders('lib-a', 'root-a'),
+  it('isolates the overview listing by library and root identity', () => {
+    expect(queryKeys.libraries.dirs('lib-a', 'root-a')).toEqual(['libraries', 'dirs', 'lib-a', 'root-a'])
+    expect(queryKeys.libraries.dirs('lib-a', 'root-b')).not.toEqual(
+      queryKeys.libraries.dirs('lib-a', 'root-a'),
     )
-    expect(queryKeys.libraries.folders('lib-b', 'root-a')).not.toEqual(
-      queryKeys.libraries.folders('lib-a', 'root-a'),
+    expect(queryKeys.libraries.dirs('lib-b', 'root-a')).not.toEqual(
+      queryKeys.libraries.dirs('lib-a', 'root-a'),
     )
   })
 
-  it('isolates trees by library, root identity and folder', () => {
-    const key = queryKeys.libraries.tree('lib-a', 'root-a', 'folder-1')
-    expect(key).toEqual(['libraries', 'folder-trees', 'lib-a', 'root-a', 'folder-1'])
-    expect(queryKeys.libraries.tree('lib-a', 'root-a', 'folder-2')).not.toEqual(key)
-    expect(queryKeys.libraries.tree('lib-a', 'root-b', 'folder-1')).not.toEqual(key)
-    expect(queryKeys.libraries.tree('lib-b', 'root-a', 'folder-1')).not.toEqual(key)
+  it('isolates member trees by library, root identity and member path', () => {
+    const key = queryKeys.libraries.memberTree('lib-a', 'root-a', 'albumA')
+    expect(key).toEqual(['libraries', 'member-trees', 'lib-a', 'root-a', 'albumA'])
+    expect(queryKeys.libraries.memberTree('lib-a', 'root-a', 'albumB')).not.toEqual(key)
+    expect(queryKeys.libraries.memberTree('lib-a', 'root-b', 'albumA')).not.toEqual(key)
+    expect(queryKeys.libraries.memberTree('lib-b', 'root-a', 'albumA')).not.toEqual(key)
   })
 
-  it('supports prefix invalidation over folders and trees of one library', () => {
-    expect(queryKeys.libraries.folders('lib-a', 'r').slice(0, 3)).toEqual(
-      queryKeys.libraries.foldersPrefix('lib-a'),
+  it('supports prefix invalidation over the listing and trees of one library', () => {
+    expect(queryKeys.libraries.dirs('lib-a', 'r').slice(0, 3)).toEqual(
+      queryKeys.libraries.dirsPrefix('lib-a'),
     )
-    expect(queryKeys.libraries.tree('lib-a', 'r', 'f').slice(0, 3)).toEqual(
-      queryKeys.libraries.treesPrefix('lib-a'),
+    expect(queryKeys.libraries.memberTree('lib-a', 'r', 'albumA').slice(0, 3)).toEqual(
+      queryKeys.libraries.memberTreesPrefix('lib-a'),
+    )
+  })
+
+  it('addresses a library\'s current record by the pair, not by a record id', () => {
+    expect(queryKeys.worksets.current('lib-a', 'conversion')).toEqual(['worksets', 'current', 'lib-a', 'conversion'])
+    expect(queryKeys.worksets.current('lib-b', 'conversion')).not.toEqual(
+      queryKeys.worksets.current('lib-a', 'conversion'),
     )
   })
 

@@ -14,8 +14,8 @@ async function refreshLibraryDerived(queryClient: QueryClient, libraryId: string
   // serially would add one full request round-trip per prefix after every
   // scan terminal. The pre-migration store parallelized the same refresh.
   await Promise.all([
-    refreshOrRemoveQueries(queryClient, queryKeys.libraries.foldersPrefix(libraryId)),
-    refreshOrRemoveQueries(queryClient, queryKeys.libraries.treesPrefix(libraryId)),
+    refreshOrRemoveQueries(queryClient, queryKeys.libraries.dirsPrefix(libraryId)),
+    refreshOrRemoveQueries(queryClient, queryKeys.libraries.memberTreesPrefix(libraryId)),
   ])
 }
 

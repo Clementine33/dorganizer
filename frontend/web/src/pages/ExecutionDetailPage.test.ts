@@ -116,11 +116,11 @@ function revision(execution: RevisionDetailResponse['execution']): RevisionDetai
 
 function pageApi(overrides: Partial<ApiClientContract> = {}): ApiClientContract {
   return sharedApiStub({
+    getCurrentRecord: vi.fn().mockResolvedValue({ workset }),
     getWorkset: vi.fn().mockResolvedValue(workset),
     getOperation: vi.fn().mockResolvedValue(operation(true)),
     getOperationDraft: vi.fn().mockResolvedValue(undefined),
     getRevision: vi.fn().mockResolvedValue(revision(null)),
-    listRevisions: vi.fn().mockResolvedValue({ revisions: [] }),
     getExecution: vi.fn().mockResolvedValue(executionView),
     ...overrides,
   })
@@ -130,15 +130,19 @@ async function mountPage(api: ApiClientContract): Promise<VueWrapper> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/worksets/:worksetId/conversion', name: 'conversion', component: { template: '<div />' } },
       {
-        path: '/worksets/:worksetId/conversion/execution',
+        path: '/worksets/libraries/:libraryId/conversion',
+        name: 'conversion',
+        component: { template: '<div />' },
+      },
+      {
+        path: '/worksets/libraries/:libraryId/conversion/execution',
         name: 'conversion-execution',
         component: ExecutionDetailPage,
       },
     ],
   })
-  await router.push('/worksets/ws-1/conversion/execution')
+  await router.push('/worksets/libraries/lib-a/conversion/execution')
   await router.isReady()
   const wrapper = mount(ExecutionDetailPage, {
     global: {
@@ -168,6 +172,7 @@ describe('ExecutionDetailPage', () => {
 
   it('shows the finished report of the revision that ran, without a cancel action', async () => {
     const api = pageApi({
+      getCurrentRecord: vi.fn().mockResolvedValue({ workset }),
       getOperation: vi.fn().mockResolvedValue(operation(false)),
       getRevision: vi
         .fn()
@@ -182,6 +187,7 @@ describe('ExecutionDetailPage', () => {
 
   it('states the absence of a session instead of pretending one exists', async () => {
     const api = pageApi({
+      getCurrentRecord: vi.fn().mockResolvedValue({ workset }),
       getOperation: vi.fn().mockResolvedValue(operation(false)),
       getRevision: vi.fn().mockResolvedValue(revision(null)),
     })

@@ -7,12 +7,18 @@ import type {
   ClassifierCustomTag,
   ClassifierTagLibraryResponse,
   CreateLibraryInput,
-  CreateWorksetInput,
+  CreateRecordInput,
+  CreateRecordResponse,
+  CurrentRecordResponse,
+  FileOperation,
+  FileOperationItem,
+  FileOperationResult,
+  LibraryDir,
+  MemberTreeResponse,
   DraftEnvelopeResponse,
   DraftResponse,
   ExecutionEvent,
   ExecutionView,
-  Folder,
   GenerationEvent,
   GenerationView,
   HealthResponse,
@@ -23,12 +29,10 @@ import type {
   OperationType,
   PolicySlot,
   RevisionDetailResponse,
-  RevisionListResponse,
   SavePolicySlotInput,
   ScanEvent,
   StartExecutionResponse,
   StartGenerationResponse,
-  TreeNode,
   UpdateLibraryInput,
   Workset,
   WorksetListResponse,
@@ -103,24 +107,48 @@ export class ApiClient implements ApiClientContract {
     yield* parseSSEStream<ScanEvent>(response.body)
   }
 
-  async listFolders(libraryId: string, signal?: AbortSignal): Promise<Folder[]> {
-    const result = await this.request<{ folders: Folder[] }>(
-      `/libraries/${encodeURIComponent(libraryId)}/folders`,
+  async listDirs(libraryId: string, signal?: AbortSignal): Promise<LibraryDir[]> {
+    const result = await this.request<{ dirs: LibraryDir[] }>(
+      `/libraries/${encodeURIComponent(libraryId)}/dirs`,
       { signal },
     )
-    return result.folders
+    return result.dirs
   }
 
-  async getFolderTree(
-    libraryId: string,
-    folderId: string,
-    signal?: AbortSignal,
-  ): Promise<TreeNode> {
-    const result = await this.request<{ tree: TreeNode }>(
-      `/libraries/${encodeURIComponent(libraryId)}/folders/${encodeURIComponent(folderId)}/tree`,
+  /** The stored member tree: what the last scan recorded for this directory. */
+  getMemberTree(libraryId: string, folderRelPath: string, signal?: AbortSignal): Promise<MemberTreeResponse> {
+    return this.request(
+      `/libraries/${encodeURIComponent(libraryId)}/tree?folder=${encodeURIComponent(folderRelPath)}`,
       { signal },
     )
-    return result.tree
+  }
+
+  /**
+   * Re-scan one member directory and answer with the refreshed tree. A refresh
+   * is a scan: it is refused while a file operation holds the admission slot,
+   * and it refuses one in turn.
+   */
+  refreshMemberTree(libraryId: string, folderRelPath: string): Promise<MemberTreeResponse> {
+    return this.request(
+      `/libraries/${encodeURIComponent(libraryId)}/tree/refresh?folder=${encodeURIComponent(folderRelPath)}`,
+      { method: 'POST', body: {} , timeoutMs: 60_000 },
+    )
+  }
+
+  /**
+   * Direct file management inside one member: single rename, single move, or a
+   * batch soft delete. The whole request is refused while a scan, planning
+   * session or execution is running.
+   */
+  applyFileOperation(
+    libraryId: string,
+    input: { member_path: string; operation: FileOperation; items: FileOperationItem[] },
+  ): Promise<FileOperationResult> {
+    return this.request(`/libraries/${encodeURIComponent(libraryId)}/file-operations`, {
+      method: 'POST',
+      body: input,
+      timeoutMs: 60_000,
+    })
   }
 
   // ==================== Policy slots ====================
@@ -149,12 +177,40 @@ export class ApiClient implements ApiClientContract {
 
   // ==================== Worksets ====================
 
-  createWorkset(input: CreateWorksetInput, idempotencyKey: string): Promise<{ workset: Workset; created: boolean }> {
-    return this.request('/worksets', {
-      method: 'POST',
-      body: input,
-      headers: { 'Idempotency-Key': idempotencyKey },
-    })
+  /** The library's current record for one operation, or null when it has none. */
+  async getCurrentRecord(
+    libraryId: string,
+    operation: OperationType,
+    signal?: AbortSignal,
+  ): Promise<CurrentRecordResponse> {
+    return this.request(
+      `/libraries/${encodeURIComponent(libraryId)}/operations/${encodeURIComponent(operation)}/current`,
+      { signal },
+    )
+  }
+
+  /**
+   * Create the current record of one (library, operation) pair, replacing the
+   * record the caller saw as current. The idempotency key makes a retried
+   * request answer with the record it already created.
+   */
+  createCurrentRecord(
+    libraryId: string,
+    operation: OperationType,
+    input: CreateRecordInput,
+    idempotencyKey: string,
+  ): Promise<CreateRecordResponse> {
+    return this.request(
+      `/libraries/${encodeURIComponent(libraryId)}/operations/${encodeURIComponent(operation)}/current`,
+      {
+        method: 'PUT',
+        body: input,
+        headers: { 'Idempotency-Key': idempotencyKey },
+        // The backend re-reads the scanned inventory for the whole selection
+        // inside this request.
+        timeoutMs: 60_000,
+      },
+    )
   }
 
   listWorksets(params: ListWorksetsParams = {}, signal?: AbortSignal): Promise<WorksetListResponse> {
@@ -248,21 +304,6 @@ export class ApiClient implements ApiClientContract {
     return this.request(
       `${this.operationPath(worksetId, operation)}/planning-sessions/${encodeURIComponent(generationId)}/cancel`,
       { method: 'POST', body: {} },
-    )
-  }
-
-  listRevisions(
-    worksetId: string,
-    operation: OperationType,
-    limit = 20,
-    beforeIndex?: number,
-    signal?: AbortSignal,
-  ): Promise<RevisionListResponse> {
-    const query = new URLSearchParams({ limit: String(limit) })
-    if (beforeIndex) query.set('before_index', String(beforeIndex))
-    return this.request<RevisionListResponse>(
-      `${this.operationPath(worksetId, operation)}/revisions?${query.toString()}`,
-      { signal },
     )
   }
 

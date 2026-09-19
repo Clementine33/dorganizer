@@ -124,7 +124,8 @@ func waitForLatestRevision(
 	}
 }
 
-// createScannedWorkset creates the workset over the named scanned albums and
+// createScannedWorkset creates the library's current conversion record over
+// the named scanned albums — addressed by their library-relative paths — and
 // returns its operation-scoped paths.
 func createScannedWorkset(
 	t *testing.T,
@@ -132,34 +133,35 @@ func createScannedWorkset(
 	ctx context.Context,
 	base, token, libID string,
 	folders []struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
+		RelPath string `json:"rel_path"`
+		Path    string `json:"path"`
 	},
 	albums []string,
 ) (string, string) {
 	t.Helper()
-	byName := map[string]string{}
+	byRel := map[string]string{}
 	for _, f := range folders {
-		byName[filepath.Base(filepath.FromSlash(f.Path))] = f.ID
+		byRel[f.RelPath] = f.Path
 	}
-	folderIDs := make([]string, 0, len(albums))
+	selected := make([]string, 0, len(albums))
 	for _, album := range albums {
-		id, ok := byName[album]
-		if !ok {
+		if _, ok := byRel[album]; !ok {
 			t.Fatalf("scanned folder %s missing from %+v", album, folders)
 		}
-		folderIDs = append(folderIDs, id)
+		selected = append(selected, album)
 	}
 	var ws struct {
 		Workset struct {
 			WorksetID string `json:"workset_id"`
 		} `json:"workset"`
 	}
-	if code := doJSON(
-		t, client, ctx, base, http.MethodPost, "/api/v1/worksets", token,
-		map[string]any{"library_id": libID, "title": "E2E 実行", "folder_ids": folderIDs}, &ws,
+	if code := doJSONWithHeaders(
+		t, client, ctx, base, http.MethodPut,
+		"/api/v1/libraries/"+libID+"/operations/conversion/current", token,
+		map[string]string{"Idempotency-Key": "create-e2e-exec"},
+		map[string]any{"folder_paths": selected}, &ws,
 	); code != http.StatusCreated {
-		t.Fatalf("create workset: %d", code)
+		t.Fatalf("create record: %d", code)
 	}
 	wsPath := "/api/v1/worksets/" + ws.Workset.WorksetID
 	return wsPath, wsPath + "/operations/conversion"
@@ -210,14 +212,14 @@ func setupScannedWorkset(
 	}
 	var folders struct {
 		Folders []struct {
-			ID   string `json:"id"`
-			Path string `json:"path"`
-		} `json:"folders"`
+			RelPath string `json:"rel_path"`
+			Path    string `json:"path"`
+		} `json:"dirs"`
 	}
 	if code := doJSON(
-		t, client, ctx, base, http.MethodGet, "/api/v1/libraries/"+lib.ID+"/folders", token, nil, &folders,
+		t, client, ctx, base, http.MethodGet, "/api/v1/libraries/"+lib.ID+"/dirs", token, nil, &folders,
 	); code != http.StatusOK {
-		t.Fatalf("list folders: %d", code)
+		t.Fatalf("list dirs: %d", code)
 	}
 	wsPath, opPath := createScannedWorkset(t, client, ctx, base, token, lib.ID, folders.Folders, albums)
 

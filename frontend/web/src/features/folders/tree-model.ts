@@ -16,8 +16,14 @@ export interface TreeModelNode {
   id: string
   /** Basename only, echoed verbatim from the server. */
   name: string
-  /** Full path, echoed verbatim; used only for request payloads. */
+  /** Full path, echoed verbatim; used only for display. */
   path: string
+  /**
+   * Path relative to the member root — the identity file management
+   * addresses ("sub/song.mp3"). The absolute path is never sent: the backend
+   * resolves every item against the member it was told about.
+   */
+  relPath: string
   type: 'dir' | 'file'
   format: string
   bitrate: number | null
@@ -36,7 +42,11 @@ export interface TreeModel {
   dirSelection(id: string): DirSelection
   toggleDir(id: string): void
   selectDir(id: string, selected: boolean): void
-  selectFile(path: string, selected: boolean): void
+  selectFile(relPath: string, selected: boolean): void
+  /** The selected member-relative paths, in tree order. */
+  selectedPaths(): string[]
+  /** One node by its member-relative path, for the operation dialogs. */
+  findByRelPath(relPath: string): TreeModelNode | null
 }
 
 /** Dirs first, stable within each group (server order is preserved). */
@@ -52,6 +62,7 @@ function buildNode(node: TreeNode, depth: number): TreeModelNode {
     id: node.path,
     name: node.name,
     path: node.path,
+    relPath: node.rel_path,
     type: node.type,
     format: node.format ?? '',
     bitrate: node.bitrate ?? null,
@@ -62,7 +73,7 @@ function buildNode(node: TreeNode, depth: number): TreeModelNode {
 }
 
 function collectDescendantFilePaths(node: TreeModelNode): string[] {
-  if (node.type === 'file') return [node.path]
+  if (node.type === 'file') return [node.relPath]
   return node.children.flatMap(collectDescendantFilePaths)
 }
 
@@ -122,9 +133,37 @@ export function createTreeModel(rootNode: TreeNode): TreeModel {
     }
   }
 
-  function selectFile(path: string, selected: boolean): void {
-    if (selected) selectedFilePaths.add(path)
-    else selectedFilePaths.delete(path)
+  function selectFile(relPath: string, selected: boolean): void {
+    if (selected) selectedFilePaths.add(relPath)
+    else selectedFilePaths.delete(relPath)
+  }
+
+  function findByRelPath(relPath: string): TreeModelNode | null {
+    let found: TreeModelNode | null = null
+    const walk = (node: TreeModelNode): void => {
+      if (found) return
+      if (node.relPath === relPath) {
+        found = node
+        return
+      }
+      for (const child of node.children) walk(child)
+    }
+    walk(root)
+    return found
+  }
+
+  /** The selected paths in tree order, so a batch is applied top-down. */
+  function selectedPaths(): string[] {
+    const out: string[] = []
+    const walk = (node: TreeModelNode): void => {
+      if (node.type === 'file') {
+        if (selectedFilePaths.has(node.relPath)) out.push(node.relPath)
+        return
+      }
+      for (const child of node.children) walk(child)
+    }
+    walk(root)
+    return out
   }
 
   function toggleDir(id: string): void {
@@ -142,5 +181,7 @@ export function createTreeModel(rootNode: TreeNode): TreeModel {
     toggleDir,
     selectDir,
     selectFile,
+    selectedPaths,
+    findByRelPath,
   }
 }

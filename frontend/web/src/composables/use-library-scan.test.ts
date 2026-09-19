@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Folder, Library, TreeNode } from '@/lib/api/types'
+import type { Library, LibraryDir, TreeNode } from '@/lib/api/types'
 import { queryKeys } from '@/queries/query-keys'
 import { createTestQueryClient } from '@/test/query-client'
 import { syncAfterScan } from './use-library-scan'
@@ -15,13 +15,14 @@ const library: Library = {
   last_scan_error: '',
 }
 
-const folders: Folder[] = [
-  { id: 'folder-a', name: 'Alpha', path: 'D:\\Music\\Alpha', relative_path: 'Alpha', audio_file_count: 1 },
+const dirs: LibraryDir[] = [
+  { name: 'Alpha', path: 'D:\\Music\\Alpha', rel_path: 'Alpha', audio_file_count: 1, file_count: 1 },
 ]
 
 const tree: TreeNode = {
   name: 'Alpha',
   path: 'D:\\Music\\Alpha',
+  rel_path: 'Alpha',
   type: 'dir',
   format: '',
   bitrate: null,
@@ -45,8 +46,8 @@ const seededWorkset = {
 
 function seedLibraryDomain(client: ReturnType<typeof createTestQueryClient>) {
   client.setQueryData(queryKeys.libraries.list(), [library])
-  client.setQueryData(queryKeys.libraries.folders('lib-a', 'd:/music'), folders)
-  client.setQueryData(queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a'), tree)
+  client.setQueryData(queryKeys.libraries.dirs('lib-a', 'd:/music'), dirs)
+  client.setQueryData(queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a'), tree)
 }
 
 function seedWorksetDomain(client: ReturnType<typeof createTestQueryClient>) {
@@ -65,8 +66,8 @@ describe('syncAfterScan terminal cache matrix', () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
     seedWorksetDomain(client)
-    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
-    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+    const foldersKey = queryKeys.libraries.dirs('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a')
 
     await syncAfterScan(client, 'lib-a', 'completed', 'event')
 
@@ -84,12 +85,12 @@ describe('syncAfterScan terminal cache matrix', () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
     seedWorksetDomain(client)
-    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
-    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+    const foldersKey = queryKeys.libraries.dirs('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a')
 
     await syncAfterScan(client, 'lib-a', 'cancelled', 'event')
 
-    expect(client.getQueryData(foldersKey)).toEqual(folders)
+    expect(client.getQueryData(foldersKey)).toEqual(dirs)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
     // Nothing was committed: the workset domain keeps its caches.
@@ -100,8 +101,8 @@ describe('syncAfterScan terminal cache matrix', () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
     seedWorksetDomain(client)
-    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
-    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+    const foldersKey = queryKeys.libraries.dirs('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a')
 
     await syncAfterScan(client, 'lib-a', 'error', 'transport')
 
@@ -115,14 +116,14 @@ describe('syncAfterScan terminal cache matrix', () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
     seedWorksetDomain(client)
-    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
-    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+    const foldersKey = queryKeys.libraries.dirs('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a')
 
     // The POST /scans request was rejected before any event arrived: the
     // scan never started, so folders/trees cannot have changed.
     await syncAfterScan(client, 'lib-a', 'error', 'transport', false)
 
-    expect(client.getQueryData(foldersKey)).toEqual(folders)
+    expect(client.getQueryData(foldersKey)).toEqual(dirs)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
     expect(feedUntouched(client)).toBe(true)
@@ -132,15 +133,15 @@ describe('syncAfterScan terminal cache matrix', () => {
     const client = createTestQueryClient()
     seedLibraryDomain(client)
     seedWorksetDomain(client)
-    const foldersKey = queryKeys.libraries.folders('lib-a', 'd:/music')
-    const treeKey = queryKeys.libraries.tree('lib-a', 'd:/music', 'folder-a')
+    const foldersKey = queryKeys.libraries.dirs('lib-a', 'd:/music')
+    const treeKey = queryKeys.libraries.memberTree('lib-a', 'd:/music', 'folder-a')
 
     // Cancel aborts the stream (transport terminal) after a 'started' event:
     // materialized folders are replaced in one transaction only on completion,
     // so nothing changed — the derived caches must not be dropped or refetched.
     await syncAfterScan(client, 'lib-a', 'cancelled', 'transport', true)
 
-    expect(client.getQueryData(foldersKey)).toEqual(folders)
+    expect(client.getQueryData(foldersKey)).toEqual(dirs)
     expect(client.getQueryData(treeKey)).toEqual(tree)
     expect(client.getQueryState(queryKeys.libraries.list())?.isInvalidated).toBe(true)
     expect(feedUntouched(client)).toBe(true)

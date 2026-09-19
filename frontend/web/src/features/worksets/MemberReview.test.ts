@@ -5,7 +5,6 @@ import MemberReview from './MemberReview.vue'
 
 const member: WorksetMember = {
   member_id: 'm1',
-  folder_id: 'f1',
   folder_path: '/music/albumA',
   folder_name: 'albumA',
   rel_path: 'albumA',

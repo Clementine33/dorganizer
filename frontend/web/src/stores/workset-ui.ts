@@ -2,9 +2,12 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 
 /**
- * UI-only workbench state: selection, filters, the batch name list and the
- * history selector. Never holds server data and never holds the edit session
- * content — that lives in the editor store so a carrier switch cannot lose it.
+ * UI-only workbench state: selection, filters and the batch name list. Never
+ * holds server data and never holds the edit session content — that lives in
+ * the editor store so a carrier switch cannot lose it.
+ *
+ * There is no historical-revision selector: a record keeps one plan, the
+ * current one (spec R3).
  *
  * Route and edit intent are the source of truth for what is being edited; the
  * selected-member count is NEVER used to infer an edit target (R05).
@@ -19,8 +22,6 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     hiddenSelectedCount: 0,
     filter: 'all' as MemberFilter,
     search: '' as string,
-    /** Historical revision being reviewed; null = current draft/plan. */
-    historyPlanId: null as string | null,
     /** Restored scroll offset of the list, per workset. */
     listScrollTop: 0,
     /** Frozen batch name list for the batch-edit route (E02). */
@@ -28,7 +29,6 @@ export const useWorksetUiStore = defineStore('workset-ui', {
   }),
   getters: {
     selectionCount: (state) => state.selectedMemberIds.size,
-    isHistorical: (state) => state.historyPlanId !== null,
   },
   actions: {
     toggleMember(id: string) {
@@ -65,16 +65,12 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     clearBatchList() {
       this.batchMemberIds = []
     },
-    selectRevision(planId: string | null) {
-      this.historyPlanId = planId
-    },
     /** Switching operation or workset never carries a name list across. */
     resetForOperation() {
       this.selectedMemberIds = markRaw(new Set())
       this.hiddenSelectedCount = 0
       this.filter = 'all'
       this.search = ''
-      this.historyPlanId = null
       this.batchMemberIds = []
       this.listScrollTop = 0
     },

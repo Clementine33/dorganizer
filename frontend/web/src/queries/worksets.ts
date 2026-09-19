@@ -1,14 +1,14 @@
 import { infiniteQueryOptions, queryOptions, type QueryClient } from '@tanstack/vue-query'
 import type {
   ApiClientContract,
+  CreateRecordInput,
+  CreateRecordResponse,
   ExecutionView,
   Operation,
-  CreateWorksetInput,
   ListWorksetsParams,
   OperationDraftDocument,
   OperationType,
   ResolvedPolicy,
-  RevisionListResponse,
   StartExecutionResponse,
   Workset,
   WorksetListResponse,
@@ -24,10 +24,6 @@ import { queryKeys } from './query-keys'
 // state, and a workset rename touches only the metadata entries.
 
 const WORKSET_PAGE_SIZE = 50
-// Revision history renders in the workbench; a small page keeps the initial
-// payload bounded for operations with many generations.
-const REVISION_PAGE_SIZE = 10
-
 export function worksetListInfiniteQueryOptions(
   api: ApiClientContract,
   params: { libraryId?: string | null } = {},
@@ -87,23 +83,58 @@ export function operationDraftQueryOptions(
   })
 }
 
-// Immutable revision history summaries, one bounded page at a time (keyset on
-// revision_index).
-export function operationRevisionListInfiniteQueryOptions(
+/**
+ * The library's current record for one operation: zero or one. This is how the
+ * workbench asks "does this library have a conversion record" without knowing
+ * a record id first, and a null answer is an ordinary state, not an error.
+ */
+export function currentRecordQueryOptions(
   api: ApiClientContract,
-  worksetId: string | null | undefined,
+  libraryId: string | null | undefined,
   operation: OperationType,
 ) {
-  return infiniteQueryOptions({
-    queryKey: queryKeys.worksets.revisionList(worksetId ?? '', operation),
-    enabled: Boolean(worksetId),
+  return queryOptions({
+    queryKey: queryKeys.worksets.current(libraryId ?? '', operation),
+    enabled: Boolean(libraryId),
     staleTime: Infinity,
-    initialPageParam: undefined as number | undefined,
-    queryFn: ({ pageParam, signal }: { pageParam: number | undefined; signal?: AbortSignal }) =>
-      api.listRevisions(worksetId as string, operation, REVISION_PAGE_SIZE, pageParam, signal),
-    getNextPageParam: (lastPage: RevisionListResponse) =>
-      lastPage.next_before_index ? lastPage.next_before_index : undefined,
+    queryFn: ({ signal }: { signal?: AbortSignal }) =>
+      api.getCurrentRecord(libraryId as string, operation, signal),
   })
+}
+
+/**
+ * Create or replace the library's current record. The expected current id is
+ * the record the caller saw: a concurrent replace is a conflict instead of an
+ * overwrite, and an idempotency key makes a retried request answer with the
+ * record it already created. Creation changes which record the pair owns, so
+ * the old record's caches are dropped once the new one lands.
+ */
+export function createCurrentRecordMutationOptions(
+  api: ApiClientContract,
+  queryClient: QueryClient,
+  libraryId: string,
+  operation: OperationType,
+) {
+  return {
+    mutationFn: (input: { request: CreateRecordInput; idempotencyKey: string }) =>
+      api.createCurrentRecord(libraryId, operation, input.request, input.idempotencyKey),
+    onSuccess: (result: CreateRecordResponse, input: { request: CreateRecordInput }) => {
+      queryClient.setQueryData(queryKeys.worksets.current(libraryId, operation), {
+        workset: result.workset,
+      })
+      const replaced = input.request.expected_current_id
+      if (replaced && replaced !== result.workset.workset_id) {
+        // The record that was replaced is gone: its detail, draft, sessions and
+        // plan are not stale, they no longer exist.
+        void refreshOrRemoveQueries(queryClient, queryKeys.worksets.detail(replaced))
+        void refreshOrRemoveQueries(queryClient, ['worksets', 'operation', replaced])
+        void refreshOrRemoveQueries(queryClient, ['worksets', 'draft', replaced])
+        void refreshOrRemoveQueries(queryClient, ['worksets', 'revisions', replaced])
+        void refreshOrRemoveQueries(queryClient, ['worksets', 'executions', replaced])
+      }
+      return result
+    },
+  }
 }
 
 // Immutable revision detail (frozen members with sources, roots, component
@@ -172,20 +203,6 @@ export function deleteClassifierTagMutationOptions(api: ApiClientContract, query
 }
 
 // ==================== Mutations ====================
-
-export function createWorksetMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
-  return {
-    mutationFn: (input: CreateWorksetInput & { idempotencyKey: string }) =>
-      api.createWorkset(
-        { library_id: input.library_id, title: input.title, folder_ids: input.folder_ids },
-        input.idempotencyKey,
-      ),
-    onSuccess: (result: { workset: Workset; created: boolean }) => {
-      queryClient.setQueryData(queryKeys.worksets.detail(result.workset.workset_id), result.workset)
-      void refreshOrRemoveQueries(queryClient, queryKeys.worksets.listPrefix())
-    },
-  }
-}
 
 /**
  * Save the full sparse draft document. The response is the fresh operation
@@ -336,8 +353,8 @@ export async function syncAfterExecutionTerminal(
     refreshOrRemoveQueries(queryClient, queryKeys.worksets.executionsPrefix(worksetId, operation)),
     ...(libraryId
       ? [
-          refreshOrRemoveQueries(queryClient, queryKeys.libraries.foldersPrefix(libraryId)),
-          refreshOrRemoveQueries(queryClient, queryKeys.libraries.treesPrefix(libraryId)),
+          refreshOrRemoveQueries(queryClient, queryKeys.libraries.dirsPrefix(libraryId)),
+          refreshOrRemoveQueries(queryClient, queryKeys.libraries.memberTreesPrefix(libraryId)),
         ]
       : []),
   ])

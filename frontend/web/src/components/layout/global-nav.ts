@@ -1,4 +1,4 @@
-import { LibraryBig, ListMusic } from '@lucide/vue'
+import { ListMusic } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { RouteLocationRaw } from 'vue-router'
 
@@ -11,7 +11,7 @@ import type { RouteLocationRaw } from 'vue-router'
  * plugin registry. The media-library *list* is page content on /libraries,
  * never a global entry (N03).
  */
-export type GlobalNavId = 'libraries' | 'worksets'
+export type GlobalNavId = 'worksets'
 
 export interface GlobalNavItem {
   id: GlobalNavId
@@ -21,7 +21,6 @@ export interface GlobalNavItem {
 }
 
 export const GLOBAL_NAV: readonly GlobalNavItem[] = [
-  { id: 'libraries', label: '媒体库', icon: LibraryBig, to: '/libraries' },
   { id: 'worksets', label: '工作集', icon: ListMusic, to: '/worksets' },
 ]
 
@@ -33,11 +32,11 @@ export const GLOBAL_NAV: readonly GlobalNavItem[] = [
  * table: the test asserts it covers exactly the application router's names.
  */
 const NAV_OWNER_BY_ROUTE_NAME = {
-  libraries: 'libraries',
-  'folder-detail': 'libraries',
   worksets: 'worksets',
-  'workset-overview': 'worksets',
+  'workbench-overview': 'worksets',
+  'overview-files': 'worksets',
   conversion: 'worksets',
+  'conversion-member-files': 'worksets',
   'conversion-settings': 'worksets',
   'conversion-member': 'worksets',
   'conversion-member-edit': 'worksets',

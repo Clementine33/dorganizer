@@ -31,18 +31,18 @@ beforeEach(() => {
 
 describe('AppShell global navigation', () => {
   it('renders the same entries, in the same order and with the same targets, in rail and bottom bar', async () => {
-    await at('/libraries')
+    await at('/worksets')
     const wrapper = mountShell()
 
     for (const nav of ['global-rail', 'global-bottom-bar'] as const) {
       const links = wrapper.get(`[data-testid="${nav}"]`).findAll('a')
-      expect(links.map((link) => link.text())).toEqual(['媒体库', '工作集'])
-      expect(links.map((link) => link.attributes('href'))).toEqual(['/libraries', '/worksets'])
+      expect(links.map((link) => link.text())).toEqual(['工作集'])
+      expect(links.map((link) => link.attributes('href'))).toEqual(['/worksets'])
     }
   })
 
   it('switches rail and bottom bar in CSS at the shared 641px breakpoint', async () => {
-    await at('/libraries')
+    await at('/worksets')
     const wrapper = mountShell()
 
     const rail = wrapper.get('[data-testid="global-rail"]')
@@ -52,7 +52,7 @@ describe('AppShell global navigation', () => {
   })
 
   it('keeps the brand a non-navigating mark with an accessible product name', async () => {
-    await at('/libraries')
+    await at('/worksets')
     const wrapper = mountShell()
 
     const brand = wrapper.get('[data-testid="app-brand"]')
@@ -60,42 +60,39 @@ describe('AppShell global navigation', () => {
     expect(brand.find('a').exists()).toBe(false)
   })
 
-  it('does not render the media-library list as global navigation', async () => {
-    await at('/libraries')
+  it('renders no media-library list as global navigation', async () => {
+    await at('/worksets')
     const wrapper = mountShell()
 
     expect(wrapper.text()).not.toContain('媒体库条目')
     const railNav = wrapper.get('[data-testid="global-rail"] nav')
-    expect(railNav.findAll('a')).toHaveLength(2)
+    expect(railNav.findAll('a')).toHaveLength(1)
     expect(railNav.find('button').exists()).toBe(false)
   })
 
-  it('marks only the owning entry current on a plain route', async () => {
-    await at('/libraries')
+  it('marks the only entry current on the selection route', async () => {
+    await at('/worksets')
     const links = mountShell().get('[data-testid="global-rail"]').findAll('a')
 
     expect(links[0].attributes('aria-current')).toBe('page')
-    expect(links[1].attributes('aria-current')).toBeUndefined()
   })
 
-  it('keeps 媒体库 current on the folder detail route', async () => {
-    await at('/libraries/lib-a/folders/folder-1')
+  it('keeps 工作集 current inside a library workbench', async () => {
+    await at('/worksets/libraries/lib-a')
     const links = mountShell().get('[data-testid="global-rail"]').findAll('a')
 
     expect(links[0].attributes('aria-current')).toBe('page')
-    expect(links[1].attributes('aria-current')).toBeUndefined()
   })
 
   it('keeps 工作集 current on a workbench child route', async () => {
-    await at('/worksets/ws-1/conversion/settings')
+    await at('/worksets/libraries/lib-a/conversion/settings')
     const links = mountShell().get('[data-testid="global-bottom-bar"]').findAll('a')
 
-    expect(links[1].attributes('aria-current')).toBe('page')
-    expect(links[0].attributes('aria-current')).toBeUndefined()
+    expect(links[0].attributes('aria-current')).toBe('page')
   })
 
   it('carries the theme entry at the bottom of the rail', async () => {
-    await at('/libraries')
+    await at('/worksets')
     const wrapper = mountShell()
 
     const rail = wrapper.get('[data-testid="global-rail"]')

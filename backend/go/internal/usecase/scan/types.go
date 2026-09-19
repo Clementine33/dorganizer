@@ -31,6 +31,10 @@ type Result struct {
 // Service defines the scan usecase contract.
 type Service interface {
 	Scan(ctx context.Context, req Request, emit func(Event)) (Result, error)
+	// RefreshMember re-scans one member directory into the inventory; it is the
+	// scoped refresh the workbench's current-files page and direct file
+	// management use.
+	RefreshMember(ctx context.Context, folderPath, rootPath string) error
 }
 
 // ErrorKind values for Error.Kind, used to map to gRPC status codes.

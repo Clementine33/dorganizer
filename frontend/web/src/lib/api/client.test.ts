@@ -53,7 +53,7 @@ describe('ApiClient', () => {
     expect(captured[0].aborted).toBe(true)
   })
 
-  it('passes the signal through listFolders and getFolderTree', async () => {
+  it('passes the signal through the directory listing and a member tree', async () => {
     const captured: (AbortSignal | undefined)[] = []
     const fetchMock = mockFetch((_input, init) => {
       captured.push(init?.signal ?? undefined)
@@ -69,8 +69,8 @@ describe('ApiClient', () => {
     const controller = new AbortController()
 
     const calls = [
-      client.listFolders('lib-1', controller.signal),
-      client.getFolderTree('lib-1', 'folder-1', controller.signal),
+      client.listDirs('lib-1', controller.signal),
+      client.getMemberTree('lib-1', 'albumA', controller.signal),
     ]
     controller.abort()
 
@@ -98,9 +98,9 @@ describe('ApiClient', () => {
         expect(headers.get('If-Match')).toBe('3')
         return okJson({ created: true, generation: { generation_id: 'gen-1', status: 'queued' } })
       }
-      if (path.endsWith('/worksets') && init?.method === 'POST') {
+      if (path.endsWith('/operations/conversion/current') && init?.method === 'PUT') {
         expect(headers.get('Idempotency-Key')).toBe('create-key')
-        return okJson({ workset: { workset_id: 'ws-1', members: [] }, created: true })
+        return okJson({ workset: { workset_id: 'ws-1', members: [] }, created: true, recorded: 1, skipped: [] })
       }
       return okJson({})
     })
@@ -119,7 +119,7 @@ describe('ApiClient', () => {
       3,
     )
     await client.startGeneration('ws-1', 'conversion', 3, 'key-1')
-    await client.createWorkset({ library_id: 'lib-1', title: 't', folder_ids: ['f-1'] }, 'create-key')
+    await client.createCurrentRecord('lib-1', 'conversion', { folder_paths: ['albumA'] }, 'create-key')
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 

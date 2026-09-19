@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import OverrideEditor from '@/features/worksets/OverrideEditor.vue'
-import { useOperationContext } from '@/composables/use-operation-context'
+import { useCurrentConversion } from '@/composables/use-operation-context'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
 import { useWorksetUiStore } from '@/stores/workset-ui'
 import { intentUnitCount } from '@/features/worksets/draft-intents'
@@ -18,10 +18,10 @@ const route = useRoute()
 const router = useRouter()
 const editor = useWorksetEditorStore()
 const ui = useWorksetUiStore()
-const worksetId = computed(() => (route.params.worksetId as string) || null)
-const { workspace, applySession } = useOperationContext(worksetId)
+const libraryId = computed(() => (route.params.libraryId as string) || '')
+const { worksetId, workspace, applySession } = useCurrentConversion(libraryId)
 const draft = workspace.draft
-const listPath = computed(() => `/worksets/${encodeURIComponent(worksetId.value ?? '')}/conversion`)
+const listPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
 
 const memberIds = computed(() => ui.batchMemberIds)
 const members = computed(() => {

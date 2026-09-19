@@ -3,11 +3,16 @@ import type { TreeNode } from '@/lib/api/types'
 import { createTreeModel } from './tree-model'
 
 function dir(name: string, path: string, children: TreeNode[] = []): TreeNode {
-  return { name, path, type: 'dir', format: '', bitrate: null, children }
+  return { name, path, rel_path: relOf(path), type: 'dir', format: '', bitrate: null, children }
 }
 
 function file(name: string, path: string, format = 'flac', bitrate = 920000, size = 12345): TreeNode {
-  return { name, path, type: 'file', format, bitrate, size }
+  return { name, path, rel_path: relOf(path), type: 'file', format, bitrate, size }
+}
+
+/** The member-relative path a fixture node would carry from the server. */
+function relOf(path: string): string {
+  return path.startsWith('/music/albumA/') ? path.slice('/music/albumA/'.length) : ''
 }
 
 const rootFixture: TreeNode = dir('albumA', '/music/albumA', [
@@ -58,24 +63,24 @@ describe('tree model', () => {
 
     model.selectDir('/music/albumA/sub1', true)
 
-    expect(model.selectedFilePaths.has('/music/albumA/sub1/a.flac')).toBe(true)
-    expect(model.selectedFilePaths.has('/music/albumA/sub1/deep/c.flac')).toBe(true)
-    expect(model.selectedFilePaths.has('/music/albumA/track1.flac')).toBe(false)
+    expect(model.selectedFilePaths.has('sub1/a.flac')).toBe(true)
+    expect(model.selectedFilePaths.has('sub1/deep/c.flac')).toBe(true)
+    expect(model.selectedFilePaths.has('track1.flac')).toBe(false)
     expect(model.dirSelection('/music/albumA/sub1')).toBe('checked')
     expect(model.dirSelection('/music/albumA/sub1/deep')).toBe('checked')
     expect(model.dirSelection('/music/albumA')).toBe('indeterminate')
 
     model.selectDir('/music/albumA/sub1', false)
-    expect(model.selectedFilePaths.has('/music/albumA/sub1/a.flac')).toBe(false)
-    expect(model.selectedFilePaths.has('/music/albumA/sub1/deep/c.flac')).toBe(false)
+    expect(model.selectedFilePaths.has('sub1/a.flac')).toBe(false)
+    expect(model.selectedFilePaths.has('sub1/deep/c.flac')).toBe(false)
     expect(model.dirSelection('/music/albumA/sub1')).toBe('unchecked')
   })
 
   it('keeps dir state checked when every descendant file is selected individually', () => {
     const model = createTreeModel(rootFixture)
-    model.selectFile('/music/albumA/sub2/b.flac', true)
+    model.selectFile('sub2/b.flac', true)
     expect(model.dirSelection('/music/albumA/sub2')).toBe('checked')
-    model.selectFile('/music/albumA/sub2/b.flac', false)
+    model.selectFile('sub2/b.flac', false)
     expect(model.dirSelection('/music/albumA/sub2')).toBe('unchecked')
   })
 
@@ -88,7 +93,7 @@ describe('tree model', () => {
     }
     // Payload paths are echoed verbatim from the server tree.
     expect(model.selectedFilePaths).toBeInstanceOf(Set)
-    model.selectFile('/music/albumA/track2.flac', true)
-    expect(model.selectedFilePaths.has('/music/albumA/track2.flac')).toBe(true)
+    model.selectFile('track2.flac', true)
+    expect(model.selectedFilePaths.has('track2.flac')).toBe(true)
   })
 })

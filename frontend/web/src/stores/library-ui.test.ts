@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { Folder, Library } from '@/lib/api/types'
+import type { Library, LibraryDir } from '@/lib/api/types'
 import { useLibraryUiStore } from './library-ui'
 
 const libA: Library = {
@@ -16,9 +16,9 @@ const libA: Library = {
 
 const libB: Library = { ...libA, id: 'lib-b', name: 'Brazil', root_path: 'C:\\Audio\\Brazil' }
 
-const folders: Folder[] = [
-  { id: 'folder-a', name: 'Alpha', path: '/music/Alpha', relative_path: 'Alpha', audio_file_count: 4 },
-  { id: 'folder-b', name: 'Beta', path: '/music/Beta', relative_path: 'Beta', audio_file_count: 9 },
+const dirs: LibraryDir[] = [
+  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', audio_file_count: 4, file_count: 4 },
+  { name: 'Beta', path: '/music/Beta', rel_path: 'Beta', audio_file_count: 9, file_count: 9 },
 ]
 
 describe('library-ui store', () => {
@@ -46,60 +46,60 @@ describe('library-ui store', () => {
   it('clears selection when the active library changes', () => {
     const store = useLibraryUiStore()
     store.setActiveLibrary('lib-a')
-    store.toggleFolder('folder-a')
+    store.toggleDir('Alpha')
     store.setActiveLibrary('lib-b')
     expect(store.activeLibraryId).toBe('lib-b')
-    expect(store.selectedFolderIds).toEqual([])
+    expect(store.selectedDirPaths).toEqual([])
   })
 
   it('toggles, selects all and clears selection', () => {
     const store = useLibraryUiStore()
-    store.toggleFolder('folder-a')
-    expect(store.selectedFolderIds).toEqual(['folder-a'])
-    store.toggleFolder('folder-b')
-    expect(store.selectedFolderIds).toEqual(['folder-a', 'folder-b'])
-    store.selectAllFolders(folders)
-    expect(store.selectedFolderIds).toEqual(['folder-a', 'folder-b'])
-    store.setFolderSelected('folder-a', false)
-    expect(store.selectedFolderIds).toEqual(['folder-b'])
+    store.toggleDir('Alpha')
+    expect(store.selectedDirPaths).toEqual(['Alpha'])
+    store.toggleDir('Beta')
+    expect(store.selectedDirPaths).toEqual(['Alpha', 'Beta'])
+    store.selectAllDirs(dirs)
+    expect(store.selectedDirPaths).toEqual(['Alpha', 'Beta'])
+    store.setDirSelected('Alpha', false)
+    expect(store.selectedDirPaths).toEqual(['Beta'])
     store.clearSelection()
-    expect(store.selectedFolderIds).toEqual([])
+    expect(store.selectedDirPaths).toEqual([])
   })
 
-  it('reconciles folder selection only against the active library', () => {
+  it('reconciles the directory selection only against the active library', () => {
     const store = useLibraryUiStore()
     store.setActiveLibrary('lib-a')
-    store.toggleFolder('folder-a')
-    store.toggleFolder('folder-b')
+    store.toggleDir('Alpha')
+    store.toggleDir('Beta')
 
     // A result belonging to another library must never touch the selection.
-    store.reconcileFolders('lib-b', [])
-    expect(store.selectedFolderIds).toEqual(['folder-a', 'folder-b'])
+    store.reconcileDirs('lib-b', [])
+    expect(store.selectedDirPaths).toEqual(['Alpha', 'Beta'])
 
-    store.reconcileFolders('lib-a', folders.filter((folder) => folder.id !== 'folder-b'))
-    expect(store.selectedFolderIds).toEqual(['folder-a'])
+    store.reconcileDirs('lib-a', dirs.filter((dir) => dir.rel_path !== 'Beta'))
+    expect(store.selectedDirPaths).toEqual(['Alpha'])
   })
 
-  it('leaves the selection alone when no folder IDs were dropped', () => {
+  it('leaves the selection alone when no paths were dropped', () => {
     const store = useLibraryUiStore()
     store.setActiveLibrary('lib-a')
-    store.toggleFolder('folder-a')
-    store.reconcileFolders('lib-a', folders)
-    expect(store.selectedFolderIds).toEqual(['folder-a'])
+    store.toggleDir('Alpha')
+    store.reconcileDirs('lib-a', dirs)
+    expect(store.selectedDirPaths).toEqual(['Alpha'])
   })
 
-  it('refuses to select an ID that is no longer in the folder list', () => {
+  it('refuses to select a path that is no longer in the listing', () => {
     const store = useLibraryUiStore()
     store.setActiveLibrary('lib-a')
     // A late click for a folder the reconciled list no longer contains must
     // not enter the selection (the backend would reject the plan payload).
-    store.toggleFolder('folder-a', [])
-    expect(store.selectedFolderIds).toEqual([])
+    store.toggleDir('Alpha', [])
+    expect(store.selectedDirPaths).toEqual([])
     // A folder still in the list selects normally…
-    store.toggleFolder('folder-b', folders)
-    expect(store.selectedFolderIds).toEqual(['folder-b'])
+    store.toggleDir('Beta', dirs)
+    expect(store.selectedDirPaths).toEqual(['Beta'])
     // …and toggling off an already-selected ID stays allowed without the list.
-    store.setFolderSelected('folder-b', false, [])
-    expect(store.selectedFolderIds).toEqual([])
+    store.setDirSelected('Beta', false, [])
+    expect(store.selectedDirPaths).toEqual([])
   })
 })

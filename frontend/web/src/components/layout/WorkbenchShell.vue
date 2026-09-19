@@ -184,6 +184,11 @@ function onDrawerClick(event: MouseEvent) {
         </main>
       </div>
 
+      <!-- The page's own bottom bar (a selection's actions): it sits below the
+           shell's columns so it is reachable at every tier, and only the page
+           that has one renders it. -->
+      <slot name="bottom" />
+
       <!-- Mid tier: the same detail content in a modal drawer. -->
       <slot v-if="tier === 'mid'" name="detail-modal" />
     </div>

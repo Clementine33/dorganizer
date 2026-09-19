@@ -3,7 +3,7 @@ import { computed, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import OverrideEditor from '@/features/worksets/OverrideEditor.vue'
-import { useOperationContext } from '@/composables/use-operation-context'
+import { useCurrentConversion } from '@/composables/use-operation-context'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
 
 /**
@@ -17,8 +17,8 @@ import { useWorksetEditorStore } from '@/stores/workset-editor'
 const route = useRoute()
 const router = useRouter()
 const editor = useWorksetEditorStore()
-const worksetId = computed(() => (route.params.worksetId as string) || null)
-const { workspace, applySession } = useOperationContext(worksetId)
+const libraryId = computed(() => (route.params.libraryId as string) || '')
+const { worksetId, workspace, applySession } = useCurrentConversion(libraryId)
 
 const memberId = computed(() => (route.params.memberId as string) || null)
 const member = computed(() => workspace.workset.value?.members.find((m) => m.member_id === memberId.value) ?? null)
@@ -41,7 +41,7 @@ watch(
     })
     if (!opened) {
       // Another target holds unapplied edits: keep them and go back (E04).
-      void router.replace(`/worksets/${encodeURIComponent(worksetId.value)}/conversion`)
+      void router.replace(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
     }
   },
   { immediate: true },
@@ -58,14 +58,14 @@ onBeforeRouteLeave(() => {
 async function apply() {
   const saved = await applySession()
   if (saved) {
-    await router.push(`/worksets/${encodeURIComponent(worksetId.value ?? '')}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
+    await router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
   }
 }
 
 function cancel() {
   if (dirty.value && !window.confirm('放弃未应用的修改？')) return
   editor.close()
-  void router.push(`/worksets/${encodeURIComponent(worksetId.value ?? '')}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
+  void router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
 }
 </script>
 

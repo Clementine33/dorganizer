@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterLink } from 'vue-router'
 import { Circle, CircleAlert, CircleCheck, Eye, FolderOpen, TriangleAlert } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,8 +23,6 @@ const props = defineProps<{
   filter: 'all' | 'change' | 'warn' | 'blocked' | 'excluded'
   search: string
   conclusionFor: (member: WorksetMember) => MemberConclusion
-  /** The member's page in its library, when the workset still has one. */
-  memberLibraryHref: (member: WorksetMember) => string | null
   historical: boolean
   /**
    * Drill-down tier: the row keeps only the name, a status icon and the view
@@ -36,6 +33,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  /** Opening a member's files: the shared file module, in this workbench. */
+  files: [memberId: string]
   toggle: [memberId: string]
   toggleAll: [ids: string[]]
   open: [memberId: string]
@@ -234,16 +233,18 @@ function conclusionTitle(member: WorksetMember): string {
             </td>
             <td class="px-2 align-middle">
               <div class="flex items-center gap-0.5">
-                <RouterLink
-                  v-if="memberLibraryHref(member)"
-                  :to="memberLibraryHref(member)!"
-                  class="inline-flex size-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:outline-none"
-                  :aria-label="`在媒体库中查看 ${member.folder_name}`"
-                  title="在媒体库中查看"
-                  data-testid="member-library-link"
+                <!-- The member's files: the shared file module, opened inside
+                     this workbench (spec T1, N1). -->
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  :aria-label="`打开 ${member.folder_name} 的文件`"
+                  title="当前文件"
+                  data-testid="member-files"
+                  @click="emit('files', member.member_id)"
                 >
                   <FolderOpen class="size-4" />
-                </RouterLink>
+                </Button>
                 <Button
                   v-if="compact"
                   variant="ghost"

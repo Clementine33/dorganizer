@@ -4,15 +4,15 @@ import { workbenchNav, workbenchNavPosition } from './workbench-nav'
 
 describe('workbench navigation definition', () => {
   it('lists the two sections and nests the settings page under 转换', () => {
-    const nav = workbenchNav('ws-1')
+    const nav = workbenchNav('lib-1')
 
     expect(nav.map((item) => item.label)).toEqual(['概览与成员', '转换'])
-    expect(nav[0].to).toEqual({ name: 'workset-overview', params: { worksetId: 'ws-1' } })
-    expect(nav[1].to).toEqual({ name: 'conversion', params: { worksetId: 'ws-1' } })
+    expect(nav[0].to).toEqual({ name: 'workbench-overview', params: { libraryId: 'lib-1' } })
+    expect(nav[1].to).toEqual({ name: 'conversion', params: { libraryId: 'lib-1' } })
     expect(nav[1].children?.map((child) => child.label)).toEqual(['转换全局设置'])
     expect(nav[1].children?.[0].to).toEqual({
       name: 'conversion-settings',
-      params: { worksetId: 'ws-1' },
+      params: { libraryId: 'lib-1' },
     })
     // Only the group carries children, so only it gets a fold control (N24).
     expect(nav[0].children).toBeUndefined()
@@ -29,7 +29,10 @@ describe('workbench navigation definition', () => {
   })
 
   it('keeps carrier routes on the conversion list and settings under its parent', () => {
-    expect(workbenchNavPosition('workset-overview')).toEqual({ current: 'overview' })
+    expect(workbenchNavPosition('workbench-overview')).toEqual({ current: 'overview' })
+    // A member's file page belongs to its section, never to a section of its own.
+    expect(workbenchNavPosition('overview-files')).toEqual({ current: 'overview' })
+    expect(workbenchNavPosition('conversion-member-files')).toEqual({ current: 'conversion' })
     expect(workbenchNavPosition('conversion')).toEqual({ current: 'conversion' })
     expect(workbenchNavPosition('conversion-settings')).toEqual({
       current: 'conversion-settings',
@@ -42,8 +45,7 @@ describe('workbench navigation definition', () => {
   })
 
   it('has no position for routes outside the workbench', () => {
-    expect(workbenchNavPosition('libraries')).toBeNull()
-    expect(workbenchNavPosition('folder-detail')).toBeNull()
+    expect(workbenchNavPosition('worksets')).toBeNull()
     expect(workbenchNavPosition(undefined)).toBeNull()
     expect(workbenchNavPosition(Symbol('anonymous'))).toBeNull()
   })

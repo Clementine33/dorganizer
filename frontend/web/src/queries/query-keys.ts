@@ -5,12 +5,16 @@ export const queryKeys = {
   libraries: {
     all: () => ['libraries'] as const,
     list: () => ['libraries', 'list'] as const,
-    foldersPrefix: (libraryId: string) => ['libraries', 'folders', libraryId] as const,
-    folders: (libraryId: string, rootIdentity: string) =>
-      ['libraries', 'folders', libraryId, rootIdentity] as const,
-    treesPrefix: (libraryId: string) => ['libraries', 'folder-trees', libraryId] as const,
-    tree: (libraryId: string, rootIdentity: string, folderId: string) =>
-      ['libraries', 'folder-trees', libraryId, rootIdentity, folderId] as const,
+    // The overview listing: every direct child directory of the root. Its
+    // identity is the library-relative path, and the key carries the root
+    // identity so a genuine root change invalidates it.
+    dirsPrefix: (libraryId: string) => ['libraries', 'dirs', libraryId] as const,
+    dirs: (libraryId: string, rootIdentity: string) =>
+      ['libraries', 'dirs', libraryId, rootIdentity] as const,
+    // One member tree, addressed by the member's library-relative path.
+    memberTreesPrefix: (libraryId: string) => ['libraries', 'member-trees', libraryId] as const,
+    memberTree: (libraryId: string, rootIdentity: string, relPath: string) =>
+      ['libraries', 'member-trees', libraryId, rootIdentity, relPath] as const,
   },
   plans: {
     lists: () => ['plans', 'list'] as const,
@@ -31,6 +35,10 @@ export const queryKeys = {
     all: () => ['worksets'] as const,
     listPrefix: () => ['worksets', 'list'] as const,
     list: (libraryId: string | null) => ['worksets', 'list', libraryId ?? ''] as const,
+    // A library's current record for one operation: at most one, addressed by
+    // the pair rather than by a record id the UI would have to know first.
+    current: (libraryId: string, operation: string) =>
+      ['worksets', 'current', libraryId, operation] as const,
     detail: (worksetId: string) => ['worksets', 'detail', worksetId] as const,
     operationPrefix: (worksetId: string) => ['worksets', 'operation', worksetId] as const,
     operation: (worksetId: string, operation: string) =>
@@ -39,8 +47,6 @@ export const queryKeys = {
       ['worksets', 'draft', worksetId, operation] as const,
     revisionsPrefix: (worksetId: string, operation: string) =>
       ['worksets', 'revisions', worksetId, operation] as const,
-    revisionList: (worksetId: string, operation: string) =>
-      ['worksets', 'revisions', worksetId, operation, 'list'] as const,
     revision: (worksetId: string, operation: string, planId: string) =>
       ['worksets', 'revisions', worksetId, operation, planId] as const,
     executionsPrefix: (worksetId: string, operation: string) =>

@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import ExecutionPanel from '@/features/worksets/ExecutionPanel.vue'
 import { keptDecisions, revisionComponents } from '@/features/worksets/plan-readers'
-import { useOperationContext } from '@/composables/use-operation-context'
+import { useCurrentConversion } from '@/composables/use-operation-context'
 import type { FileDecision } from '@/lib/api/types'
 
 /**
@@ -17,13 +17,8 @@ import type { FileDecision } from '@/lib/api/types'
  * offers the cancel action itself so the run can be stopped from here.
  */
 const route = useRoute()
-const worksetId = computed(() => (route.params.worksetId as string) || null)
-const revisionPlanId = computed(() => (route.query.revision as string) || null)
-const { execution, executionView, queries, workspace } = useOperationContext(
-  worksetId,
-  'conversion',
-  revisionPlanId,
-)
+const libraryId = computed(() => (route.params.libraryId as string) || '')
+const { worksetId, execution, executionView, queries, workspace } = useCurrentConversion(libraryId)
 
 /** Each component's kept files, as the executed revision concluded them. */
 const kept = computed<Record<string, FileDecision[]>>(() => {

@@ -20,7 +20,9 @@ import (
 // TestHTTPLibraryScanLoop boots the real backend binary as a subprocess
 // (ONSEI_DATA_DIR=<temp>), parses the ONSEI_BACKEND_READY handshake for both
 // the gRPC and HTTP ports, then drives the HTTP/SSE library workflow end to
-// end: health -> create library -> SSE scan -> list folders.
+// end: health -> create library -> SSE scan -> list the library's folders.
+//
+//nolint:funlen // one HTTP lifecycle walk: boot, create, scan, then assert the listing
 func TestHTTPLibraryScanLoop(t *testing.T) {
 	binPath := buildBackendBinary(t)
 
@@ -105,26 +107,36 @@ func TestHTTPLibraryScanLoop(t *testing.T) {
 		t.Fatal("scan completed event has empty scan_id")
 	}
 
-	// GET /api/v1/libraries/:id/folders must be non-empty after the scan.
-	var folders struct {
-		Folders []struct {
-			ID   string `json:"id"`
-			Path string `json:"path"`
-		} `json:"folders"`
+	// GET /api/v1/libraries/:id/dirs must be non-empty after the scan: the
+	// overview reads the scanned inventory, and its identity is the
+	// library-relative path a rescan cannot renumber.
+	var dirs struct {
+		Dirs []struct {
+			RelPath        string `json:"rel_path"`
+			Path           string `json:"path"`
+			AudioFileCount int    `json:"audio_file_count"`
+		} `json:"dirs"`
 	}
-	code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/libraries/"+lib.ID+"/folders", token, nil, &folders)
+	code := doJSON(t, client, ctx, base, http.MethodGet, "/api/v1/libraries/"+lib.ID+"/dirs", token, nil, &dirs)
 	if code != http.StatusOK {
-		t.Fatalf("GET /folders: status %d, want 200", code)
+		t.Fatalf("GET /dirs: status %d, want 200", code)
 	}
-	if len(folders.Folders) == 0 {
-		t.Fatal("GET /folders: expected non-empty folder list after scan")
+	if len(dirs.Dirs) == 0 {
+		t.Fatal("GET /dirs: expected non-empty folder list after scan")
+	}
+	seen := map[string]bool{}
+	for _, d := range dirs.Dirs {
+		seen[d.RelPath] = true
+	}
+	if !seen["albumA"] || !seen["albumB"] {
+		t.Fatalf("GET /dirs: expected albumA and albumB, got %+v", dirs.Dirs)
 	}
 
 	t.Logf(
 		"http e2e scan loop complete: library=%s scan_id=%s folders=%d",
 		lib.ID,
 		completed.ScanID,
-		len(folders.Folders),
+		len(dirs.Dirs),
 	)
 }
 

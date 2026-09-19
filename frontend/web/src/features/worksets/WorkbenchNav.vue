@@ -17,7 +17,7 @@ import { workbenchNav, workbenchNavPosition, type WorkbenchNavId } from './workb
  * wrapping a button.
  */
 const props = defineProps<{
-  worksetId: string
+  libraryId: string
   /** Why 转换全局设置 is unavailable (generating / orphaned / historical, E09). */
   settingsBlockedReason: string | null
 }>()
@@ -25,7 +25,7 @@ const props = defineProps<{
 const route = useRoute()
 const editor = useWorksetEditorStore()
 const nav = useWorkbenchNavStore()
-const items = computed(() => workbenchNav(props.worksetId))
+const items = computed(() => workbenchNav(props.libraryId))
 const position = computed(() => workbenchNavPosition(route.name))
 
 // Entering 转换全局设置 unfolds its group, by direct load or by navigation
