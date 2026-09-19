@@ -16,7 +16,7 @@ const library: Library = {
 }
 
 const dirs: LibraryDir[] = [
-  { name: 'Alpha', path: 'D:\\Music\\Alpha', rel_path: 'Alpha', audio_file_count: 1, file_count: 1 },
+  { name: 'Alpha', path: 'D:\\Music\\Alpha', rel_path: 'Alpha', dir_id: 'dir-alpha', audio_file_count: 1, file_count: 1 },
 ]
 
 const tree: TreeNode = {

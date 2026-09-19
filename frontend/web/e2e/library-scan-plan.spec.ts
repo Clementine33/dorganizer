@@ -66,7 +66,7 @@ test.describe('workset operation smoke', () => {
     // Entering the library is what opens the workbench: the overview lists
     // every direct child directory the scan will record.
     await page.getByRole('main').getByRole('link', { name: /E2E Library/ }).first().click()
-    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+    await expect(page).toHaveURL(/\/worksets\/[^/]+$/)
     await expect(page.getByTestId('overview')).toBeVisible()
 
     // 2. Run the scan and wait for the SSE stream to complete.
@@ -170,9 +170,9 @@ test.describe('workset operation smoke', () => {
     await expect(drawer).toBeVisible()
     await page.getByTestId('nav-group-conversion').click()
     await expect(drawer).toBeVisible()
-    await expect(page).toHaveURL(/\/conversion\/members\//)
+    await expect(page).toHaveURL(/\/conversion\/[^/]+$/)
     await page.getByTestId('nav-overview').click()
-    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+    await expect(page).toHaveURL(/\/worksets\/[^/]+$/)
     await expect(drawer).toBeHidden()
     await expect(page.getByTestId('workbench-context')).toContainText('概览与成员')
     // Every narrow page keeps a fixed parent to return to (N32): the overview
@@ -185,7 +185,7 @@ test.describe('workset operation smoke', () => {
     // parent of the page in view (N32, R06).
     await page.getByTestId('current-record').click()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
-    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/worksets\/libraries\/[^/]+$/)
+    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/worksets\/[^/]+$/)
     await page.getByTestId('member-open').first().click()
     await expect(page.getByTestId('member-review')).toBeVisible()
     await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/conversion$/)
@@ -193,7 +193,7 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('member-edit')).toBeVisible()
     await expect(page.getByTestId('workbench-header')).toBeVisible()
     await expect(page.getByTestId('workbench-context')).toContainText('修改此文件夹')
-    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/conversion\/members\/[^/]+$/)
+    await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/conversion\/[^/]+$/)
     await page.getByRole('button', { name: '取消' }).click()
     await expect(page.getByTestId('member-review')).toBeVisible()
     await page.getByTestId('workbench-back').click()
@@ -241,7 +241,7 @@ test.describe('workset operation smoke', () => {
     //    a conversion member, with the plan as a read-only second view (T1-T3).
     await page.getByTestId('nav-conversion').click()
     await page.getByTestId('member-files').first().click()
-    await expect(page).toHaveURL(/\/conversion\/members\/[^/]+\/files$/)
+    await expect(page).toHaveURL(/\/conversion\/[^/]+\/files$/)
     await expect(page.getByTestId('member-tree')).toBeVisible()
     await expect(page.getByTestId('view-plan')).toBeVisible()
 

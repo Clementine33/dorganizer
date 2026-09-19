@@ -5,9 +5,9 @@ import MemberReview from '@/features/worksets/MemberReview.vue'
 import { useCurrentConversion } from '@/composables/use-operation-context'
 
 /**
- * One member's frozen review (`.../conversion/members/:memberId`). The page
- * renders inside whichever carrier the container chose; routing here never
- * changes the URL between carriers (R01).
+ * One member's frozen review (`/worksets/:L/conversion/:M`). The page renders
+ * inside whichever carrier the container chose; routing here never changes the
+ * URL between carriers (R01).
  */
 const route = useRoute()
 const router = useRouter()
@@ -19,9 +19,10 @@ const member = computed(() => workspace.workset.value?.members.find((m) => m.mem
 const revision = workspace.revision
 
 function edit() {
-  void router.push(
-    `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion/members/${encodeURIComponent(memberId.value ?? '')}/edit`,
-  )
+  void router.push({
+    name: 'conversion-member-edit',
+    params: { libraryId: libraryId.value, memberId: memberId.value ?? '' },
+  })
 }
 </script>
 

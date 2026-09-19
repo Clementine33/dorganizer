@@ -128,7 +128,7 @@ async function submit() {
     skipped.value = response.skipped
     confirmOpen.value = false
     ui.clearSelection()
-    await router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+    await router.push({ name: 'conversion', params: { libraryId: libraryId.value } })
   } catch (error) {
     const apiError = error as { code?: string; message?: string; details?: string[] }
     skipped.value = (apiError.details ?? []).map((detail) => {
@@ -196,12 +196,12 @@ async function runScan() {
 
 // ---- misc -------------------------------------------------------------
 
-/** Opening a member: its files, in this same workbench (N2, N3). */
-async function openMember(relPath: string) {
+/** Opening a member: its files, in this same workbench (N2, N3). The address
+ * carries the directory's identity, so the folder's name stays out of it. */
+async function openMember(dirId: string) {
   await router.push({
     name: 'overview-files',
-    params: { libraryId: libraryId.value },
-    query: { folder: relPath },
+    params: { libraryId: libraryId.value, dirId },
   })
 }
 
@@ -268,8 +268,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
            its layout — and with it the selection, the filters and the scroll
            position (N2). -->
       <div v-if="filesOpen" class="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
-        <RouterView v-if="route.query.folder" />
-        <p v-else class="p-4 text-xs text-[var(--text-muted)]">请从概览选择一个文件夹。</p>
+        <RouterView />
       </div>
 
       <section class="min-h-0 flex-1 overflow-y-auto" data-testid="overview">

@@ -41,7 +41,7 @@ watch(
     })
     if (!opened) {
       // Another target holds unapplied edits: keep them and go back (E04).
-      void router.replace(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+      void router.replace({ name: 'conversion', params: { libraryId: libraryId.value } })
     }
   },
   { immediate: true },
@@ -58,14 +58,20 @@ onBeforeRouteLeave(() => {
 async function apply() {
   const saved = await applySession()
   if (saved) {
-    await router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
+    await router.push({
+      name: 'conversion-member',
+      params: { libraryId: libraryId.value, memberId: memberId.value ?? '' },
+    })
   }
 }
 
 function cancel() {
   if (dirty.value && !window.confirm('放弃未应用的修改？')) return
   editor.close()
-  void router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion/members/${encodeURIComponent(memberId.value ?? '')}`)
+  void router.push({
+    name: 'conversion-member',
+    params: { libraryId: libraryId.value, memberId: memberId.value ?? '' },
+  })
 }
 </script>
 

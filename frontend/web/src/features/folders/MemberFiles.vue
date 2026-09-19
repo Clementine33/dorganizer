@@ -41,23 +41,27 @@ const router = useRouter()
 const libraryId = computed(() => (route.params.libraryId as string) || '')
 
 // The member is addressed differently by the two entries and resolved here
-// once: the conversion entry carries a stable member id, the overview carries
-// the library-relative path directly (spec T1).
+// once: the conversion entry carries a stable member id and resolves its
+// directory identity from the record, the overview carries that identity in the
+// address itself. Neither address names a directory: the path it stands for
+// comes back with the tree (spec §9 N3′, 缓存).
 const memberId = computed(() => (route.params.memberId as string) || null)
 const recordQuery = useQuery(() => currentRecordQueryOptions(api, libraryId.value, CONVERSION))
 const record = computed(() => recordQuery.data.value?.workset ?? null)
-const memberPath = computed(() => {
-  if (memberId.value) {
-    return record.value?.members.find((member) => member.member_id === memberId.value)?.rel_path ?? null
-  }
-  return (route.query.folder as string) || null
-})
+const member = computed(() =>
+  memberId.value
+    ? (record.value?.members.find((item) => item.member_id === memberId.value) ?? null)
+    : null,
+)
+const dirId = computed(() =>
+  memberId.value ? (member.value?.dir_id ?? null) : ((route.params.dirId as string) || null),
+)
 const worksetId = computed(() => (memberId.value ? (record.value?.workset_id ?? null) : null))
 // A member link that no longer resolves against the current record: it was
 // replaced by another page, and the only honest thing to offer is the way back
 // to the conversion entry (N2).
 const recordChanged = computed(
-  () => Boolean(memberId.value) && recordQuery.isSuccess.value && memberPath.value === null,
+  () => Boolean(memberId.value) && recordQuery.isSuccess.value && member.value === null,
 )
 
 const { query: librariesQuery, librariesData } = useLibraryList()
@@ -72,7 +76,7 @@ const rootIdentity = computed(() => {
 })
 
 const treeQuery = useQuery(() =>
-  memberTreeQueryOptions(api, libraryId.value, rootIdentity.value, memberPath.value),
+  memberTreeQueryOptions(api, libraryId.value, rootIdentity.value, dirId.value),
 )
 const tree = computed<TreeNode | null>(() => treeQuery.data.value?.tree ?? null)
 const treePending = computed(() => treeQuery.isPending.value)
@@ -80,15 +84,38 @@ const treeError = computed(() => {
   const error = treeQuery.error.value
   return error ? errorDetails(error) : null
 })
+/** What the tree's path is: the record's member path, or the one the tree answers with. */
+const memberPath = computed(() => member.value?.rel_path ?? treeQuery.data.value?.member_path ?? null)
+
+/**
+ * Why the tree is not there, in the user's terms. A directory that disappeared,
+ * a library whose root moved and a record that was replaced are different
+ * facts, and each says so instead of opening something else (spec §9).
+ */
+const TREE_ERROR_TEXT: Record<string, string> = {
+  DIRECTORY_NOT_FOUND: '这个文件夹已不在媒体库里（被改名、删除或换了库根）。它没有被自动创建，也没有跳到别的文件夹。',
+  MEMBER_MISSING: '这个文件夹在磁盘上不存在了，没有被自动创建。',
+  DIRECTORY_AMBIGUOUS: '这个文件夹标识同时对应多个目录，无法确定是哪一个。请回到概览重新进入。',
+  DIR_ID_INVALID: '地址里的文件夹标识无效。',
+  DIR_ID_REQUIRED: '地址里缺少文件夹标识。',
+}
+const treeErrorText = computed(() => {
+  const error = treeError.value
+  if (!error) return null
+  const known = error.code ? TREE_ERROR_TEXT[error.code] : undefined
+  return known ?? `${error.code ?? ''} ${error.message}`.trim()
+})
 
 // View mode: the conversion entry offers 当前文件 / 计划审阅; the overview has
-// only current files. The mode is part of the URL, so a return visit and the
-// browser's back button land where the user left off.
+// only current files. The mode is one of the few parameters a page supports, so
+// a return visit and the browser's back button land where the user left off.
 const mode = computed<'current' | 'plan'>(() => (route.query.view === 'plan' ? 'plan' : 'current'))
 const canReview = computed(() => Boolean(worksetId.value))
 
 function setMode(next: 'current' | 'plan') {
-  void router.replace({ query: { ...route.query, view: next === 'plan' ? 'plan' : undefined } })
+  // Only this page's own parameter is written: an internal jump never forwards
+  // whatever the previous address happened to carry.
+  void router.replace({ query: next === 'plan' ? { view: 'plan' } : {} })
 }
 
 // ---- refreshing -------------------------------------------------------
@@ -102,10 +129,10 @@ const refreshError = ref<string | null>(null)
 const refreshing = computed(() => refreshMutation.isPending.value)
 
 async function refresh() {
-  if (!memberPath.value) return
+  if (!dirId.value) return
   refreshError.value = null
   try {
-    await refreshMutation.mutateAsync(memberPath.value)
+    await refreshMutation.mutateAsync(dirId.value)
   } catch (error) {
     const apiError = error as { code?: string; message?: string }
     refreshError.value = apiError.message ?? '刷新失败'
@@ -113,11 +140,11 @@ async function refresh() {
 }
 
 watch(
-  () => [libraryId.value, memberPath.value, mode.value] as const,
-  ([, path, nextMode]) => {
+  () => [libraryId.value, dirId.value, mode.value] as const,
+  ([, identity, nextMode]) => {
     refreshError.value = null
     // The plan review is a frozen snapshot: it needs no disk read at all.
-    if (path && nextMode === 'current') void refresh()
+    if (identity && nextMode === 'current') void refresh()
   },
   { immediate: true },
 )
@@ -187,9 +214,8 @@ async function apply(operation: FileOperation, items: { source: string; name?: s
   result.value = null
   try {
     result.value = await fileOps.mutateAsync({
-      member_path: memberPath.value ?? '',
-      operation,
-      items,
+      dirId: dirId.value ?? '',
+      body: { member_path: memberPath.value ?? '', operation, items },
     })
     dialog.value = 'none'
     selection.value = []
@@ -282,7 +308,7 @@ function submitDelete() {
       role="alert"
     >
       <AlertTriangle class="size-3.5 shrink-0" />
-      <span>{{ treeError.code }} {{ treeError.message }}</span>
+      <span>{{ treeErrorText }}</span>
     </p>
 
     <!-- A member link that no longer resolves against the current record: the
@@ -339,7 +365,7 @@ function submitDelete() {
 
 
     <div
-      v-else-if="!treeError && memberPath"
+      v-else-if="!treeError && dirId"
       class="grid min-h-0 flex-1 place-items-center px-4 text-center text-xs text-muted-foreground"
       data-testid="member-missing"
     >

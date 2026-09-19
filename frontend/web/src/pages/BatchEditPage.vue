@@ -21,7 +21,10 @@ const ui = useWorksetUiStore()
 const libraryId = computed(() => (route.params.libraryId as string) || '')
 const { worksetId, workspace, applySession } = useCurrentConversion(libraryId)
 const draft = workspace.draft
-const listPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+const listRoute = computed(() => ({
+  name: 'conversion' as const,
+  params: { libraryId: libraryId.value },
+}))
 
 const memberIds = computed(() => ui.batchMemberIds)
 const members = computed(() => {
@@ -35,7 +38,7 @@ watch(
   [draft, memberIds],
   () => {
     if (!worksetId.value || memberIds.value.length === 0) {
-      void router.replace(listPath.value)
+      void router.replace(listRoute.value)
       return
     }
     if (!draft.value) return
@@ -48,7 +51,7 @@ watch(
       baseVersion: draft.value.version,
       baseDocument: draft.value.document,
     })
-    if (!opened) void router.replace(listPath.value)
+    if (!opened) void router.replace(listRoute.value)
   },
   { immediate: true },
 )
@@ -72,7 +75,7 @@ async function apply() {
   if (saved) {
     ui.clearSelection()
     ui.clearBatchList()
-    await router.push(listPath.value)
+    await router.push(listRoute.value)
   }
 }
 
@@ -80,14 +83,14 @@ function cancel() {
   if (dirty.value && !window.confirm('放弃未应用的修改？')) return
   editor.close()
   ui.clearBatchList()
-  void router.push(listPath.value)
+  void router.push(listRoute.value)
 }
 </script>
 
 <template>
   <div class="mx-auto max-w-2xl p-3" data-testid="batch-edit-page">
     <div class="mb-2 flex items-center gap-2">
-      <RouterLink :to="listPath" class="text-xs text-[var(--brand-ink)] hover:underline">← 转换列表</RouterLink>
+      <RouterLink :to="listRoute" class="text-xs text-[var(--brand-ink)] hover:underline">← 转换列表</RouterLink>
       <h2 class="font-heading text-sm font-semibold">批量修改 {{ members.length }} 个文件夹</h2>
     </div>
 

@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
+import { installAddressHygiene } from '@/app/route-params'
 import { createPinia } from 'pinia'
 import { ApiError, apiClientKey } from '@/lib/api/client'
 import { apiStub } from '@/test/api-stub'
@@ -17,6 +18,10 @@ import type { FileOperationResult, TreeNode, Workset } from '@/lib/api/types'
  * changed files but could not refresh says both facts, and a member link whose
  * record was replaced offers the way back instead of another member's files.
  */
+
+// A realistic identity: 128 bits as lowercase hex. It names no folder, which
+// is the point — it is what a page address carries.
+const DIR_ID = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
 const memberTree: TreeNode = {
   name: 'albumA',
@@ -52,27 +57,41 @@ const record: Workset = {
   title: 'Archive',
   version: 1,
   library: { library_id: 'lib-1', name: 'Archive', root_path: '/music' },
-  members: [{ member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA' }],
+  members: [
+    {
+      member_id: 'm-1',
+      folder_path: '/music/albumA',
+      folder_name: 'albumA',
+      rel_path: 'albumA',
+      dir_id: DIR_ID,
+    },
+  ],
   operations: [],
   updated_at: '',
   created_at: '',
 }
 
+/** What the tree route answers: the tree, and the identity and path it resolved. */
+const memberTreeResponse = { tree: memberTree, dir_id: DIR_ID, member_path: 'albumA' }
+
 function routerFor(): Router {
-  return createRouter({
+  const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/worksets/libraries/:libraryId/files', name: 'overview-files', component: MemberFiles },
+      { path: '/worksets/:libraryId/f/:dirId', name: 'overview-files', component: MemberFiles },
       {
-        path: '/worksets/libraries/:libraryId/conversion/members/:memberId/files',
+        path: '/worksets/:libraryId/conversion/:memberId/files',
         name: 'conversion-member-files',
         component: MemberFiles,
       },
-      { path: '/worksets/libraries/:libraryId/conversion', name: 'conversion', component: { template: '<div />' } },
-      { path: '/worksets/libraries/:libraryId', name: 'workbench-overview', component: { template: '<div />' } },
+      { path: '/worksets/:libraryId/conversion', name: 'conversion', component: { template: '<div />' } },
+      { path: '/worksets/:libraryId', name: 'workbench-overview', component: { template: '<div />' } },
       { path: '/worksets', name: 'worksets', component: { template: '<div />' } },
     ],
   })
+  // The app installs the same guard: the page's own parameters survive, extras do not.
+  installAddressHygiene(router)
+  return router
 }
 
 async function mountFiles(
@@ -93,8 +112,8 @@ async function mountFiles(
       },
     ]),
     getCurrentRecord: vi.fn().mockResolvedValue({ workset: record }),
-    getMemberTree: vi.fn().mockResolvedValue({ tree: memberTree }),
-    refreshMemberTree: vi.fn().mockResolvedValue({ tree: memberTree, refreshed: true }),
+    getMemberTree: vi.fn().mockResolvedValue(memberTreeResponse),
+    refreshMemberTree: vi.fn().mockResolvedValue({ ...memberTreeResponse, refreshed: true }),
     applyFileOperation: vi.fn(),
     ...overrides,
   } as never)
@@ -118,20 +137,20 @@ describe('shared member files', () => {
     const refreshMemberTree = vi.fn(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ tree: memberTree, refreshed: true })
+          release = () => resolve({ ...memberTreeResponse, refreshed: true })
         }),
     )
-    const { wrapper, api } = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA', {
+    const { wrapper, api } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`, {
       refreshMemberTree,
     })
 
-    expect(api.getMemberTree).toHaveBeenCalledWith('lib-1', 'albumA', expect.anything())
+    expect(api.getMemberTree).toHaveBeenCalledWith('lib-1', DIR_ID, expect.anything())
     expect(wrapper.get('[data-testid="refreshing"]').text()).toContain('正在刷新')
     expect(wrapper.text()).toContain('刷新完成前不能修改')
 
     release?.()
     await flushPromises()
-    expect(refreshMemberTree).toHaveBeenCalledWith('lib-1', 'albumA')
+    expect(refreshMemberTree).toHaveBeenCalledWith('lib-1', DIR_ID)
     expect(wrapper.find('[data-testid="refreshing"]').exists()).toBe(false)
   })
 
@@ -139,7 +158,7 @@ describe('shared member files', () => {
     const refreshMemberTree = vi
       .fn()
       .mockRejectedValue(new ApiError(502, 'SCAN_FAILED', 'scan blew up'))
-    const { wrapper } = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA', {
+    const { wrapper } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`, {
       refreshMemberTree,
     })
 
@@ -163,7 +182,7 @@ describe('shared member files', () => {
       refresh: { ok: false, code: 'REFRESH_FAILED', message: 'files were modified, but refreshing failed' },
     }
     const applyFileOperation = vi.fn().mockResolvedValue(result)
-    const { wrapper } = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA', { applyFileOperation })
+    const { wrapper } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`, { applyFileOperation })
 
     // Select both files (the checkboxes are the tree's, not virtualized).
     await wrapper.get('[data-testid="file-checkbox-01.flac"]').setValue(true)
@@ -180,6 +199,9 @@ describe('shared member files', () => {
       { member_path: string; operation: string; items: { source: string }[] },
     ]
     expect(call[0]).toBe('lib-1')
+    // The path the request addresses comes from the tree response, not from the
+    // address: the address carries an identity.
+    expect(call[1].member_path).toBe('albumA')
     expect(call[1].operation).toBe('soft_delete')
     expect(call[1].items.map((item) => item.source)).toEqual(['01.flac', 'cover.jpg'])
 
@@ -196,7 +218,7 @@ describe('shared member files', () => {
     const applyFileOperation = vi
       .fn()
       .mockRejectedValue(new ApiError(409, 'BUSY', 'a scan is running; wait for it to finish'))
-    const { wrapper } = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA', { applyFileOperation })
+    const { wrapper } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`, { applyFileOperation })
 
     await wrapper.get('[data-testid="file-checkbox-01.flac"]').setValue(true)
     await wrapper.get('[data-testid="delete-selection"]').trigger('click')
@@ -219,7 +241,7 @@ describe('shared member files', () => {
       untouched: 0,
       refresh: { ok: true },
     })
-    const { wrapper } = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA', { applyFileOperation })
+    const { wrapper } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`, { applyFileOperation })
 
     await wrapper.get('[data-testid="rename-01.flac"]').trigger('click')
     await flushPromises()
@@ -238,9 +260,25 @@ describe('shared member files', () => {
     expect(wrapper.get('[data-testid="file-op-result"]').text()).toContain('02.flac')
   })
 
+  it('addresses a member by identity, and keeps the view parameter to itself', async () => {
+    const { wrapper, router, api } = await mountFiles(`/worksets/lib-1/f/${DIR_ID}?folder=albumA&q=hot`)
+
+    // The address names no folder, and nothing else rides along: the overview's
+    // file page supports no parameter at all.
+    expect(router.currentRoute.value.fullPath).toBe(`/worksets/lib-1/f/${DIR_ID}`)
+    expect(api.getMemberTree).toHaveBeenCalledWith('lib-1', DIR_ID, expect.anything())
+
+    // The conversion entry's view switch is one of the page's own parameters.
+    await router.push('/worksets/lib-1/conversion/m-1/files')
+    await flushPromises()
+    await wrapper.get('[data-testid="view-plan"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/worksets/lib-1/conversion/m-1/files?view=plan')
+  })
+
   it('tells the user when the record that owned this member was replaced', async () => {
     const { wrapper } = await mountFiles(
-      '/worksets/libraries/lib-1/conversion/members/m-old/files',
+      '/worksets/lib-1/conversion/m-old/files',
       { getCurrentRecord: vi.fn().mockResolvedValue({ workset: record }) },
     )
 
@@ -249,10 +287,10 @@ describe('shared member files', () => {
   })
 
   it('offers the plan review only on the conversion entry, and keeps it read-only', async () => {
-    const overview = await mountFiles('/worksets/libraries/lib-1/files?folder=albumA')
+    const overview = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`)
     expect(overview.wrapper.find('[data-testid="view-plan"]').exists()).toBe(false)
 
-    const conversion = await mountFiles('/worksets/libraries/lib-1/conversion/members/m-1/files')
+    const conversion = await mountFiles('/worksets/lib-1/conversion/m-1/files')
     expect(conversion.wrapper.get('[data-testid="view-current"]').attributes('aria-selected')).toBe('true')
 
     await conversion.wrapper.get('[data-testid="view-plan"]').trigger('click')

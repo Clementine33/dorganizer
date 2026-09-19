@@ -78,14 +78,14 @@ describe('AppShell global navigation', () => {
   })
 
   it('keeps 工作集 current inside a library workbench', async () => {
-    await at('/worksets/libraries/lib-a')
+    await at('/worksets/lib-a')
     const links = mountShell().get('[data-testid="global-rail"]').findAll('a')
 
     expect(links[0].attributes('aria-current')).toBe('page')
   })
 
   it('keeps 工作集 current on a workbench child route', async () => {
-    await at('/worksets/libraries/lib-a/conversion/settings')
+    await at('/worksets/lib-a/conversion/settings')
     const links = mountShell().get('[data-testid="global-bottom-bar"]').findAll('a')
 
     expect(links[0].attributes('aria-current')).toBe('page')

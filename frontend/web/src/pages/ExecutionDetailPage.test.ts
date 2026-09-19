@@ -131,18 +131,18 @@ async function mountPage(api: ApiClientContract): Promise<VueWrapper> {
     history: createMemoryHistory(),
     routes: [
       {
-        path: '/worksets/libraries/:libraryId/conversion',
+        path: '/worksets/:libraryId/conversion',
         name: 'conversion',
         component: { template: '<div />' },
       },
       {
-        path: '/worksets/libraries/:libraryId/conversion/execution',
+        path: '/worksets/:libraryId/conversion/execution',
         name: 'conversion-execution',
         component: ExecutionDetailPage,
       },
     ],
   })
-  await router.push('/worksets/libraries/lib-a/conversion/execution')
+  await router.push('/worksets/lib-a/conversion/execution')
   await router.isReady()
   const wrapper = mount(ExecutionDetailPage, {
     global: {

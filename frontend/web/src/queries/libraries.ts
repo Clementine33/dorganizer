@@ -47,25 +47,27 @@ export function dirsQueryOptions(
 }
 
 /**
- * One member tree, addressed by the member's library-relative path. The stored
- * tree is shown while the next refresh lands (gcTime keeps it around after a
- * page leaves), so entering a member page never shows an empty tree first.
+ * One member tree, addressed by the member's directory identity — the identity
+ * the overview lists and the record hands out for the same directory, so both
+ * entries read one cache entry. The stored tree is shown while the next refresh
+ * lands (gcTime keeps it around after a page leaves), so entering a member page
+ * never shows an empty tree first.
  */
 export function memberTreeQueryOptions(
   api: ApiClientContract,
   libraryId: string | null,
   rootIdentity: string | null,
-  relPath: string | null,
+  dirId: string | null,
 ) {
   return {
-    queryKey: queryKeys.libraries.memberTree(libraryId ?? '', rootIdentity ?? '', relPath ?? ''),
-    enabled: Boolean(libraryId && rootIdentity && relPath),
+    queryKey: queryKeys.libraries.memberTree(libraryId ?? '', rootIdentity ?? '', dirId ?? ''),
+    enabled: Boolean(libraryId && rootIdentity && dirId),
     gcTime: TREE_GC_TIME,
     queryFn: ({ signal }: { signal?: AbortSignal }) => {
-      if (!libraryId || !rootIdentity || !relPath) {
-        throw new Error('member tree query requires a library, root identity and member path')
+      if (!libraryId || !rootIdentity || !dirId) {
+        throw new Error('member tree query requires a library, root identity and directory id')
       }
-      return api.getMemberTree(libraryId, relPath, signal)
+      return api.getMemberTree(libraryId, dirId, signal)
     },
   }
 }
@@ -82,10 +84,10 @@ export function refreshMemberTreeMutationOptions(
   rootIdentity: string,
 ) {
   return {
-    mutationFn: (relPath: string) => api.refreshMemberTree(libraryId, relPath),
-    onSuccess: (result: MemberTreeResponse, relPath: string) => {
+    mutationFn: (dirId: string) => api.refreshMemberTree(libraryId, dirId),
+    onSuccess: (result: MemberTreeResponse, dirId: string) => {
       queryClient.setQueryData(
-        queryKeys.libraries.memberTree(libraryId, rootIdentity, relPath),
+        queryKeys.libraries.memberTree(libraryId, rootIdentity, dirId),
         result,
       )
     },
@@ -107,14 +109,13 @@ export function fileOperationMutationOptions(
 ) {
   return {
     mutationFn: (input: {
-      member_path: string
-      operation: FileOperation
-      items: FileOperationItem[]
-    }) => api.applyFileOperation(libraryId, input),
-    onSuccess: (result: FileOperationResult, input: { member_path: string }) => {
+      dirId: string
+      body: { member_path: string; operation: FileOperation; items: FileOperationItem[] }
+    }) => api.applyFileOperation(libraryId, input.body),
+    onSuccess: (result: FileOperationResult, input: { dirId: string }) => {
       void refreshOrRemoveQueries(
         queryClient,
-        queryKeys.libraries.memberTree(libraryId, rootIdentity, input.member_path),
+        queryKeys.libraries.memberTree(libraryId, rootIdentity, input.dirId),
       )
       void refreshOrRemoveQueries(queryClient, queryKeys.libraries.dirs(libraryId, rootIdentity))
       // A rename, move or deletion inside a member changes the inputs a plan

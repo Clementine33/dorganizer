@@ -75,7 +75,7 @@ async function addLibraryAndScan(page: Page, root: string, name: string): Promis
   await page.getByRole('button', { name: '保存' }).click()
   // Entering the library opens its workbench, where it is scanned.
   await page.getByRole('main').getByRole('link', { name: new RegExp(name) }).first().click()
-  await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+  await expect(page).toHaveURL(/\/worksets\/[^/]+$/)
   await page.getByTestId('scan-button').click()
   await expect(page.getByText('扫描完成')).toBeVisible({ timeout: 60_000 })
 }

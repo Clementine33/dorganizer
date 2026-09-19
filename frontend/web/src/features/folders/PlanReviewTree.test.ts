@@ -21,7 +21,9 @@ const workset: Workset = {
   title: 'Archive',
   version: 1,
   library: { library_id: 'lib-1', name: 'Archive', root_path: '/music' },
-  members: [{ member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA' }],
+  members: [
+    { member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA', dir_id: 'dir-albumA' },
+  ],
   operations: [],
   updated_at: '',
   created_at: '',

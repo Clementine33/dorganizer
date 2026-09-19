@@ -112,7 +112,7 @@ test.describe('workbench return diagnostics', () => {
     await page.getByRole('button', { name: '保存' }).click()
 
     await page.getByRole('main').getByRole('link', { name: /Perf Library/ }).first().click()
-    await expect(page).toHaveURL(/\/worksets\/libraries\/[^/]+$/)
+    await expect(page).toHaveURL(/\/worksets\/[^/]+$/)
     await page.getByTestId('scan-button').click()
     await expect(page.getByText('扫描完成')).toBeVisible({ timeout: 60_000 })
     await expect(page.getByTestId('dir-list')).toBeVisible({ timeout: 30_000 })
@@ -138,7 +138,9 @@ test.describe('workbench return diagnostics', () => {
     const rounds: PerfRound[] = []
     for (let i = 0; i < 3; i++) {
       await visibleRow.click()
-      await expect(page).toHaveURL(/\/files\?folder=/)
+      // The member's address is its directory identity: the folder's name is
+      // not in it (spec §9 N1′).
+      await expect(page).toHaveURL(/\/f\/[0-9a-f]{32}$/)
       await expect(page.getByTestId('member-tree')).toBeVisible({ timeout: 30_000 })
 
       await installPerfWatch(page, '[data-testid="dir-list-spacer"]')

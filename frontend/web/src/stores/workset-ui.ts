@@ -2,7 +2,9 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 
 /**
- * UI-only workbench state: selection, filters and the batch name list. Never
+ * UI-only workbench state: selection, the search term and the batch name list.
+ * The list's filter is not here: it is the one page parameter an address may
+ * carry, so a filtered view can be linked (spec §9 自动隐藏规则). Never
  * holds server data and never holds the edit session content — that lives in
  * the editor store so a carrier switch cannot lose it.
  *
@@ -12,15 +14,12 @@ import { markRaw } from 'vue'
  * Route and edit intent are the source of truth for what is being edited; the
  * selected-member count is NEVER used to infer an edit target (R05).
  */
-export type MemberFilter = 'all' | 'change' | 'warn' | 'blocked' | 'excluded'
-
 export const useWorksetUiStore = defineStore('workset-ui', {
   state: () => ({
     /** Checkbox set; batch actions act on this explicit selection only. */
     selectedMemberIds: markRaw(new Set<string>()),
     /** Last filtered-out selection count, shown while a filter hides rows. */
     hiddenSelectedCount: 0,
-    filter: 'all' as MemberFilter,
     search: '' as string,
     /** Restored scroll offset of the list, per workset. */
     listScrollTop: 0,
@@ -49,9 +48,6 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     clearSelection() {
       this.selectedMemberIds = markRaw(new Set())
     },
-    setFilter(filter: MemberFilter) {
-      this.filter = filter
-    },
     setSearch(search: string) {
       this.search = search
     },
@@ -69,7 +65,6 @@ export const useWorksetUiStore = defineStore('workset-ui', {
     resetForOperation() {
       this.selectedMemberIds = markRaw(new Set())
       this.hiddenSelectedCount = 0
-      this.filter = 'all'
       this.search = ''
       this.batchMemberIds = []
       this.listScrollTop = 0

@@ -46,6 +46,7 @@ function makeDirs(count: number): LibraryDir[] {
     name: `Folder ${i}`,
     path: `/music/f-${i}`,
     rel_path: `f-${i}`,
+    dir_id: `dir-${i}`,
     audio_file_count: 3,
     file_count: 5,
   }))
@@ -149,11 +150,13 @@ describe('DirList', () => {
 
     // The row body navigates; it never toggles the checkbox (L06).
     await wrapper.find('[data-testid="dir-link-f-1"]').trigger('click')
-    expect(wrapper.emitted('open')).toEqual([['f-1']])
+    // The row opens the directory's page: the identity it is addressed by, not
+    // the name it is displayed under.
+    expect(wrapper.emitted('open')).toEqual([['dir-1']])
     expect(wrapper.emitted('select')).toEqual([['f-0', true]])
 
     await wrapper.find('[aria-label="打开 Folder 2"]').trigger('click')
-    expect(wrapper.emitted('open')).toEqual([['f-1'], ['f-2']])
+    expect(wrapper.emitted('open')).toEqual([['dir-1'], ['dir-2']])
   })
 
   it('renders no rows for an empty folder set', async () => {

@@ -11,10 +11,12 @@ export const queryKeys = {
     dirsPrefix: (libraryId: string) => ['libraries', 'dirs', libraryId] as const,
     dirs: (libraryId: string, rootIdentity: string) =>
       ['libraries', 'dirs', libraryId, rootIdentity] as const,
-    // One member tree, addressed by the member's library-relative path.
+    // One member tree, addressed by the member's directory identity: the
+    // overview and the conversion entry derive the same identity for the same
+    // directory, so they share this entry instead of reading the tree twice.
     memberTreesPrefix: (libraryId: string) => ['libraries', 'member-trees', libraryId] as const,
-    memberTree: (libraryId: string, rootIdentity: string, relPath: string) =>
-      ['libraries', 'member-trees', libraryId, rootIdentity, relPath] as const,
+    memberTree: (libraryId: string, rootIdentity: string, dirId: string) =>
+      ['libraries', 'member-trees', libraryId, rootIdentity, dirId] as const,
   },
   plans: {
     lists: () => ['plans', 'list'] as const,

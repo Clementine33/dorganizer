@@ -8,6 +8,7 @@ const member: WorksetMember = {
   folder_path: '/music/albumA',
   folder_name: 'albumA',
   rel_path: 'albumA',
+  dir_id: 'dir-albumA',
 }
 
 /**

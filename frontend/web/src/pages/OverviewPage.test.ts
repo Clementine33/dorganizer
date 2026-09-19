@@ -38,8 +38,8 @@ const library: Library = {
 }
 
 const dirs: LibraryDir[] = [
-  { name: 'albumA', path: '/music/albumA', rel_path: 'albumA', audio_file_count: 3, file_count: 4 },
-  { name: 'docs', path: '/music/docs', rel_path: 'docs', audio_file_count: 0, file_count: 1 },
+  { name: 'albumA', path: '/music/albumA', rel_path: 'albumA', dir_id: 'dir-albumA', audio_file_count: 3, file_count: 4 },
+  { name: 'docs', path: '/music/docs', rel_path: 'docs', dir_id: 'dir-docs', audio_file_count: 0, file_count: 1 },
 ]
 
 const record: Workset = {
@@ -48,7 +48,7 @@ const record: Workset = {
   version: 1,
   library: { library_id: 'lib-1', name: 'Archive', root_path: '/music' },
   members: [
-    { member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA' },
+    { member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA', dir_id: 'dir-albumA' },
   ],
   operations: [],
   updated_at: '',
@@ -59,9 +59,9 @@ function routerFor(): Router {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/worksets/libraries/:libraryId', name: 'workbench-overview', component: OverviewPage },
-      { path: '/worksets/libraries/:libraryId/files', name: 'overview-files', component: { template: '<div />' } },
-      { path: '/worksets/libraries/:libraryId/conversion', name: 'conversion', component: { template: '<div />' } },
+      { path: '/worksets/:libraryId', name: 'workbench-overview', component: OverviewPage },
+      { path: '/worksets/:libraryId/f/:dirId', name: 'overview-files', component: { template: '<div />' } },
+      { path: '/worksets/:libraryId/conversion', name: 'conversion', component: { template: '<div />' } },
       { path: '/worksets', name: 'worksets', component: { template: '<div />' } },
     ],
   })
@@ -79,7 +79,7 @@ async function mountOverview(overrides: Partial<Record<string, unknown>> = {}): 
     ...overrides,
   } as never)
   const router = routerFor()
-  await router.push('/worksets/libraries/lib-1')
+  await router.push('/worksets/lib-1')
   await router.isReady()
   const wrapper = mount(OverviewPage, {
     global: { plugins: [createPinia(), router, installTestQueryPlugin()], provide: { [apiClientKey as symbol]: api } },

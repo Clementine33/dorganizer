@@ -26,7 +26,7 @@ const libADifferentRoot: Library = { ...libA, root_path: 'D:\\Audio\\Archive' }
 const newLibrary: Library = { ...libA, id: 'lib-new', name: 'New library' }
 
 const dirs: LibraryDir[] = [
-  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', audio_file_count: 4, file_count: 6 },
+  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', dir_id: 'dir-alpha', audio_file_count: 4, file_count: 6 },
 ]
 
 const treeRoot: TreeNode = {
@@ -46,7 +46,7 @@ function apiStub(overrides: Partial<ApiClientContract> = {}): ApiClientContract 
 function seedDerivedCaches(client: ReturnType<typeof createTestQueryClient>) {
   client.setQueryData(queryKeys.libraries.dirs('lib-a', rootPathIdentityKey(libA.root_path)), dirs)
   client.setQueryData(
-    queryKeys.libraries.memberTree('lib-a', rootPathIdentityKey(libA.root_path), 'Alpha'),
+    queryKeys.libraries.memberTree('lib-a', rootPathIdentityKey(libA.root_path), 'dir-alpha'),
     treeRoot,
   )
 }

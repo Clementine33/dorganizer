@@ -17,8 +17,8 @@ const libA: Library = {
 const libB: Library = { ...libA, id: 'lib-b', name: 'Brazil', root_path: 'C:\\Audio\\Brazil' }
 
 const dirs: LibraryDir[] = [
-  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', audio_file_count: 4, file_count: 4 },
-  { name: 'Beta', path: '/music/Beta', rel_path: 'Beta', audio_file_count: 9, file_count: 9 },
+  { name: 'Alpha', path: '/music/Alpha', rel_path: 'Alpha', dir_id: 'dir-alpha', audio_file_count: 4, file_count: 4 },
+  { name: 'Beta', path: '/music/Beta', rel_path: 'Beta', dir_id: 'dir-beta', audio_file_count: 9, file_count: 9 },
 ]
 
 describe('library-ui store', () => {

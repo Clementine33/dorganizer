@@ -36,7 +36,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [relPath: string, selected: boolean]
   selectAll: [selected: boolean]
-  open: [relPath: string]
+  /** Opening a directory: the identity its page is addressed by. */
+  open: [dirId: string]
   /** The list's scroll offset: the caller keeps it across a trip away. */
   scroll: [offset: number]
 }>()
@@ -129,7 +130,7 @@ function dirAt(index: number): LibraryDir {
             :data-testid="`dir-link-${dirAt(virtualItem.index).rel_path}`"
             type="button"
             class="flex min-w-0 items-center gap-2 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            @click="emit('open', dirAt(virtualItem.index).rel_path)"
+            @click="emit('open', dirAt(virtualItem.index).dir_id)"
           >
             <Folder class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span class="min-w-0 flex-1">
@@ -158,7 +159,7 @@ function dirAt(index: number): LibraryDir {
             type="button"
             class="flex h-full w-full items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none rail:h-8 rail:w-8"
             :aria-label="`打开 ${dirAt(virtualItem.index).name}`"
-            @click="emit('open', dirAt(virtualItem.index).rel_path)"
+            @click="emit('open', dirAt(virtualItem.index).dir_id)"
           >
             <ChevronRight class="size-4" aria-hidden="true" />
           </button>

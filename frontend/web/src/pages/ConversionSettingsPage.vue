@@ -78,17 +78,20 @@ async function apply() {
 function cancel() {
   if (dirty.value && !window.confirm('放弃未应用的修改？')) return
   editor.close()
-  void router.push(`/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+  void router.push(listRoute.value)
 }
 
 /** Back to the conversion list: the library's record, at its own URL. */
-const listLink = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
+const listRoute = computed(() => ({
+  name: 'conversion' as const,
+  params: { libraryId: libraryId.value },
+}))
 </script>
 
 <template>
   <div class="mx-auto max-w-2xl p-3" data-testid="conversion-settings">
     <div class="mb-2 flex items-center gap-2">
-      <RouterLink :to="listLink" class="text-xs text-[var(--brand-ink)] hover:underline">← 转换列表</RouterLink>
+      <RouterLink :to="listRoute" class="text-xs text-[var(--brand-ink)] hover:underline">← 转换列表</RouterLink>
       <h2 class="font-heading text-sm font-semibold">转换全局设置</h2>
     </div>
 

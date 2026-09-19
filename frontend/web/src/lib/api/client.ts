@@ -116,9 +116,9 @@ export class ApiClient implements ApiClientContract {
   }
 
   /** The stored member tree: what the last scan recorded for this directory. */
-  getMemberTree(libraryId: string, folderRelPath: string, signal?: AbortSignal): Promise<MemberTreeResponse> {
+  getMemberTree(libraryId: string, dirId: string, signal?: AbortSignal): Promise<MemberTreeResponse> {
     return this.request(
-      `/libraries/${encodeURIComponent(libraryId)}/tree?folder=${encodeURIComponent(folderRelPath)}`,
+      `/libraries/${encodeURIComponent(libraryId)}/tree?dir=${encodeURIComponent(dirId)}`,
       { signal },
     )
   }
@@ -128,10 +128,10 @@ export class ApiClient implements ApiClientContract {
    * is a scan: it is refused while a file operation holds the admission slot,
    * and it refuses one in turn.
    */
-  refreshMemberTree(libraryId: string, folderRelPath: string): Promise<MemberTreeResponse> {
+  refreshMemberTree(libraryId: string, dirId: string): Promise<MemberTreeResponse> {
     return this.request(
-      `/libraries/${encodeURIComponent(libraryId)}/tree/refresh?folder=${encodeURIComponent(folderRelPath)}`,
-      { method: 'POST', body: {} , timeoutMs: 60_000 },
+      `/libraries/${encodeURIComponent(libraryId)}/tree/refresh?dir=${encodeURIComponent(dirId)}`,
+      { method: 'POST', body: {}, timeoutMs: 60_000 },
     )
   }
 

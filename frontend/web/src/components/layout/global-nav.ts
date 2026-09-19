@@ -42,6 +42,9 @@ const NAV_OWNER_BY_ROUTE_NAME = {
   'conversion-member-edit': 'worksets',
   'conversion-batch-edit': 'worksets',
   'conversion-execution': 'worksets',
+  // An address that names no page of the workbench is still reached inside the
+  // workbench: the entry that offers the way back is 工作集.
+  'not-found': 'worksets',
 } as const satisfies Record<string, GlobalNavId>
 
 export type AppRouteName = keyof typeof NAV_OWNER_BY_ROUTE_NAME

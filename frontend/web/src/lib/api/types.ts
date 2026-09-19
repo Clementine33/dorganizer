@@ -39,6 +39,8 @@ export interface LibraryDir {
   name: string
   path: string
   rel_path: string
+  /** The directory's navigation identity: what a page address carries. */
+  dir_id: string
   audio_file_count: number
   file_count: number
 }
@@ -58,6 +60,9 @@ export interface TreeNode {
 /** The member tree read: cached from the inventory, or just re-scanned. */
 export interface MemberTreeResponse {
   tree: TreeNode
+  /** The identity the route resolved, and the member path it names. */
+  dir_id: string
+  member_path: string
   refreshed?: boolean
 }
 
@@ -198,6 +203,8 @@ export interface WorksetMember {
   folder_name: string
   /** The durable library-relative path of the member directory. */
   rel_path: string
+  /** The navigation identity of that path: what the file page addresses. */
+  dir_id: string
 }
 
 /** Independent plan facts of one revision; they may overlap by design. */

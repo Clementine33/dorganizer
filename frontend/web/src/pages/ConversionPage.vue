@@ -16,6 +16,7 @@ import {
   type MemberConclusion,
 } from '@/features/worksets/plan-readers'
 import { useApiClient } from '@/lib/api/client'
+import { readMemberFilter, type MemberFilter } from '@/app/route-params'
 import { currentRecordQueryOptions } from '@/queries/worksets'
 import { useOperationContext } from '@/composables/use-operation-context'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
@@ -55,8 +56,29 @@ const draft = workspace.draft
 const revision = workspace.revision
 
 const members = computed<WorksetMember[]>(() => workset.value?.members ?? [])
-const listPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}/conversion`)
-const overviewPath = computed(() => `/worksets/libraries/${encodeURIComponent(libraryId.value)}`)
+// Every jump below is a named route: no page assembles a path from ids and
+// names by hand. The list's filter is the one view parameter this subtree
+// carries along (spec §9 自动隐藏规则), and nothing else is forwarded.
+const filter = computed<MemberFilter>(() => readMemberFilter(route.query.filter))
+const listQuery = computed(() => (filter.value === 'all' ? {} : { filter: filter.value }))
+const listRoute = computed(() => ({
+  name: 'conversion' as const,
+  params: { libraryId: libraryId.value },
+  query: listQuery.value,
+}))
+const overviewRoute = computed(() => ({
+  name: 'workbench-overview' as const,
+  params: { libraryId: libraryId.value },
+}))
+
+function gotoOverview() {
+  void router.push(overviewRoute.value)
+}
+
+/** The list's filter is shareable, so it is the page's own URL parameter. */
+function setFilter(next: MemberFilter) {
+  void router.replace({ query: next === 'all' ? {} : { filter: next } })
+}
 /** A child route is active: it occupies the carrier of this container tier. */
 const detailOpen = computed(() => route.meta.carrier === true)
 const carrierTitle = computed(() => (route.meta.title as string | undefined) ?? '详情')
@@ -107,23 +129,51 @@ function conclusionFor(member: WorksetMember): MemberConclusion {
 }
 
 async function openMember(memberId: string) {
-  await router.push({ path: `${listPath.value}/members/${encodeURIComponent(memberId)}` })
+  await router.push({
+    name: 'conversion-member',
+    params: { libraryId: libraryId.value, memberId },
+    query: listQuery.value,
+  })
 }
 
 /** A member's files: the shared module, in this workbench's main area. */
 async function openMemberFiles(memberId: string) {
-  await router.push(`${listPath.value}/members/${encodeURIComponent(memberId)}/files`)
+  await router.push({
+    name: 'conversion-member-files',
+    params: { libraryId: libraryId.value, memberId },
+    query: listQuery.value,
+  })
 }
 
 async function closeDetail() {
-  await router.push({ path: listPath.value, query: route.query })
+  await router.push(listRoute.value)
   await nextTick()
+}
+
+/** Continuing a pending edit: the carrier its session targets. */
+function continueEditing() {
+  const target = editor.session?.target
+  if (!target) return
+  const params = { libraryId: libraryId.value }
+  if (target.kind === 'common') void router.push({ name: 'conversion-settings', params, query: listQuery.value })
+  else if (target.kind === 'batch') void router.push({ name: 'conversion-batch-edit', params, query: listQuery.value })
+  else {
+    void router.push({
+      name: 'conversion-member-edit',
+      params: { ...params, memberId: target.memberId },
+      query: listQuery.value,
+    })
+  }
 }
 
 function startBatchEdit() {
   if (ui.selectionCount === 0) return
   ui.freezeBatchList()
-  void router.push(`${listPath.value}/batch-edit`)
+  void router.push({
+    name: 'conversion-batch-edit',
+    params: { libraryId: libraryId.value },
+    query: listQuery.value,
+  })
 }
 
 const sessionMemberCount = computed(() => {
@@ -247,7 +297,11 @@ async function startExecution() {
 }
 
 async function openExecution() {
-  await router.push({ path: `${listPath.value}/execution`, query: route.query })
+  await router.push({
+    name: 'conversion-execution',
+    params: { libraryId: libraryId.value },
+    query: listQuery.value,
+  })
 }
 
 async function cancelExecution() {
@@ -294,15 +348,15 @@ const parentLink = computed(() => {
       to: {
         name: 'conversion-member',
         params: { libraryId: libraryId.value, memberId: route.params.memberId },
-        query: route.query,
+        query: listQuery.value,
       },
       label: '文件夹详情',
     }
   }
   if (filesOpen.value || detailOpen.value) {
-    return { to: { name: 'conversion', params: { libraryId: libraryId.value }, query: route.query }, label: '转换' }
+    return { to: listRoute.value, label: '转换' }
   }
-  return { to: { name: 'workbench-overview', params: { libraryId: libraryId.value } }, label: '概览与成员' }
+  return { to: overviewRoute.value, label: '概览与成员' }
 })
 </script>
 
@@ -320,12 +374,12 @@ const parentLink = computed(() => {
           工作集
         </RouterLink>
         <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
-        <RouterLink :to="overviewPath" class="max-w-40 truncate rounded px-1 py-0.5 hover:bg-muted">
+        <RouterLink :to="overviewRoute" class="max-w-40 truncate rounded px-1 py-0.5 hover:bg-muted">
           {{ record?.library?.name ?? '…' }}
         </RouterLink>
         <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
         <RouterLink
-          :to="listPath"
+          :to="listRoute"
           :class="detailOpen || filesOpen ? 'rounded px-1 py-0.5 hover:bg-muted' : 'rounded px-1 py-0.5 font-medium'"
           :aria-current="detailOpen || filesOpen ? undefined : 'page'"
         >
@@ -361,7 +415,7 @@ const parentLink = computed(() => {
           <p class="mt-1 text-xs leading-5 text-[var(--text-muted)]">
             回到概览，勾选要转换的文件夹后点击“进入转换”。
           </p>
-          <Button class="mt-3" size="sm" data-testid="goto-overview" @click="router.push(overviewPath)">
+          <Button class="mt-3" size="sm" data-testid="goto-overview" @click="gotoOverview">
             返回概览
           </Button>
         </div>
@@ -442,7 +496,7 @@ const parentLink = computed(() => {
               size="xs"
               :disabled="!editor.isDirty || editor.session.applying"
               data-testid="continue-editing"
-              @click="router.push(`${listPath}/${editor.session.target.kind === 'common' ? 'settings' : editor.session.target.kind === 'batch' ? 'batch-edit' : `members/${editor.session.target.memberId}/edit`}`)"
+              @click="continueEditing"
             >
               继续编辑
             </Button>
@@ -464,7 +518,7 @@ const parentLink = computed(() => {
             :draft="draft.document"
             :selected-ids="ui.selectedMemberIds"
             :hidden-selected-count="ui.hiddenSelectedCount"
-            :filter="ui.filter"
+            :filter="filter"
             :search="ui.search"
             :conclusion-for="conclusionFor"
             :historical="false"
@@ -473,7 +527,7 @@ const parentLink = computed(() => {
             @toggle-all="ui.toggleAllVisible($event)"
             @open="openMember($event)"
             @files="openMemberFiles($event)"
-            @update:filter="ui.setFilter($event)"
+            @update:filter="setFilter"
             @update:search="ui.setSearch($event)"
           />
           <p v-else-if="record" class="p-3 text-xs text-[var(--text-muted)]">加载中…</p>
