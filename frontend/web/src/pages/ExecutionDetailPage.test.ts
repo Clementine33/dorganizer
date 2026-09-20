@@ -12,6 +12,7 @@ import type {
 } from '@/lib/api/types'
 import { apiStub as sharedApiStub } from '@/test/api-stub'
 import { installTestQueryPlugin } from '@/test/query-client'
+import { useWorksetExecutionStore } from '@/stores/workset-execution'
 import ExecutionDetailPage from './ExecutionDetailPage.vue'
 
 enableAutoUnmount(afterEach)
@@ -183,6 +184,73 @@ describe('ExecutionDetailPage', () => {
 
     expect(wrapper.get('[data-testid="execution-status"]').text()).toBe('已完成')
     expect(wrapper.find('[data-testid="execution-cancel"]').exists()).toBe(false)
+  })
+
+  it("fills a run's per-component facts in as each component commits", async () => {
+    const report: ExecutionView = {
+      ...executionView,
+      completed_components: 2,
+      completed_operations: 2,
+      current_root: '',
+      current_component_id: '',
+      components: [
+        {
+          component_index: 1,
+          component_id: 'comp-a',
+          root_path: '/music/albumA',
+          partition: 'matched',
+          status: 'succeeded',
+          operations: 2,
+          completed_operations: 2,
+          committed: ['/music/albumA/00.mp3'],
+          removed: [],
+          remaining: [],
+          recovery: [],
+          inventory_synced: true,
+        },
+      ],
+    }
+    // The first read is the session as it stood when the page opened; the read
+    // after the boundary carries the component that finished.
+    const getExecution = vi
+      .fn()
+      .mockResolvedValueOnce({ ...executionView, completed_components: 0, components: [] })
+      .mockResolvedValue(report)
+    const wrapper = await mountPage(pageApi({ getExecution }))
+
+    // Attaching the stream: the snapshot reports the counts it had when it was
+    // read, and no component has been read into the view yet.
+    const store = useWorksetExecutionStore()
+    store.status = 'streaming'
+    store.view = { ...executionView, completed_components: 0, components: [] }
+    await flushPromises()
+    expect(wrapper.find('[data-testid="execution-folder"]').exists()).toBe(false)
+
+    // A component boundary arrives: the wire carries counts only, so the panel
+    // asks for the report that the boundary has just persisted.
+    store.applyEvent({
+      type: 'progress',
+      data: {
+        execution_id: 'exec-1',
+        status: 'running',
+        total_components: 2,
+        completed_components: 1,
+        total_operations: 3,
+        completed_operations: 2,
+        current_root: '/music/albumA',
+        current_component_id: 'comp-a',
+        current_phase: 'component',
+      },
+    })
+    await flushPromises()
+
+    expect(getExecution).toHaveBeenCalledTimes(2)
+    const card = wrapper.get('[data-testid="execution-folder"]')
+    expect(card.get('[data-testid="execution-folder-name"]').text()).toContain('albumA')
+    expect(card.get('[data-testid="execution-folder-status"]').text()).toBe('执行中')
+    // The committed file of the component that just finished is on screen while
+    // the run is still going.
+    expect(card.text()).toContain('00.mp3')
   })
 
   it('states the absence of a session instead of pretending one exists', async () => {

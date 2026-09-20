@@ -426,7 +426,10 @@ replaced-old copies, leftover temporaries), `error_code`, `error_message`,
 detail above), then `progress` (counts + current component; never a fabricated
 percentage) and exactly one terminal event: `succeeded`, `failed`, `canceled`
 or `interrupted`. There is no event-log replay; a client that missed events
-re-reads the detail route. Disconnecting never cancels the session — only
+re-reads the detail route. The persisted report is written at every component
+boundary, so re-reading the detail after a `progress` event that moved
+`completed_components` yields that component's own facts while the run
+continues. Disconnecting never cancels the session — only
 `POST …/cancel` or the process lifecycle does.
 
 **Cancellation.** Canceling a queued session ends it immediately; canceling a

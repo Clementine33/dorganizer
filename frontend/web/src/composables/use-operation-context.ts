@@ -88,9 +88,32 @@ export function useOperationContext(
   // it ends the detail GET owns the full per-component report.
   const executionView = computed(() => {
     const store = execution.store
-    if (store.status === 'streaming' && store.view) return store.view
-    return executionQuery.data.value ?? store.view
+    const detail = executionQuery.data.value
+    if (store.status === 'streaming' && store.view) {
+      // The stream carries counts only. The report itself is persisted at every
+      // component boundary, so the last refetch is at most one component
+      // behind — which is what lets a run's cards fill in as it goes.
+      if (detail && detail.execution_id === store.view.execution_id) {
+        return { ...store.view, components: detail.components }
+      }
+      return store.view
+    }
+    return detail ?? store.view
   })
+
+  // A finished component is one GET away: the wire only says the count moved,
+  // and reading the report again is what turns that into per-component facts.
+  // The first sighting is the snapshot itself — same persisted state, nothing
+  // to read — so only a boundary after it triggers a read.
+  watch(
+    () => execution.store.view?.completed_components ?? null,
+    (completed, previous) => {
+      if (completed === null || previous === null || completed === previous) return
+      if (execution.store.status !== 'streaming') return
+      if (executionQuery.isFetching.value) return
+      void executionQuery.refetch()
+    },
+  )
 
   const saveMutation = useMutation(saveOperationDraftMutationOptions(api, queryClient))
   const startMutation = useMutation(startGenerationMutationOptions(api, queryClient))
