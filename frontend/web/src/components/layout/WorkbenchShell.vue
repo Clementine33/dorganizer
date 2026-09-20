@@ -168,7 +168,12 @@ function onDrawerClick(event: MouseEvent) {
         </nav>
 
         <main class="flex min-h-0 min-w-0 flex-1" data-testid="workbench-main">
-          <div class="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          <!-- The main area is a flex column, so a page's own `flex-1 min-h-0`
+               column really fills the shell and scrolls inside itself: a list
+               that owns its scrolling needs a definite height, and only this
+               box can give it one. A page taller than the shell still scrolls
+               here. -->
+          <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
             <slot name="main" :tier="tier" />
           </div>
           <!-- Wide tier keeps a non-modal, sibling detail: no focus lock, no

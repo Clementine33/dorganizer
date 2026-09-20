@@ -98,6 +98,9 @@ describe('workbench overview', () => {
 
     expect(api.listDirs).toHaveBeenCalled()
     expect(wrapper.get('[data-testid="dir-list"]').text()).toContain('共 2 个文件夹')
+    // The overview has no detail to show, so it does not reserve the wide
+    // tier's detail column: the list is what the page is.
+    expect(wrapper.find('[data-testid="workbench-detail-inline"]').exists()).toBe(false)
     // Browsing alone creates nothing, and there is no empty action strip (N15).
     expect(wrapper.find('[data-testid="enter-conversion"]').exists()).toBe(false)
 

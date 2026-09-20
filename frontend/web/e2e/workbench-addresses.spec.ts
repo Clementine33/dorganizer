@@ -53,9 +53,27 @@ test.describe('workbench addresses', () => {
     await expect(page.getByText('扫描完成')).toBeVisible({ timeout: 60_000 })
     await expect(page.getByTestId('dir-list')).toContainText(opened)
 
+    // The list is the page: it takes the height the workbench leaves instead of
+    // a fixed box, and it uses the width the shell has — the overview reserves
+    // no detail column it has nothing to put in. A fixed h-80 was 0.48 of the
+    // shell's height, and the empty column plus max-w-3xl left it at 0.52 of
+    // the viewport.
+    const share = async (testid: string) => {
+      const target = (await page.getByTestId(testid).boundingBox())!
+      const area = (await page.getByTestId('workbench-main').boundingBox())!
+      return { width: target.width / page.viewportSize()!.width, height: target.height / area.height }
+    }
+    const list = await share('dir-list')
+    expect(list.height).toBeGreaterThan(0.6)
+    expect(list.width).toBeGreaterThan(0.7)
+    expect(await page.getByTestId('workbench-detail-inline').count()).toBe(0)
+
     // Opening a folder: the address carries the directory's identity.
     await page.getByTestId(`dir-link-${opened}`).click()
     await expect(page.getByTestId('member-tree')).toBeVisible({ timeout: 30_000 })
+    const tree = await share('member-tree')
+    expect(tree.height).toBeGreaterThan(0.7)
+    expect(tree.width).toBeGreaterThan(0.7)
     const address = new URL(page.url())
     expect(address.pathname).toMatch(/\/f\/[0-9a-f]{32}$/)
     expect(address.search).toBe('')

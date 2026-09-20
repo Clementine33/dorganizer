@@ -218,6 +218,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
 <template>
   <WorkbenchShell
     nav-title="工作台"
+    :detail-column="false"
     :context-title="activeLibrary?.name ?? '…'"
     :context-page="pageTitle"
     :context-back-to="filesOpen ? { name: 'workbench-overview', params: { libraryId } } : { name: 'worksets' }"
@@ -271,8 +272,8 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
         <RouterView />
       </div>
 
-      <section class="min-h-0 flex-1 overflow-y-auto" data-testid="overview">
-        <div class="mx-auto max-w-3xl p-4">
+      <section class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="overview">
+        <div class="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col p-4">
           <!-- Library identity, its scan state and the library-level actions
                (N3): management and scanning live here, not in a second page. -->
           <div class="flex flex-wrap items-start gap-3">
@@ -360,7 +361,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
 
           <!-- Members: every direct child directory, with its audio count as
                status. Selecting one is what a conversion scope is built from. -->
-          <section class="mt-4">
+          <section class="mt-4 flex min-h-0 flex-1 flex-col">
             <div class="flex items-center gap-2">
               <h2 class="text-xs font-semibold text-[var(--text-secondary)]">文件夹（{{ dirs.length }}）</h2>
               <label class="ml-auto flex items-center gap-1 text-[11px] text-[var(--text-secondary)]">
@@ -386,7 +387,13 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
               还没有扫描结果。先扫描媒体库，这里会列出根目录下的所有文件夹。
             </p>
 
-            <div v-else class="mt-1 h-80 min-h-0 overflow-hidden rounded-lg border border-border bg-card">
+            <!-- The list owns the rest of the page: it is the thing being read,
+                 and it scrolls internally. `min-h-80` is the floor a short
+                 viewport keeps; below it the page itself scrolls. -->
+            <div
+              v-else
+              class="mt-1 flex min-h-80 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card"
+            >
               <DirList
                 :dirs="dirs"
                 :selected-paths="ui.selectedDirPaths"
