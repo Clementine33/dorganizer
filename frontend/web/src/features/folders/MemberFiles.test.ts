@@ -286,6 +286,35 @@ describe('shared member files', () => {
     expect(wrapper.find('[data-testid="back-to-conversion"]').exists()).toBe(true)
   })
 
+  it('opens the frozen plan first when the operation has one (T3)', async () => {
+    const getOperation = vi.fn().mockResolvedValue({
+      workset_id: 'ws-1',
+      operation_type: 'conversion',
+      version: 2,
+      planning_state: 'planned',
+      current_revision: { plan_id: 'plan-1', revision_index: 1, validation_state: 'valid' },
+      active_generation: null,
+      latest_generation: null,
+      active_execution: null,
+      latest_execution: null,
+    })
+    const { wrapper, api, router } = await mountFiles('/worksets/lib-1/conversion/m-1/files', { getOperation })
+
+    expect(wrapper.get('[data-testid="view-plan"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-testid="plan-review-tree"]').exists()).toBe(true)
+    // A frozen plan needs no directory read: the member is not refreshed for a
+    // view nobody opened.
+    expect(api.refreshMemberTree).not.toHaveBeenCalled()
+
+    // 当前文件 is the view the user has to name, because it is no longer the
+    // default here; naming it is what starts the refresh.
+    await wrapper.get('[data-testid="view-current"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/worksets/lib-1/conversion/m-1/files?view=current')
+    expect(api.refreshMemberTree).toHaveBeenCalledWith('lib-1', DIR_ID)
+    expect(wrapper.find('[data-testid="member-tree"]').exists()).toBe(true)
+  })
+
   it('offers the plan review only on the conversion entry, and keeps it read-only', async () => {
     const overview = await mountFiles(`/worksets/lib-1/f/${DIR_ID}`)
     expect(overview.wrapper.find('[data-testid="view-plan"]').exists()).toBe(false)

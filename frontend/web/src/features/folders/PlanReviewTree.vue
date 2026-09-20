@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ChevronDown, ChevronRight, FileAudio, FilePlus2, FileText, Folder } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { useOperationContext } from '@/composables/use-operation-context'
-import { decisionGroups, keepReasonText, resolutionText, revisionComponents } from '@/features/worksets/plan-readers'
+import { decisionGroups, keepReasonText, memberConclusion, partitionFacts, resolutionText, revisionComponents } from '@/features/worksets/plan-readers'
 import type { ComponentOutcome } from '@/lib/api/types'
 
 /**
@@ -25,6 +25,7 @@ const props = defineProps<{
 
 const { workspace } = useOperationContext(computed(() => props.worksetId), 'conversion')
 const revision = workspace.revision
+const operation = workspace.operation
 
 /** The frozen root that corresponds to this member. */
 const root = computed(() => {
@@ -35,6 +36,35 @@ const root = computed(() => {
     view.roots.find((candidate) => candidate.root_path === props.memberPath) ??
     null
   )
+})
+
+/** The frozen member entry behind this directory, when the plan has one. */
+const frozenMember = computed(
+  () => revision.value?.members.find((candidate) => candidate.folder_path === root.value?.root_path) ?? null,
+)
+
+/**
+ * What the plan concludes for this folder, read with the same reader the row
+ * that opened this page used: the review and the list never disagree, and a
+ * folder with nothing to list still says why (已排除 / 未参与 / 无需转换).
+ */
+const conclusion = computed(() =>
+  memberConclusion({
+    excluded: frozenMember.value?.excluded ?? false,
+    hasRoot: Boolean(root.value),
+    rootMissing: root.value?.root_status === 'missing',
+    facts: partitionFacts(components.value),
+  }),
+)
+
+/** The plan is not there yet: the operation says whether it ever was. */
+const planMissing = computed(() => Boolean(operation.value) && !operation.value?.current_revision)
+
+/** The frozen proposal stays on screen, with the fact that it is no longer current (T3). */
+const needsPlanning = computed(() => {
+  const op = operation.value
+  if (!op?.current_revision) return false
+  return op.planning_state === 'needs_planning' || op.current_revision.validation_state !== 'valid'
 })
 
 const components = computed<ComponentOutcome[]>(() => {
@@ -52,7 +82,11 @@ interface Row {
   name: string
   pending: boolean
   resolution: string
-  reason: string
+  /** The plan's own code, as the member review keeps it; the words come from
+   *  the same map, at the same point, so the two views cannot drift (T3). */
+  reasonCode: string
+  /** The plan expects this output and no decision of this component names it. */
+  projected: boolean
 }
 
 interface DirRow {
@@ -95,7 +129,8 @@ const tree = computed<DirRow>(() => {
           // An encode names the output it will write: that file is not on disk.
           pending: row.resolution === 'encode',
           resolution: row.resolution,
-          reason: row.reasonCode ? keepReasonText(row.reasonCode) : '',
+          reasonCode: row.reasonCode,
+          projected: false,
         })
       }
     }
@@ -113,7 +148,8 @@ const tree = computed<DirRow>(() => {
         name,
         pending: true,
         resolution: 'encode',
-        reason: '计划预计产生',
+        reasonCode: '',
+        projected: true,
       })
     }
   }
@@ -125,6 +161,26 @@ const tree = computed<DirRow>(() => {
   }
   sort(rootNode)
   return rootNode
+})
+
+/**
+ * What the member's files are in for, counted from the same rows the tree
+ * renders. A plan whose rows are all `keep` is a review worth reading too: it
+ * says the folder needs no change, which is a conclusion, not an empty page.
+ */
+const tally = computed(() => {
+  const counts: Record<string, number> = { keep: 0, delete: 0, encode: 0, pending: 0 }
+  let rows = 0
+  const walk = (node: DirRow): void => {
+    for (const row of node.rows) {
+      rows += 1
+      counts[row.resolution] = (counts[row.resolution] ?? 0) + 1
+      if (row.pending) counts.pending += 1
+    }
+    node.children.forEach(walk)
+  }
+  walk(tree.value)
+  return { counts, rows }
 })
 
 const collapsed = ref<Set<string>>(new Set())
@@ -148,13 +204,39 @@ const RESOLUTION_TONES: Record<string, 'neutral' | 'success' | 'danger' | 'warni
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-auto p-3" data-testid="plan-review-tree">
-    <p v-if="!revision" class="text-xs text-[var(--text-muted)]">该操作还没有当前计划。先生成计划版本。</p>
-    <template v-else>
-      <p class="mb-2 text-[11px] text-[var(--text-muted)]">
-        按计划冻结数据展示：保留、删除、生成及预计新增的输出。标记为“待生成”的文件尚未存在于磁盘。
+  <div class="flex min-h-0 flex-1 flex-col" data-testid="plan-review-tree">
+    <!-- What the plan concludes for this folder, before the rows that carry it. -->
+    <div v-if="revision" class="shrink-0 space-y-1 border-b border-border px-3 py-2" data-testid="plan-summary">
+      <p class="flex flex-wrap items-center gap-2 text-xs">
+        <Badge :tone="conclusion.tone">{{ conclusion.label }}</Badge>
+        <span class="text-[var(--text-secondary)]">{{ conclusion.detail }}</span>
       </p>
-      <ul role="tree" aria-label="计划文件树">
+      <p v-if="tally.rows > 0" class="text-[11px] text-[var(--text-muted)]" data-testid="plan-tally">
+        保留 {{ tally.counts.keep }} · 删除 {{ tally.counts.delete }} · 生成 {{ tally.counts.encode }}
+        <template v-if="tally.counts.pending">（其中 {{ tally.counts.pending }} 项待生成）</template>
+      </p>
+    </div>
+
+    <p
+      v-if="needsPlanning"
+      class="shrink-0 border-b border-border bg-[var(--warning-weak,var(--muted))] px-3 py-1.5 text-[11px]"
+      data-testid="plan-needs-regeneration"
+      role="status"
+    >
+      设置或文件夹输入已变化：这里展示的仍是冻结的计划，需重新生成计划版本。
+    </p>
+
+    <div class="min-h-0 flex-1 overflow-auto p-3">
+      <p v-if="planMissing" class="text-xs text-[var(--text-muted)]">该操作还没有当前计划。先生成计划版本。</p>
+      <p v-else-if="!revision" class="text-xs text-[var(--text-muted)]">正在读取计划…</p>
+      <template v-else>
+        <p class="mb-2 text-[11px] text-[var(--text-muted)]">
+          按计划冻结数据展示：保留、删除、生成及预计新增的输出与原因。标记为“待生成”的文件尚未存在于磁盘。计划只列出它涉及的文件。
+        </p>
+        <p v-if="tally.rows === 0" class="text-xs text-[var(--text-muted)]" data-testid="plan-empty">
+          当前计划没有列出这个文件夹的文件，也不会有文件操作。
+        </p>
+        <ul v-else role="tree" aria-label="计划文件树">
         <!-- Files that sit in the member root itself have no directory row of
              their own; they are the first thing the tree shows. -->
         <li
@@ -173,7 +255,15 @@ const RESOLUTION_TONES: Record<string, 'neutral' | 'success' | 'danger' | 'warni
           <span class="min-w-0 truncate text-xs" :class="row.pending ? 'italic' : ''">{{ row.name }}</span>
           <Badge :tone="RESOLUTION_TONES[row.resolution] ?? 'neutral'">{{ resolutionText(row.resolution) }}</Badge>
           <span v-if="row.pending" class="text-[10px] text-[var(--text-muted)]" data-testid="pending-output">待生成</span>
-          <span v-if="row.reason" class="truncate text-[10px] text-[var(--text-muted)]">{{ row.reason }}</span>
+          <span v-if="row.projected" class="truncate text-[10px] text-[var(--text-muted)]">计划预计产生</span>
+          <!-- Why a file stays is the question worth answering; a generated or
+               removed file speaks for itself — the member review's own rule. -->
+          <span
+            v-else-if="row.resolution === 'keep' && row.reasonCode"
+            class="truncate text-[10px] text-[var(--text-muted)]"
+          >
+            {{ keepReasonText(row.reasonCode) }}
+          </span>
         </li>
         <template v-for="dir in tree.children" :key="dir.key">
           <li
@@ -216,11 +306,21 @@ const RESOLUTION_TONES: Record<string, 'neutral' | 'success' | 'danger' | 'warni
               <span v-if="row.pending" class="text-[10px] text-[var(--text-muted)]" data-testid="pending-output">
                 待生成
               </span>
-              <span v-if="row.reason" class="truncate text-[10px] text-[var(--text-muted)]">{{ row.reason }}</span>
+              <span v-if="row.projected" class="truncate text-[10px] text-[var(--text-muted)]">计划预计产生</span>
+              <!-- The same rule as the root rows, and as the member review: why
+                   a file stays is the question worth answering; a generated or
+                   removed file speaks for itself. -->
+              <span
+                v-else-if="row.resolution === 'keep' && row.reasonCode"
+                class="truncate text-[10px] text-[var(--text-muted)]"
+              >
+                {{ keepReasonText(row.reasonCode) }}
+              </span>
             </li>
           </template>
         </template>
-      </ul>
-    </template>
+        </ul>
+      </template>
+    </div>
   </div>
 </template>

@@ -18,7 +18,7 @@ import {
   refreshMemberTreeMutationOptions,
   useLibraryList,
 } from '@/queries/libraries'
-import { currentRecordQueryOptions } from '@/queries/worksets'
+import { currentRecordQueryOptions, operationQueryOptions } from '@/queries/worksets'
 import { CONVERSION, type FileOperation, type FileOperationResult, type TreeNode } from '@/lib/api/types'
 
 /**
@@ -106,16 +106,29 @@ const treeErrorText = computed(() => {
   return known ?? `${error.code ?? ''} ${error.message}`.trim()
 })
 
-// View mode: the conversion entry offers 当前文件 / 计划审阅; the overview has
-// only current files. The mode is one of the few parameters a page supports, so
-// a return visit and the browser's back button land where the user left off.
-const mode = computed<'current' | 'plan'>(() => (route.query.view === 'plan' ? 'plan' : 'current'))
+// The operation answers whether there is a plan to review. It is the same query
+// the review itself reads, so opening the page costs one request, not two.
+const operationQuery = useQuery(() => operationQueryOptions(api, worksetId.value, CONVERSION))
+const hasPlan = computed(() => Boolean(operationQuery.data.value?.current_revision))
+
+// View mode: the conversion entry offers 当前文件 / 计划审阅, and a member the
+// plan covers opens on its plan — the proposal is the reason the page exists
+// (spec T3); with no plan the current files are the only view there is. The
+// mode is one of the few parameters a page supports, so a return visit and the
+// browser's back button land where the user left off.
+const mode = computed<'current' | 'plan'>(() => {
+  if (!canReview.value) return 'current'
+  if (route.query.view === 'current') return 'current'
+  if (route.query.view === 'plan') return 'plan'
+  return hasPlan.value ? 'plan' : 'current'
+})
 const canReview = computed(() => Boolean(worksetId.value))
 
 function setMode(next: 'current' | 'plan') {
   // Only this page's own parameter is written: an internal jump never forwards
-  // whatever the previous address happened to carry.
-  void router.replace({ query: next === 'plan' ? { view: 'plan' } : {} })
+  // whatever the previous address happened to carry. 当前文件 is written down
+  // explicitly — the default view would otherwise open the plan again.
+  void router.replace({ query: { view: next } })
 }
 
 // ---- refreshing -------------------------------------------------------
@@ -139,12 +152,17 @@ async function refresh() {
   }
 }
 
+/** Which view is opening is only known once the operation answers: until then
+ *  the refresh — a real directory read — waits, so a visit that lands on the
+ *  plan never scans the disk for a view nobody opened. */
+const viewSettled = computed(() => !canReview.value || operationQuery.isFetched.value)
+
 watch(
-  () => [libraryId.value, dirId.value, mode.value] as const,
-  ([, identity, nextMode]) => {
+  () => [libraryId.value, dirId.value, mode.value, viewSettled.value] as const,
+  ([, identity, nextMode, settled]) => {
     refreshError.value = null
     // The plan review is a frozen snapshot: it needs no disk read at all.
-    if (identity && nextMode === 'current') void refresh()
+    if (identity && nextMode === 'current' && settled) void refresh()
   },
   { immediate: true },
 )
@@ -335,6 +353,16 @@ function submitDelete() {
       </div>
     </div>
 
+    <!-- The plan review is built from the frozen plan alone, so it stands on
+         its own: a directory that moved, a failed refresh or a changed input
+         does not take the plan off the screen (T3). -->
+    <PlanReviewTree
+      v-else-if="mode === 'plan' && canReview"
+      class="min-h-0 flex-1"
+      :workset-id="worksetId ?? ''"
+      :member-path="memberPath ?? ''"
+    />
+
     <div
       v-else-if="treePending && !tree"
       class="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground"
@@ -342,26 +370,18 @@ function submitDelete() {
       正在读取文件夹…
     </div>
 
-    <template v-else-if="tree">
-      <PlanReviewTree
-        v-if="mode === 'plan'"
-        class="min-h-0 flex-1"
-        :workset-id="worksetId ?? ''"
-        :member-path="memberPath ?? ''"
-      />
-      <MemberTree
-        v-else
-        class="min-h-0 flex-1"
-        :root="tree"
-        :frozen="modifyDisabled"
-        :frozen-reason="modifyDisabledReason"
-        :stale="Boolean(refreshError)"
-        @selection-change="selection = $event"
-        @rename="openRename"
-        @move="openMove"
-        @remove="openDelete"
-      />
-    </template>
+    <MemberTree
+      v-else-if="tree"
+      class="min-h-0 flex-1"
+      :root="tree"
+      :frozen="modifyDisabled"
+      :frozen-reason="modifyDisabledReason"
+      :stale="Boolean(refreshError)"
+      @selection-change="selection = $event"
+      @rename="openRename"
+      @move="openMove"
+      @remove="openDelete"
+    />
 
 
     <div

@@ -39,13 +39,24 @@ function component(): ComponentOutcome {
       {
         stem: 'track1',
         decisions: [
-          { path: '/music/albumA/keep.flac', resolution: 'keep', reason_code: 'ALREADY_SATISFIED' },
-          { path: '/music/albumA/obsolete.mp3', resolution: 'delete' },
+          // Real codes: a mapped keep reason, and a delete reason the review is
+          // deliberately silent about.
+          { path: '/music/albumA/keep.flac', resolution: 'keep', reason_code: 'KEEP_ENCODED_SATISFIED' },
+          { path: '/music/albumA/obsolete.mp3', resolution: 'delete', reason_code: 'OBSOLETE_ENCODED' },
           { path: '/music/albumA/track1.wav', resolution: 'encode', target_path: '/music/albumA/track1.wav' },
         ],
       },
     ],
-    operations: [],
+    operations: [
+      {
+        kind: 'encode',
+        phase: 'execute',
+        component_id: 'c-1',
+        variant_stem: 'track1',
+        source_path: '/music/albumA/track1.flac',
+        target_path: '/music/albumA/track1.wav',
+      },
+    ],
     projected_inventory: ['/music/albumA/track1.wav'],
     files: [],
   }
@@ -88,26 +99,34 @@ const revision: RevisionDetailResponse = {
   execution: null,
 }
 
-async function mountTree() {
+async function mountTree(
+  overrides: {
+    memberPath?: string
+    revision?: Partial<RevisionDetailResponse>
+    operation?: Record<string, unknown>
+  } = {},
+) {
   const api = apiStub({
     getCurrentRecord: vi.fn().mockResolvedValue({ workset }),
     getWorkset: vi.fn().mockResolvedValue(workset),
-    getOperation: vi.fn().mockResolvedValue({
-      workset_id: 'ws-1',
-      operation_type: 'conversion',
-      version: 2,
-      planning_state: 'planned',
-      current_revision: { plan_id: 'plan-1', revision_index: 1, counts: revision.counts },
-      active_generation: null,
-      latest_generation: null,
-      active_execution: null,
-      latest_execution: null,
-    }),
+    getOperation: vi.fn().mockResolvedValue(
+      overrides.operation ?? {
+        workset_id: 'ws-1',
+        operation_type: 'conversion',
+        version: 2,
+        planning_state: 'planned',
+        current_revision: { plan_id: 'plan-1', revision_index: 1, counts: revision.counts },
+        active_generation: null,
+        latest_generation: null,
+        active_execution: null,
+        latest_execution: null,
+      },
+    ),
     getOperationDraft: vi.fn().mockResolvedValue({ version: 2, document: { members: [] } }),
-    getRevision: vi.fn().mockResolvedValue(revision),
+    getRevision: vi.fn().mockResolvedValue({ ...revision, ...overrides.revision }),
   } as never)
   const wrapper = mount(PlanReviewTree, {
-    props: { worksetId: 'ws-1', memberPath: 'albumA' },
+    props: { worksetId: 'ws-1', memberPath: overrides.memberPath ?? 'albumA' },
     global: { plugins: [createPinia(), installTestQueryPlugin()], provide: { [apiClientKey as symbol]: api } },
   })
   await flushPromises()
@@ -131,6 +150,13 @@ describe('plan review tree', () => {
     expect(text).toContain('track1.wav')
     expect(text).toContain('生成')
     expect(rows.length).toBeGreaterThan(0)
+
+    // The plan's code is read with the member review's own rule: a kept file
+    // says why in the plan's words, and a code the map does not cover is never
+    // spilled into the tree as SCREAMING_SNAKE.
+    expect(text).toContain('已满足编码目标')
+    expect(text).not.toContain('KEEP_ENCODED_SATISFIED')
+    expect(text).not.toContain('OBSOLETE_ENCODED')
   })
 
   it('marks a planned output as pending, because it is not on disk yet', async () => {
@@ -148,6 +174,50 @@ describe('plan review tree', () => {
     expect(wrapper.find('[data-testid="file-toolbar"]').exists()).toBe(false)
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="row-actions"]').exists()).toBe(false)
+  })
+
+  it('summarises what the plan does with this folder before the rows', async () => {
+    const wrapper = await mountTree()
+
+    // The same reader the conversion list's row uses, so the row that opened
+    // this page and the page itself never disagree.
+    const summary = wrapper.get('[data-testid="plan-summary"]').text()
+    expect(summary).toContain('仅无音效转换')
+    expect(summary).toContain('无音效：将转换')
+
+    const tally = wrapper.get('[data-testid="plan-tally"]').text()
+    expect(tally).toContain('保留 1')
+    expect(tally).toContain('删除 1')
+    expect(tally).toContain('生成 1')
+    expect(tally).toContain('1 项待生成')
+  })
+
+  it('says why a folder the plan does not cover has nothing to list', async () => {
+    const wrapper = await mountTree({ memberPath: 'albumB' })
+
+    expect(wrapper.get('[data-testid="plan-summary"]').text()).toContain('未参与')
+    expect(wrapper.get('[data-testid="plan-empty"]').text()).toContain('没有列出这个文件夹的文件')
+    expect(wrapper.find('[data-pending="true"]').exists()).toBe(false)
+  })
+
+  it('keeps the frozen plan on screen and says it needs regenerating', async () => {
+    const wrapper = await mountTree({
+      operation: {
+        workset_id: 'ws-1',
+        operation_type: 'conversion',
+        version: 3,
+        planning_state: 'needs_planning',
+        current_revision: { plan_id: 'plan-1', revision_index: 1, validation_state: 'stale' },
+        active_generation: null,
+        latest_generation: null,
+        active_execution: null,
+        latest_execution: null,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="plan-needs-regeneration"]').text()).toContain('需重新生成')
+    // The proposal itself is untouched: a stale plan is still the plan.
+    expect(wrapper.get('[data-testid="plan-tally"]').text()).toContain('保留 1')
   })
 
   it('says so when the record has no plan yet', async () => {

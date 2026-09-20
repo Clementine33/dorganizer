@@ -239,11 +239,18 @@ test.describe('workset operation smoke', () => {
 
     // 7. The shared file module: the same tree the overview browses, here for
     //    a conversion member, with the plan as a read-only second view (T1-T3).
+    //    A member the plan covers opens on its plan, so 当前文件 — the view that
+    //    allows modification — is named in the address explicitly.
     await page.getByTestId('nav-conversion').click()
     await page.getByTestId('member-files').first().click()
     await expect(page).toHaveURL(/\/conversion\/[^/]+\/files$/)
-    await expect(page.getByTestId('member-tree')).toBeVisible()
+    await expect(page.getByTestId('plan-review-tree')).toBeVisible()
     await expect(page.getByTestId('view-plan')).toBeVisible()
+    await expect(page.getByTestId('plan-summary')).toBeVisible()
+
+    await page.getByTestId('view-current').click()
+    await expect(page).toHaveURL(/\/conversion\/[^/]+\/files\?view=current$/)
+    await expect(page.getByTestId('member-tree')).toBeVisible()
 
     // Renaming one file: the request carries the member-relative path, and the
     // result reports both what happened and whether the inventory refreshed
