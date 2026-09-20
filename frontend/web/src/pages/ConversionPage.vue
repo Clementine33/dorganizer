@@ -81,17 +81,12 @@ function setFilter(next: MemberFilter) {
 }
 /** A child route is active: it occupies the carrier of this container tier. */
 const detailOpen = computed(() => route.meta.carrier === true)
+/** The carrier's own name: a modal sheet, the narrow drill-down and the
+ *  desktop breadcrumb all say the same thing, and the folder's name is in the
+ *  page itself (the frozen review names it) rather than in three places. */
 const carrierTitle = computed(() => (route.meta.title as string | undefined) ?? '详情')
 /** A member's file page takes the main area, not a carrier. */
 const filesOpen = computed(() => route.name === 'conversion-member-files')
-const carrierCrumb = computed(() => {
-  if (route.name === 'conversion-member') {
-    const id = route.params.memberId
-    const member = members.value.find((m) => m.member_id === id)
-    if (member) return member.folder_name
-  }
-  return carrierTitle.value
-})
 
 watch(
   () => worksetId.value,
@@ -388,7 +383,7 @@ const parentLink = computed(() => {
         <template v-if="detailOpen">
           <span aria-hidden="true" class="text-[var(--text-muted)]">/</span>
           <span class="max-w-40 truncate px-1 font-medium text-[var(--text-secondary)]" aria-current="page">
-            {{ carrierCrumb }}
+            {{ carrierTitle }}
           </span>
         </template>
         <template v-if="filesOpen">
