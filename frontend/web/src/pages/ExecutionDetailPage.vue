@@ -53,7 +53,7 @@ async function cancel() {
       当前版本没有执行记录。
     </p>
     <template v-else>
-      <ExecutionPanel :view="executionView" :kept="kept" />
+      <ExecutionPanel :view="executionView" :kept="kept" :members="workspace.workset.value?.members ?? []" />
       <div v-if="running" class="flex flex-wrap items-center gap-2 px-3 py-2">
         <Button
           variant="destructive"

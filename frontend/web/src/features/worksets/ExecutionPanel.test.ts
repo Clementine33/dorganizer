@@ -29,6 +29,120 @@ function view(overrides: Partial<ExecutionView> = {}): ExecutionView {
 }
 
 describe('ExecutionPanel', () => {
+  it("groups the partitions of one folder into that folder's own card", () => {
+    const wrapper = mount(ExecutionPanel, {
+      props: {
+        members: [
+          {
+            member_id: 'm-1',
+            folder_path: '/music/albumA',
+            folder_name: '专辑 A',
+            rel_path: '专辑 A',
+            dir_id: 'd-1',
+          },
+        ],
+        view: view({
+          current_root: '/music/albumA',
+          current_component_id: 'comp-a2',
+          components: [
+            {
+              component_index: 1,
+              component_id: 'comp-a1',
+              root_path: '/music/albumA',
+              partition: 'matched',
+              status: 'succeeded',
+              operations: 1,
+              completed_operations: 1,
+              committed: ['/music/albumA/00.mp3'],
+              removed: [],
+              remaining: [],
+              recovery: [],
+              inventory_synced: true,
+            },
+            {
+              component_index: 2,
+              component_id: 'comp-a2',
+              root_path: '/music/albumA',
+              partition: 'unmatched',
+              status: 'pending',
+              operations: 1,
+              completed_operations: 0,
+              committed: [],
+              removed: [],
+              remaining: ['encode:/music/albumA/01.mp3'],
+              recovery: [],
+              inventory_synced: true,
+            },
+          ],
+        }),
+      },
+    })
+
+    // One card for what the user selected — however many partitions it has —
+    // named the way the record names it.
+    const card = wrapper.get('[data-testid="execution-folder"]')
+    expect(wrapper.findAll('[data-testid="execution-folder"]')).toHaveLength(1)
+    expect(card.get('[data-testid="execution-folder-name"]').text()).toBe('专辑 A')
+    expect(card.findAll('[data-testid="execution-component"]')).toHaveLength(2)
+    expect(card.text()).toContain('无音效')
+    expect(card.text()).toContain('有音效')
+
+    // The card reports the folder's own state and counts, and says it is the
+    // one the run is inside right now.
+    expect(card.get('[data-testid="execution-folder-status"]').text()).toBe('执行中')
+    const counts = card.get('[data-testid="execution-folder-counts"]').text()
+    expect(counts).toContain('组件 1/2')
+    expect(counts).toContain('操作 1/2')
+  })
+
+  it('gives each folder its own verdict when a run stops partway', () => {
+    const wrapper = mount(ExecutionPanel, {
+      props: {
+        view: view({
+          status: 'canceled',
+          current_component_id: '',
+          components: [
+            {
+              component_index: 1,
+              component_id: 'comp-a',
+              root_path: '/music/albumA',
+              partition: 'matched',
+              status: 'succeeded',
+              operations: 1,
+              completed_operations: 1,
+              committed: ['/music/albumA/00.mp3'],
+              removed: [],
+              remaining: [],
+              recovery: [],
+              inventory_synced: true,
+            },
+            {
+              component_index: 2,
+              component_id: 'comp-b',
+              root_path: '/music/albumB',
+              partition: 'matched',
+              status: 'pending',
+              operations: 1,
+              completed_operations: 0,
+              committed: [],
+              removed: [],
+              remaining: ['encode:/music/albumB/00.mp3'],
+              recovery: [],
+              inventory_synced: true,
+            },
+          ],
+        }),
+      },
+    })
+
+    const cards = wrapper.findAll('[data-testid="execution-folder"]')
+    expect(cards).toHaveLength(2)
+    expect(cards[0]!.attributes('data-folder-status')).toBe('succeeded')
+    expect(cards[1]!.attributes('data-folder-status')).toBe('pending')
+    expect(cards[0]!.text()).toContain('已完成')
+    expect(cards[1]!.text()).toContain('未执行')
+  })
+
   it('states a session-level failure in the user\'s words', () => {
     const wrapper = mount(ExecutionPanel, {
       props: {
@@ -169,7 +283,7 @@ describe('ExecutionPanel', () => {
       props: {
         kept: {
           'comp-a': [
-            { path: '/music/albumA/00.wav', resolution: 'keep', reason_code: 'UNMET_TARGET' },
+            { path: '/music/albumA/disc1/00.wav', resolution: 'keep', reason_code: 'UNMET_TARGET' },
             { path: '/music/albumA/01.mp3', resolution: 'keep', reason_code: 'KEEP_ENCODED_SATISFIED' },
           ],
         },
@@ -196,12 +310,16 @@ describe('ExecutionPanel', () => {
     })
 
     const kept = wrapper.get('[data-testid="execution-kept"]').text()
-    expect(kept).toContain('00.wav')
+    expect(kept).toContain('disc1/00.wav')
+    expect(kept).not.toContain('/music/albumA/')
+    expect(wrapper.get('[title="/music/albumA/disc1/00.wav"]').text()).toBe('disc1/00.wav')
+    expect(wrapper.get('details').attributes('open')).toBeUndefined()
+    expect(wrapper.get('summary').text()).toContain('保留 2')
     expect(kept).toContain('目标未满足')
     expect(kept).toContain('已满足编码目标')
     // The run's own bookkeeping stays out of the panel.
     expect(wrapper.find('[data-testid="execution-recovery"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Delete/00.m4a')
+    expect(wrapper.find('[title="/music/albumA/Delete/00.m4a"]').exists()).toBe(false)
   })
 
   it('explains a canceled run without claiming the whole revision happened', () => {
