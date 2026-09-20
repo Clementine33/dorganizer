@@ -86,7 +86,7 @@ const validationWarning = computed(() => {
           取消生成
         </Button>
         <Button v-else size="sm" :disabled="!canGenerate || busy" data-testid="start-generation" @click="emit('generate')">
-          生成计划版本
+          生成计划
         </Button>
         <Button
           v-if="operation?.active_execution"
@@ -107,7 +107,7 @@ const validationWarning = computed(() => {
           data-testid="start-execution"
           @click="emit('execute')"
         >
-          执行当前版本
+          全部执行
         </Button>
         <!-- The session report lives in its own detail page; this is the way
              back to it after the carrier was closed. -->

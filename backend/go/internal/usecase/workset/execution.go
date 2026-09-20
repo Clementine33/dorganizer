@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -31,11 +33,16 @@ const (
 )
 
 // StartExecutionRequest is the POST .../revisions/{planId}/executions request.
-// The body is empty: the file worklist and the session options (such as the
-// obsolete-audio handling) are the frozen revision's, never the client's.
+// The file worklist and the session options (such as the obsolete-audio
+// handling) are the frozen revision's, never the client's; the one thing the
+// caller chooses is how much of that revision this session runs.
 type StartExecutionRequest struct {
 	IfMatchVersion int
 	IdempotencyKey string
+	// FolderPaths scopes the session to these members, named by their
+	// library-relative paths as the record holds them. Empty means every member,
+	// which is what an execution was before the scope existed.
+	FolderPaths []string
 }
 
 // StartExecutionResult distinguishes a fresh session from an idempotent replay.
@@ -83,11 +90,14 @@ type ExecutionView struct {
 	CurrentComponentID  string                   `json:"current_component_id"`
 	CurrentPhase        string                   `json:"current_phase"`
 	Components          []ExecutionComponentView `json:"components"`
-	ErrorCode           string                   `json:"error_code"`
-	ErrorMessage        string                   `json:"error_message"`
-	StartedAt           string                   `json:"started_at"`
-	FinishedAt          string                   `json:"finished_at"`
-	CreatedAt           string                   `json:"created_at"`
+	// SelectedFolders is the scope this session ran: the record's relative
+	// paths, empty when it ran the whole revision.
+	SelectedFolders []string `json:"selected_folders,omitempty"`
+	ErrorCode       string   `json:"error_code"`
+	ErrorMessage    string   `json:"error_message"`
+	StartedAt       string   `json:"started_at"`
+	FinishedAt      string   `json:"finished_at"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 // ExecutionRef is the compact session reference attached to the operation and
@@ -119,16 +129,20 @@ type ExecutionProgress struct {
 
 // executionRequest is the frozen session input persisted on the row: the
 // task-owned options payload and the ordered execution units (generic identity
-// plus the task's opaque payload).
+// plus the task's opaque payload), plus the scope the caller asked for — which
+// the view reads back so a client that did not start the run still knows it was
+// scoped.
 type executionRequest struct {
 	Options json.RawMessage `json:"options,omitempty"`
 	Units   []ExecutionUnit `json:"units"`
+	Folders []string        `json:"folders,omitempty"`
 }
 
-// StartExecution enqueues one execution of the operation's current revision.
-// The frozen revision and the operation version are the whole authority: a
-// revision is executed at most once, and success never authorizes a replay of
-// the same revision.
+// StartExecution enqueues one execution of the operation's current revision,
+// optionally scoped to some of that revision's folders. The frozen revision and
+// the operation version are the whole authority: a revision is executed at most
+// once — a scoped run executes it too, and the folders it left out are the work
+// of the next plan — and success never authorizes a replay.
 func (s *serviceImpl) StartExecution(
 	ctx context.Context,
 	worksetID, operationType, planID string,
@@ -148,8 +162,11 @@ func (s *serviceImpl) StartExecution(
 		return nil, err
 	}
 	// Replays answer before the version and eligibility gates: a retried request
-	// must observe what it already asked for. The request is its revision.
-	requestHash := hashJSON([]byte(planID))
+	// must observe what it already asked for. The request is its revision and
+	// the folders it scoped the run to — the same key with another scope is
+	// another request, never a replay.
+	selection := normalizeSelection(req.FolderPaths)
+	requestHash := executionRequestHash(planID, selection)
 	if result, replayed, replayErr := s.replayExecution(
 		op,
 		req.IdempotencyKey,
@@ -165,11 +182,86 @@ func (s *serviceImpl) StartExecution(
 	if len(reasons) > 0 {
 		return nil, notExecutable(reasons)
 	}
+	scoped, scopeErr := s.scopeExecution(op.WorksetID, frozen, selection)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	rev, revErr := s.repo.GetOperationRevision(op.WorksetID, op.OperationType, planID)
 	if revErr != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load revision", revErr)
 	}
-	return s.persistExecution(op, planID, req.IdempotencyKey, requestHash, rev.DraftHash, frozen)
+	return s.persistExecution(op, planID, req.IdempotencyKey, requestHash, rev.DraftHash, scoped, selection)
+}
+
+// normalizeSelection is the scope as it gets frozen: no blanks, no duplicates,
+// and one order — so the same set of folders is the same request however it was
+// listed.
+func normalizeSelection(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// executionRequestHash covers everything the caller asked for.
+func executionRequestHash(planID string, selection []string) string {
+	return hashJSON([]byte(planID + "|" + strings.Join(selection, "\x1f")))
+}
+
+// scopeExecution narrows a frozen session to the folders the caller selected.
+// A path the record does not hold is refused outright: quietly running fewer
+// folders than were asked for would be a scope change nobody approved. A
+// selected folder that the plan found nothing to do in simply contributes no
+// units — that is a conclusion about the folder, not a refusal.
+func (s *serviceImpl) scopeExecution(
+	worksetID string,
+	frozen FrozenExecution,
+	selection []string,
+) (FrozenExecution, error) {
+	if len(selection) == 0 {
+		return frozen, nil
+	}
+	members, err := s.repo.ListWorksetMembers(worksetID)
+	if err != nil {
+		return FrozenExecution{}, NewError(ErrKindInternal, "INTERNAL", "failed to load members", err)
+	}
+	byRelPath := make(map[string]string, len(members))
+	for _, member := range members {
+		byRelPath[member.RelPath] = member.FolderPath
+	}
+	selected := make(map[string]bool, len(selection))
+	for _, relPath := range selection {
+		folderPath, ok := byRelPath[relPath]
+		if !ok {
+			return FrozenExecution{}, NewError(
+				ErrKindInvalidArgument,
+				"FOLDER_NOT_IN_RECORD",
+				"not a folder of this record: "+relPath,
+				nil,
+			)
+		}
+		selected[folderPath] = true
+	}
+	units := make([]ExecutionUnit, 0, len(frozen.Units))
+	total := 0
+	for _, unit := range frozen.Units {
+		if !selected[unit.RootPath] {
+			continue
+		}
+		units = append(units, unit)
+		total += unit.Operations
+	}
+	frozen.Units = units
+	frozen.TotalOperations = total
+	return frozen, nil
 }
 
 // replayExecution answers an idempotent retry with the session the key already
@@ -352,10 +444,21 @@ func executionOptionsOf(e *sqlite.PlanExecution) json.RawMessage {
 	return req.Options
 }
 
+// executionFoldersOf reads the session's scope back out of the same payload,
+// so a client that did not start the run still knows which folders it covered.
+func executionFoldersOf(e *sqlite.PlanExecution) []string {
+	req, err := parseExecutionRequest(e.RequestJSON)
+	if err != nil {
+		return nil
+	}
+	return req.Folders
+}
+
 func (s *serviceImpl) persistExecution(
 	op *sqlite.Operation,
 	planID, key, requestHash, revisionDraftHash string,
 	frozen FrozenExecution,
+	selection []string,
 ) (*StartExecutionResult, error) {
 	report := initialComponentReport(frozen.Units)
 	exec := &sqlite.PlanExecution{
@@ -370,6 +473,7 @@ func (s *serviceImpl) persistExecution(
 		RequestJSON: mustJSON(executionRequest{
 			Options: frozen.Options,
 			Units:   frozen.Units,
+			Folders: selection,
 		}),
 		TotalComponents: len(frozen.Units),
 		TotalOperations: frozen.TotalOperations,
@@ -546,6 +650,7 @@ func executionViewOf(e *sqlite.PlanExecution) *ExecutionView {
 		FinishedAt:          formatTime(e.FinishedAt),
 		CreatedAt:           formatTime(e.CreatedAt),
 		Components:          []ExecutionComponentView{},
+		SelectedFolders:     executionFoldersOf(e),
 	}
 	var report []ExecutionComponentView
 	if err := json.Unmarshal([]byte(e.ReportJSON), &report); err == nil {

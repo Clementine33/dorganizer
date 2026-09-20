@@ -264,7 +264,7 @@ async function onGenerate() {
   }
 }
 
-async function startExecution() {
+async function startExecution(folderPaths?: string[]) {
   const op = operation.value
   const planId = op?.current_revision?.plan_id
   if (!worksetId.value || !op || !planId) return
@@ -276,6 +276,7 @@ async function startExecution() {
       planId,
       ifMatchVersion: op.version,
       idempotencyKey: crypto.randomUUID(),
+      folderPaths,
     })
     await openExecution()
   } catch (error) {
@@ -290,6 +291,16 @@ async function startExecution() {
         : `无法执行：${head ?? apiError.message ?? '未知错误'}`
   }
 }
+
+/** The plan may run right now: the header's 执行当前版本 gate, reused. */
+const planRunnable = computed(
+  () => Boolean(operation.value?.current_revision) && !operation.value?.active_execution && executeBlocked.value === null,
+)
+
+/** The selection as the record names it — the scope of a partial run. */
+const selectedFolderPaths = computed(() =>
+  members.value.filter((member) => ui.selectedMemberIds.has(member.member_id)).map((member) => member.rel_path),
+)
 
 async function openExecution() {
   await router.push({
@@ -474,6 +485,18 @@ const parentLink = computed(() => {
             <span class="text-xs font-medium">已选 {{ ui.selectionCount }} 个文件夹</span>
             <Button size="xs" variant="secondary" data-testid="batch-edit" @click="startBatchEdit">
               批量修改
+            </Button>
+            <!-- Executing a part of the revision: the same gate as 执行当前版本,
+                 and the sentence that says what happens to the rest. -->
+            <Button
+              size="xs"
+              variant="outline"
+              data-testid="execute-selected"
+              :disabled="!planRunnable"
+              :title="planRunnable ? '只执行选中的文件夹；未选中的需重新生成计划后执行' : (executeBlocked ?? '还没有可执行的计划版本')"
+              @click="startExecution(selectedFolderPaths)"
+            >
+              仅执行选中（{{ selectedFolderPaths.length }}）
             </Button>
             <Button size="xs" variant="ghost" @click="ui.clearSelection()">清除选择</Button>
           </div>

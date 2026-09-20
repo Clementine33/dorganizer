@@ -48,6 +48,8 @@ export function useWorksetExecution() {
     planId: string
     ifMatchVersion: number
     idempotencyKey: string
+    /** The folders this run covers; absent runs the whole revision. */
+    folderPaths?: string[]
   }
 
   // Starts a session and attaches the SSE stream on a fresh 202. Resolves with

@@ -9,9 +9,10 @@ import (
 
 // startExecution handles POST
 // /api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions.
-// If-Match (operation version) and Idempotency-Key are both required; the
-// request carries no body — the frozen revision holds the worklist and the
-// session options.
+// If-Match (operation version) and Idempotency-Key are both required. The body
+// is optional and carries one thing: `folder_paths` scopes the session to those
+// members of the record, and an absent or empty list runs the whole revision.
+// The worklist and the session options stay the frozen revision's.
 func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 	svc, err := s.worksetService()
 	if err != nil {
@@ -33,6 +34,13 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	var body struct {
+		FolderPaths []string `json:"folder_paths"`
+	}
+	if decodeErr := decodeJSONAllowEmpty(w, r, &body); decodeErr != nil {
+		writeDecodeError(w, decodeErr, "invalid execution request body")
+		return
+	}
 	res, err := svc.StartExecution(
 		r.Context(),
 		r.PathValue("id"),
@@ -41,6 +49,7 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 		worksetusecase.StartExecutionRequest{
 			IfMatchVersion: version,
 			IdempotencyKey: idemKey,
+			FolderPaths:    body.FolderPaths,
 		},
 	)
 	if err != nil {

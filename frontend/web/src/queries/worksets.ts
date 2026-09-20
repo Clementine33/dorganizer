@@ -280,9 +280,10 @@ export function executionQueryOptions(
 }
 
 /**
- * Enqueue the execution of the current revision. The server re-checks every
- * eligibility fact inside the request; a refusal is explained, never retried
- * with a fresh key (a different key would be a second run attempt).
+ * Enqueue the execution of the current revision, optionally scoped to some of
+ * its folders. The server re-checks every eligibility fact inside the request;
+ * a refusal is explained, never retried with a fresh key (a different key would
+ * be a second run attempt).
  */
 export function startExecutionMutationOptions(api: ApiClientContract, queryClient: QueryClient) {
   return {
@@ -292,10 +293,13 @@ export function startExecutionMutationOptions(api: ApiClientContract, queryClien
       planId: string
       ifMatchVersion: number
       idempotencyKey: string
+      /** The selected member folders; empty (or absent) runs the whole revision. */
+      folderPaths?: string[]
     }) =>
       api.startExecution(input.worksetId, input.operation, input.planId, {
         ifMatchVersion: input.ifMatchVersion,
         idempotencyKey: input.idempotencyKey,
+        folderPaths: input.folderPaths,
       }),
     onSuccess: (
       result: StartExecutionResponse,

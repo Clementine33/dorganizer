@@ -320,22 +320,25 @@ export class ApiClient implements ApiClientContract {
   }
 
   /**
-   * Enqueue the execution of the operation's current revision. The request
-   * carries no body — the file worklist and the session options are the frozen
-   * revision's, never the client's. Disconnecting never cancels the session —
-   * only cancelExecution or the backend process lifecycle does.
+   * Enqueue the execution of the operation's current revision, optionally
+   * scoped to some of its member folders. The file worklist and the session
+   * options are the frozen revision's, never the client's; `folderPaths` says
+   * how much of that revision this session covers, and an empty list runs all
+   * of it. Disconnecting never cancels the session — only cancelExecution or
+   * the backend process lifecycle does.
    */
   startExecution(
     worksetId: string,
     operation: OperationType,
     planId: string,
-    input: { ifMatchVersion: number; idempotencyKey: string },
+    input: { ifMatchVersion: number; idempotencyKey: string; folderPaths?: string[] },
   ): Promise<StartExecutionResponse> {
     return this.request(
       `${this.operationPath(worksetId, operation)}/revisions/${encodeURIComponent(planId)}/executions`,
       {
         method: 'POST',
         headers: { 'If-Match': String(input.ifMatchVersion), 'Idempotency-Key': input.idempotencyKey },
+        body: { folder_paths: input.folderPaths ?? [] },
       },
     )
   }

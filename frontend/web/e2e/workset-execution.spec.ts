@@ -180,6 +180,45 @@ test.describe('workset execution', () => {
     expect(existsSync(path.join(root, 'Delete'))).toBe(false)
   })
 
+  test('a scoped run processes the selected folders and spends the plan', async ({ page }) => {
+    const root = makeFixtureRoot('exec-scope')
+    const chosen = encodeAlbum(root, 'scope-selected', { m4a: true })
+    const left = encodeAlbum(root, 'scope-untouched', { m4a: true })
+
+    await addLibraryAndScan(page, root, 'E2E Exec Scope')
+    await createWorksetForAllFolders(page)
+    await generatePlan(page)
+
+    // Selecting a folder in the list is what a partial run is built from: the
+    // toolbar's entry follows the same gate as 执行当前版本.
+    await page.getByRole('checkbox', { name: '选择 scope-selected' }).check()
+    await expect(page.getByTestId('execute-selected')).toBeEnabled()
+    await page.getByTestId('execute-selected').click()
+    await expect(page).toHaveURL(/\/conversion\/execution$/)
+
+    const panel = page.getByTestId('execution-panel')
+    await expect(page.getByTestId('execution-status')).toHaveText('已完成', { timeout: 90_000 })
+    // The session is the selected folder's work alone, and says so — the folders
+    // it left out are the next plan's work, not this session's pending items.
+    await expect(panel.getByTestId('execution-folder')).toHaveCount(1)
+    await expect(panel.getByTestId('execution-folder-name')).toContainText('scope-selected')
+    await expect(panel.getByTestId('execution-scope')).toContainText('本次只执行了选中的 1 个文件夹（记录共 2 个）')
+    await expect(panel.getByTestId('execution-scope')).toContainText('需重新生成计划后执行')
+
+    // Disk truth: the selected folder was rebuilt, the other one is exactly as
+    // it was — its obsolete media is still there and nothing was recovered for it.
+    expect(mp3Bitrate(path.join(chosen, '00.mp3'))).toBeGreaterThanOrEqual(319_000)
+    expect(existsSync(path.join(root, 'Delete', 'scope-selected', '00.m4a'))).toBe(true)
+    expect(mp3Bitrate(path.join(left, '00.mp3'))).toBeLessThan(319_000)
+    expect(existsSync(path.join(left, '00.m4a'))).toBe(true)
+    expect(existsSync(path.join(root, 'Delete', 'scope-untouched'))).toBe(false)
+
+    // One plan, one run: continuing means a new plan, and the page says so.
+    await page.getByTestId('workspace-breadcrumb').getByRole('link', { name: '转换' }).click()
+    await expect(page.getByTestId('start-execution')).toBeDisabled()
+    await expect(page.getByTestId('start-execution')).toHaveAttribute('title', /需重新生成/)
+  })
+
   test('a source drifting after planning fails the run and preserves every file', async ({ page }) => {
     const root = makeFixtureRoot('exec-fail')
     const album = encodeAlbum(root, 'drift-album')
@@ -227,7 +266,10 @@ test.describe('workset execution', () => {
     await expect(page.getByTestId('execution-status')).toHaveText('已取消', { timeout: 90_000 })
     await expect(page.getByTestId('execution-panel')).toContainText('已完成的组件结果保留')
     // The operations that never ran stay visible instead of being hidden or
-    // counted as done.
-    await expect(page.getByTestId('execution-remaining').first()).toBeVisible()
+    // counted as done. Per-file detail lives behind the card's own disclosure
+    // (the summary counts what is inside), so it is opened first.
+    const unrun = page.getByTestId('execution-component').filter({ hasText: '未执行' }).first()
+    await unrun.locator('summary').click()
+    await expect(unrun.getByTestId('execution-remaining')).toBeVisible()
   })
 })

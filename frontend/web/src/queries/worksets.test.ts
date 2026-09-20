@@ -182,6 +182,38 @@ describe('execution cache synchronization', () => {
     expect(client.getQueryData(queryKeys.worksets.revision('ws-1', 'conversion', 'plan-1'))).toBeUndefined()
   })
 
+  it('carries the selected folders into the run, and nothing when the whole revision runs', async () => {
+    const api = apiStub()
+    const options = startExecutionMutationOptions(api, createTestQueryClient())
+
+    await options.mutationFn({
+      worksetId: 'ws-1',
+      operation: 'conversion',
+      planId: 'plan-1',
+      ifMatchVersion: 3,
+      idempotencyKey: 'key-1',
+      folderPaths: ['albumB'],
+    })
+    expect(api.startExecution).toHaveBeenLastCalledWith('ws-1', 'conversion', 'plan-1', {
+      ifMatchVersion: 3,
+      idempotencyKey: 'key-1',
+      folderPaths: ['albumB'],
+    })
+
+    await options.mutationFn({
+      worksetId: 'ws-1',
+      operation: 'conversion',
+      planId: 'plan-1',
+      ifMatchVersion: 3,
+      idempotencyKey: 'key-2',
+    })
+    expect(api.startExecution).toHaveBeenLastCalledWith('ws-1', 'conversion', 'plan-1', {
+      ifMatchVersion: 3,
+      idempotencyKey: 'key-2',
+      folderPaths: undefined,
+    })
+  })
+
   it('a refused execution start refreshes the operation and its revisions, never retrying', async () => {
     const client = createTestQueryClient()
     client.setQueryData(queryKeys.worksets.operation('ws-1', 'conversion'), operation)

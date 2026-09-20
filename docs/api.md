@@ -347,7 +347,7 @@ All routes require auth and use the standard error envelope.
 | GET | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/events` | SSE progress (`session_snapshot`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/cancel` | Cooperative cancel; idempotent on terminal sessions. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}` | The immutable snapshot of the record's **current** plan (a replaced plan no longer resolves — 404): `root_path`, `snapshot_token`, `status`, `summary`, the plan payload in its task envelope (`task: {kind, schema_version, payload}` — conversion: policy, classifier, summary, components), `counts`, frozen `members[]` (effective settings + per-unit `sources`), `roots[]`, `component_roots[]`, and `execution` (the session that ran this revision, if any). |
-| POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions` | Execute the operation's current revision (see below). No request body: the worklist and the session options (the obsolete-audio handling the draft declares) are the frozen revision's. `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"execution":…}`; 200 with the same session for a key replay. |
+| POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions` | Execute the operation's current revision (see below), optionally scoped to some of its folders. Body optional: `{"folder_paths":["albumA",…]}` — record-relative member paths; absent or empty runs the whole revision. The worklist and the session options (the obsolete-audio handling the draft declares) are always the frozen revision's. `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"execution":…}`; 200 with the same session for a key replay. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}` | Session detail, including the per-component report. A session of another workset or operation is 404. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/events` | SSE execution stream (`execution_snapshot`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/cancel` | Cooperative cancel; idempotent on terminal sessions (200 with the session either way). |
@@ -375,11 +375,26 @@ the plan's own facts, re-read at execution time:
 | `VERSION_CONFLICT` | stale `If-Match`; re-read the operation |
 | `IDEMPOTENCY_KEY_REUSED` | the key was used for another revision |
 | `ORPHANED_WORKSET` | the library is gone; orphaned worksets are read-only |
+| `FOLDER_NOT_IN_RECORD` (400) | `folder_paths` names something that is not a member of this record |
+
+**Scope.** A session covers the whole revision unless `folder_paths` names
+some of its members. A path the record does not hold is refused with
+`FOLDER_NOT_IN_RECORD` (400) rather than skipped — running fewer folders than
+were asked for would be a scope change nobody approved; a selected folder the
+plan found nothing to do in simply contributes no components, which is the
+plan's conclusion about that folder, not a refusal. The session's own
+`total_components`, report and SSE progress cover the scope alone, and
+`selected_folders` (the record-relative paths) says what that scope was, so a
+client that did not start the run can tell it was partial.
 
 **One session per revision.** The storage enforces it (a unique index on the
 revision): a retry with the same `Idempotency-Key` returns its own session
 (200), a new key on an executed revision is `ALREADY_EXECUTED`, and concurrent
-starts have exactly one winner. Failures, partial completions and interrupted
+starts have exactly one winner. A scoped run spends the revision like any
+other: the folders it left out are the next plan's work — regenerate a plan and
+execute that — never a second run of this one. The idempotency key covers the
+scope, so the same key with a different `folder_paths` is
+`IDEMPOTENCY_KEY_REUSED`. Failures, partial completions and interrupted
 sessions do not auto-retry: refresh the inputs (rescan), then generate a new
 revision — a revision never runs twice.
 
@@ -410,8 +425,9 @@ session options — conversion: `{"delete_mode":"soft"|"hard"}`),
 `completed_components` (components that are no longer pending),
 `total_operations`, `completed_operations`, `current_root`,
 `current_component_id`, `current_phase` (`component` while a component runs),
-`components[]`, `error_code`, `error_message`, `started_at`, `finished_at`,
-`created_at`.
+`components[]`, `selected_folders` (the scope this session ran; absent when it
+ran the whole revision), `error_code`, `error_message`, `started_at`,
+`finished_at`, `created_at`.
 
 Each `components[]` entry: `component_index`, `component_id`, `root_path`,
 `partition`, `status` (`pending` | `succeeded` | `failed` | `canceled`),

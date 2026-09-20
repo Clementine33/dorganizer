@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
-import type { ExecutionView } from '@/lib/api/types'
+import type { ExecutionComponent, ExecutionView } from '@/lib/api/types'
 import ExecutionPanel from './ExecutionPanel.vue'
 
 function view(overrides: Partial<ExecutionView> = {}): ExecutionView {
@@ -141,6 +141,53 @@ describe('ExecutionPanel', () => {
     expect(cards[1]!.attributes('data-folder-status')).toBe('pending')
     expect(cards[0]!.text()).toContain('已完成')
     expect(cards[1]!.text()).toContain('未执行')
+  })
+
+  it('says which folders a scoped run covered, and what is left for the next plan', () => {
+    const component: ExecutionComponent = {
+      component_index: 1,
+      component_id: 'comp-a',
+      root_path: '/music/albumA',
+      partition: 'matched',
+      status: 'succeeded',
+      operations: 1,
+      completed_operations: 1,
+      committed: ['/music/albumA/00.mp3'],
+      removed: [],
+      remaining: [],
+      recovery: [],
+      inventory_synced: true,
+    }
+    const members = [
+      { member_id: 'm-1', folder_path: '/music/albumA', folder_name: 'albumA', rel_path: 'albumA', dir_id: 'd-1' },
+      { member_id: 'm-2', folder_path: '/music/albumB', folder_name: 'albumB', rel_path: 'albumB', dir_id: 'd-2' },
+    ]
+
+    const scoped = mount(ExecutionPanel, {
+      props: {
+        members,
+        view: view({ status: 'succeeded', selected_folders: ['albumA'], components: [component] }),
+      },
+    })
+    const note = scoped.get('[data-testid="execution-scope"]').text()
+    expect(note).toContain('本次只执行了选中的 1 个文件夹')
+    expect(note).toContain('记录共 2 个')
+    expect(note).toContain('需重新生成计划后执行')
+
+    // A run that covered the record is not described as partial.
+    const whole = mount(ExecutionPanel, {
+      props: {
+        members,
+        view: view({ status: 'succeeded', selected_folders: ['albumA', 'albumB'], components: [component] }),
+      },
+    })
+    expect(whole.find('[data-testid="execution-scope"]').exists()).toBe(false)
+
+    // A session started before the scope existed carries no scope at all.
+    const legacy = mount(ExecutionPanel, {
+      props: { members, view: view({ status: 'succeeded', components: [component] }) },
+    })
+    expect(legacy.find('[data-testid="execution-scope"]').exists()).toBe(false)
   })
 
   it('states a session-level failure in the user\'s words', () => {

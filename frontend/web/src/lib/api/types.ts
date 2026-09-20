@@ -509,6 +509,9 @@ export interface ExecutionView {
   current_component_id: string
   current_phase: string
   components: ExecutionComponent[]
+  /** The scope this session ran: record-relative paths, absent for a whole
+   *  revision. The folders it left out are the next plan's work. */
+  selected_folders?: string[]
   error_code: string
   error_message: string
   started_at: string
@@ -754,7 +757,7 @@ export interface ApiClientContract {
     worksetId: string,
     operation: OperationType,
     planId: string,
-    input: { ifMatchVersion: number; idempotencyKey: string },
+    input: { ifMatchVersion: number; idempotencyKey: string; folderPaths?: string[] },
   ): Promise<StartExecutionResponse>
   getExecution(
     worksetId: string,

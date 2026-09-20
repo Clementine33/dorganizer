@@ -137,6 +137,19 @@ const cards = computed<FolderCard[]>(() => {
 function partitionText(partition: string): string {
   return PARTITION_TEXT[partition as keyof typeof PARTITION_TEXT] ?? partition
 }
+
+/**
+ * What this session covered, when it was scoped. A revision still runs once, so
+ * a scoped run spends it: the folders it left out are not pending here, they are
+ * the next plan's work, and the panel has to say so rather than let the reader
+ * find out from a missing card.
+ */
+const scope = computed(() => {
+  const selected = props.view.selected_folders ?? []
+  const total = props.members?.length ?? 0
+  if (selected.length === 0 || total === 0 || selected.length >= total) return null
+  return { selected: selected.length, total }
+})
 </script>
 
 <template>
@@ -161,6 +174,15 @@ function partitionText(partition: string): string {
     </p>
     <p v-else-if="view.status === 'canceled'" class="mt-1 text-[11px] text-[var(--warning-ink)]">
       执行已取消：已完成的组件结果保留，未执行的操作保持磁盘原样。
+    </p>
+
+    <p
+      v-if="scope"
+      class="mt-2 rounded-lg bg-[var(--warning-weak,var(--muted))] px-3 py-2 text-[11px]"
+      data-testid="execution-scope"
+      role="status"
+    >
+      本次只执行了选中的 {{ scope.selected }} 个文件夹（记录共 {{ scope.total }} 个）；其余文件夹需重新生成计划后执行。
     </p>
 
     <ul v-if="cards.length > 0" class="mt-3 space-y-3">

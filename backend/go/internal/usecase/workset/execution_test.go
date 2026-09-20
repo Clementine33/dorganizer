@@ -370,8 +370,10 @@ func sessionDeleteMode(t *testing.T, options json.RawMessage) string {
 }
 
 // startExecution enqueues a session through the exported API.
+// startExecution starts a session, optionally scoped to some member folders.
 func (f *execFixture) startExecution(
 	planID, key string,
+	folders ...string,
 ) (*worksetusecase.StartExecutionResult, error) {
 	f.t.Helper()
 	return f.svc.StartExecution(
@@ -379,6 +381,7 @@ func (f *execFixture) startExecution(
 		worksetusecase.StartExecutionRequest{
 			IfMatchVersion: f.operation().Version,
 			IdempotencyKey: key,
+			FolderPaths:    folders,
 		},
 	)
 }
@@ -756,6 +759,98 @@ func TestExecutionRevisionRunsOnceAndReplaysItsKey(t *testing.T) {
 	code, details := errorDetail(t, err)
 	if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "ALREADY_EXECUTED") {
 		t.Fatalf("err = %s %v, want ALREADY_EXECUTED", code, details)
+	}
+}
+
+func TestExecutionScopedToSelectedFolders(t *testing.T) {
+	f := newExecFixture(t)
+	f.runDispatcher()
+	aSource, aSize, aMtime := f.writeAudio("albumA", "00.mp3", []byte("left-alone"))
+	bSource, bSize, bMtime := f.writeAudio("albumB", "00.mp3", []byte("selected"))
+	f.seedRevision("plan-scope",
+		seedComponent{
+			id:        "comp-a",
+			member:    "albumA",
+			partition: reconcile.PartitionMatched,
+			ops:       []reconcile.Operation{deleteOp("comp-a", aSource)},
+			files:     []reconcile.FileTuple{{Path: aSource, Size: aSize, Mtime: aMtime}},
+		},
+		seedComponent{
+			id:        "comp-b",
+			member:    "albumB",
+			partition: reconcile.PartitionMatched,
+			ops:       []reconcile.Operation{deleteOp("comp-b", bSource)},
+			files:     []reconcile.FileTuple{{Path: bSource, Size: bSize, Mtime: bMtime}},
+		},
+	)
+
+	// Only albumB was asked for: the session holds that folder's work alone, and
+	// it says so, so a client that did not start the run can tell it was scoped.
+	started, err := f.startExecution("plan-scope", "key-scope", "albumB")
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	if len(started.Execution.Components) != 1 {
+		t.Fatalf("components = %+v, want only the selected folder's", started.Execution.Components)
+	}
+	if started.Execution.Components[0].RootPath != f.members["albumB"].FolderPath {
+		t.Fatalf("component root = %q, want albumB", started.Execution.Components[0].RootPath)
+	}
+	if started.Execution.TotalOperations != 1 {
+		t.Fatalf("total operations = %d, want the selected folder's 1", started.Execution.TotalOperations)
+	}
+	if got := started.Execution.SelectedFolders; len(got) != 1 || got[0] != "albumB" {
+		t.Fatalf("selected folders = %v, want [albumB]", got)
+	}
+
+	done := f.waitTerminal(started.Execution.ExecutionID)
+	if done.Status != sqlite.ExecStatusSucceeded {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	// The folder that was not selected is exactly as it was.
+	if _, statErr := os.Stat(filepath.FromSlash(aSource)); statErr != nil {
+		t.Fatalf("an unselected folder must not be touched: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.FromSlash(bSource)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the selected folder's obsolete file must be gone: %v", statErr)
+	}
+
+	// The scoped run spent the revision: the folders it left out are the next
+	// plan's work, never a second run of this one.
+	_, err = f.startExecution("plan-scope", "key-scope-2")
+	code, details := errorDetail(t, err)
+	if code != "PLAN_NOT_EXECUTABLE" || !contains(details, "ALREADY_EXECUTED") {
+		t.Fatalf("err = %s %v, want ALREADY_EXECUTED", code, details)
+	}
+}
+
+func TestExecutionScopeRefusesAFolderTheRecordDoesNotHold(t *testing.T) {
+	f := newExecFixture(t)
+	f.runDispatcher()
+	source, size, mtime := f.writeAudio("albumA", "00.mp3", []byte("untouched"))
+	f.seedRevision("plan-refuse", seedComponent{
+		id:        "comp-a",
+		member:    "albumA",
+		partition: reconcile.PartitionMatched,
+		ops:       []reconcile.Operation{deleteOp("comp-a", source)},
+		files:     []reconcile.FileTuple{{Path: source, Size: size, Mtime: mtime}},
+	})
+
+	// A folder the record does not hold is refused, not skipped: running fewer
+	// folders than were asked for would be a scope change nobody approved.
+	_, err := f.startExecution("plan-refuse", "key-refuse", "albumA", "albumZ")
+	code, _ := errorDetail(t, err)
+	if code != "FOLDER_NOT_IN_RECORD" {
+		t.Fatalf("err = %s, want FOLDER_NOT_IN_RECORD", code)
+	}
+
+	// Nothing was created and nothing ran: the revision is still executable.
+	if _, statErr := os.Stat(filepath.FromSlash(source)); statErr != nil {
+		t.Fatalf("a refused start must not touch the disk: %v", statErr)
+	}
+	started := f.mustStart("plan-refuse", "key-after")
+	if done := f.waitTerminal(started.ExecutionID); done.Status != sqlite.ExecStatusSucceeded {
+		t.Fatalf("status = %s (%s)", done.Status, done.ErrorMessage)
 	}
 }
 
