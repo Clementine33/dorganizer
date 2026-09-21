@@ -2,10 +2,12 @@ package workset_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
 // TestExecutionPoolEncodesConcurrentlyAndCommitsInFrozenOrder drives two units
@@ -136,5 +138,73 @@ func TestExecutionPoolProgressMovesToTheNextUnitBeforeItBlocks(t *testing.T) {
 	obs.release("u1")
 	if done := f.waitTerminal(started.ExecutionID); done.Status != "succeeded" {
 		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+}
+
+// TestExecutionAtScaleRecordsEveryComponentOnce runs a session wide enough to
+// page and checks the three things a per-component write path can get wrong:
+// every component's result exists exactly once, the counters count the results
+// rather than the writes, and a page is a window onto the component order
+// rather than a second list with its own rules.
+func TestExecutionAtScaleRecordsEveryComponentOnce(t *testing.T) {
+	const components = 500
+	plans := make([]poolPlan, components)
+	seeds := make([]seedComponent, components)
+	for i := range components {
+		plans[i] = poolUnit(0)
+		seeds[i] = poolComponent("u"+strconv.Itoa(i), "albumA")
+	}
+	f, _ := poolFixture(t, 2, plans...)
+	f.seedRevision("plan-scale", seeds...)
+
+	started := f.mustStart("plan-scale", "k-scale")
+	done := f.waitTerminal(started.ExecutionID)
+	if done.Status != "succeeded" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+	if done.TotalComponents != components || done.CompletedComponents != components {
+		t.Fatalf("counters = %d/%d, want %d/%d", done.CompletedComponents,
+			done.TotalComponents, components, components)
+	}
+	if len(done.Components) != components {
+		t.Fatalf("the detail carried %d of %d components", len(done.Components), components)
+	}
+	seen := make(map[int]struct{}, components)
+	for _, component := range done.Components {
+		if _, dupe := seen[component.ComponentIndex]; dupe {
+			t.Fatalf("component %d appears twice", component.ComponentIndex)
+		}
+		seen[component.ComponentIndex] = struct{}{}
+		if component.Status != worksetusecase.ExecComponentSucceeded {
+			t.Fatalf("component %d status = %s", component.ComponentIndex, component.Status)
+		}
+	}
+
+	// One row per component, and a page of the component list is the same
+	// components the unpaged read carries, in the same order.
+	rows, err := f.repo.ListExecutionComponentResults(started.ExecutionID, 0, 0)
+	if err != nil {
+		t.Fatalf("list results: %v", err)
+	}
+	if len(rows) != components {
+		t.Fatalf("%d result rows for %d components", len(rows), components)
+	}
+	page, err := f.svc.GetExecution(
+		f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, started.ExecutionID,
+		worksetusecase.ExecutionPage{FromIndex: 200, Limit: 200},
+	)
+	if err != nil {
+		t.Fatalf("GetExecution(page): %v", err)
+	}
+	if len(page.Components) != 200 || page.Components[0].ComponentIndex != 200 ||
+		page.Components[199].ComponentIndex != 399 {
+		t.Fatalf("page = %d components, first %d, last %d", len(page.Components),
+			page.Components[0].ComponentIndex, page.Components[len(page.Components)-1].ComponentIndex)
+	}
+	for i, component := range page.Components {
+		if component.ComponentID != done.Components[200+i].ComponentID {
+			t.Fatalf("page component %d = %s, want %s", i, component.ComponentID,
+				done.Components[200+i].ComponentID)
+		}
 	}
 }
