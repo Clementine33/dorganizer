@@ -48,7 +48,13 @@ func (d *dispatcher) runExecutionLoop() {
 		default:
 		}
 		ex, err := d.svc.repo.NextQueuedExecution()
-		if err != nil || ex == nil {
+		if err != nil {
+			if !d.retryClaim(d.execWakeC, err) {
+				return
+			}
+			continue
+		}
+		if ex == nil {
 			select {
 			case <-d.done:
 				return

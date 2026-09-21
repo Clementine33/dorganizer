@@ -94,7 +94,24 @@ var ErrIncompatibleDatabase = errors.New("incompatible database")
 // connectionPragmas is appended to the database path to configure every
 // connection the driver opens. See NewRepository for why these are connection
 // parameters and not one-shot PRAGMA statements.
-const connectionPragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+//
+// txlock=immediate starts every read-write transaction by taking the write
+// lock. Deferred transactions take their read snapshot at the first statement
+// and then upgrade it when they write; if another connection commits in
+// between, that upgrade is refused (SQLITE_BUSY_SNAPSHOT) rather than applied -
+// and SQLite only started refusing it in 3.51.3, where losing the race used to
+// be silent. Every write path here reads before it writes (find the queued
+// session, load the draft, then claim or persist), so the transaction has to
+// own the write lock before it reads. Read-only transactions are unaffected:
+// the driver leaves them deferred.
+//
+// auto_vacuum(2) is incremental auto-vacuum, which only takes effect before the
+// first table exists: the connection that creates the file writes the mode into
+// the header, and every connection after that reads it back from there. On a
+// database that already has tables the setting is a silent no-op, which is why
+// reclamation asks AutoVacuumMode what the file was created with instead of
+// trying to enable it later.
+const connectionPragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=auto_vacuum(2)&_txlock=immediate"
 
 // NewRepository opens (creating it when absent) the repository database at
 // dbPath and refuses one that belongs to another schema generation.
@@ -110,6 +127,9 @@ func NewRepository(dbPath string) (*Repository, error) {
 	// happened to run it, so cascades silently did nothing elsewhere and other
 	// connections gave up on the first lock instead of waiting. The driver
 	// applies DSN _pragma parameters to every connection it opens.
+	// auto_vacuum needs the same treatment for a second reason: it is only
+	// effective before the first table is created, so the connection that runs
+	// initSchema has to carry it already.
 	db, err := sql.Open("sqlite", dbPath+connectionPragmas)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package workset
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -85,7 +86,13 @@ func (d *dispatcher) run() {
 		default:
 		}
 		gen, err := d.svc.repo.NextQueuedGeneration()
-		if err != nil || gen == nil {
+		if err != nil {
+			if !d.retryClaim(d.wakeC, err) {
+				return
+			}
+			continue
+		}
+		if gen == nil {
 			select {
 			case <-d.done:
 				return
@@ -97,6 +104,33 @@ func (d *dispatcher) run() {
 		// session has already transitioned to canceled, so the claim above
 		// returns nil and the slot refills without running anything.
 		d.execute(gen)
+	}
+}
+
+// claimRetryDelay spaces out the retries of a claim that failed.
+const claimRetryDelay = 50 * time.Millisecond
+
+// retryClaim pauses after a claim that failed, and reports whether the worker
+// should try again. Both claim paths read to find the session and then write to
+// take it, so a writer committing in between invalidates the read snapshot and
+// the write is refused (SQLITE_BUSY_SNAPSHOT) instead of applied; the next
+// attempt starts from a fresh snapshot.
+//
+// The wake channel alone is not a safe place to wait: the session the claim
+// failed on is already in the queue, so no further enqueue is coming to wake
+// this worker, and the queue would stall until an unrelated session arrived.
+// The timer bounds that wait, and the failure is never silent.
+func (d *dispatcher) retryClaim(wake chan struct{}, err error) bool {
+	log.Printf("dispatcher: claim failed, retrying in %s: %v", claimRetryDelay, err)
+	timer := time.NewTimer(claimRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-d.done:
+		return false
+	case <-wake:
+		return true
+	case <-timer.C:
+		return true
 	}
 }
 
