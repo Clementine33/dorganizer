@@ -343,14 +343,20 @@ export class ApiClient implements ApiClientContract {
     )
   }
 
+  /** Session detail. `page` reads a slice of the component list, which is
+   *  ordered by component index; without it the whole list comes back. */
   getExecution(
     worksetId: string,
     operation: OperationType,
     executionId: string,
     signal?: AbortSignal,
+    page?: { from: number; limit: number },
   ): Promise<ExecutionView> {
+    const query = page
+      ? `?components_from=${page.from}&components_limit=${page.limit}`
+      : ''
     return this.request(
-      `${this.operationPath(worksetId, operation)}/executions/${encodeURIComponent(executionId)}`,
+      `${this.operationPath(worksetId, operation)}/executions/${encodeURIComponent(executionId)}${query}`,
       { signal },
     )
   }

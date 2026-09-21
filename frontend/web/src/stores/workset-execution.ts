@@ -1,7 +1,36 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { ApiError } from '@/lib/api/client'
-import type { ApiClientContract, ExecutionEvent, ExecutionView, OperationType } from '@/lib/api/types'
+import type {
+  ApiClientContract,
+  ExecutionComponent,
+  ExecutionEvent,
+  ExecutionView,
+  OperationType,
+} from '@/lib/api/types'
+
+/**
+ * Replaces one component's entry, or inserts it in component order when the
+ * held list does not have it yet: the stream pushes components the client's
+ * snapshot may not have carried (a page it never fetched), and the display
+ * order is by component index everywhere else.
+ */
+function mergeComponent(
+  components: ExecutionComponent[],
+  entry: ExecutionComponent,
+): ExecutionComponent[] {
+  const at = components.findIndex((component) => component.component_index === entry.component_index)
+  if (at >= 0) {
+    const merged = components.slice()
+    merged[at] = entry
+    return merged
+  }
+  const next = components.slice()
+  const after = next.findIndex((component) => component.component_index > entry.component_index)
+  if (after < 0) next.push(entry)
+  else next.splice(after, 0, entry)
+  return next
+}
 
 export type ExecutionRunStatus =
   | 'idle'
@@ -22,12 +51,13 @@ export type ExecutionTerminal = 'event' | 'transport'
  * Transient streaming state of the execution session the user is watching.
  * Same exception as the scan and generation stores (AGENTS.md): a live process
  * lifecycle, not a cacheable resource. Cache coordination lives in
- * use-workset-execution; the per-component report is served from the
- * executions query cache, which this store's snapshot seeds.
+ * use-workset-execution; the components this store has not been told about come
+ * from the executions query cache, which the snapshot seeds.
  *
- * `view` is the latest authoritative session state seen on the wire (snapshot
- * merged with progress). It is deliberately not the panel's only source: once
- * the stream has ended, the detail GET owns the truth.
+ * `view` is the latest authoritative session state seen on the wire (snapshot,
+ * merged with the component results and progress the stream pushes after it).
+ * It is deliberately not the panel's only source: once the stream has ended,
+ * the detail GET owns the truth.
  */
 export const useWorksetExecutionStore = defineStore('workset-execution', {
   state: () => ({
@@ -120,6 +150,17 @@ export const useWorksetExecutionStore = defineStore('workset-execution', {
       switch (event.type) {
         case 'execution_snapshot': {
           this.view = event.data
+          break
+        }
+        case 'component': {
+          // The wire carries one component's own entry as its result lands, so
+          // the panel fills in component by component instead of re-reading the
+          // session. The entry is replaced wholesale, and a component the held
+          // list does not know yet (a page the client never fetched) is inserted
+          // in component order.
+          if (this.view) {
+            this.view = { ...this.view, components: mergeComponent(this.view.components, event.data) }
+          }
           break
         }
         case 'progress': {

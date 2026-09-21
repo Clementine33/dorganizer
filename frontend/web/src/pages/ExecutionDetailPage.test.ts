@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { apiClientKey } from '@/lib/api/client'
 import type {
   ApiClientContract,
+  ExecutionComponent,
   ExecutionView,
   Operation,
   RevisionDetailResponse,
@@ -210,12 +211,10 @@ describe('ExecutionDetailPage', () => {
         },
       ],
     }
-    // The first read is the session as it stood when the page opened; the read
-    // after the boundary carries the component that finished.
+    // The read the page opens with is the session as it stood then.
     const getExecution = vi
       .fn()
-      .mockResolvedValueOnce({ ...executionView, completed_components: 0, components: [] })
-      .mockResolvedValue(report)
+      .mockResolvedValue({ ...executionView, completed_components: 0, components: [] })
     const wrapper = await mountPage(pageApi({ getExecution }))
 
     // Attaching the stream: the snapshot reports the counts it had when it was
@@ -226,8 +225,10 @@ describe('ExecutionDetailPage', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="execution-folder"]').exists()).toBe(false)
 
-    // A component boundary arrives: the wire carries counts only, so the panel
-    // asks for the report that the boundary has just persisted.
+    // The wire pushes the component's own result, then the progress that moved
+    // the position onto it: the panel fills in from those events alone, without
+    // asking for the session again.
+    store.applyEvent({ type: 'component', data: report.components[0]! })
     store.applyEvent({
       type: 'progress',
       data: {
@@ -244,7 +245,7 @@ describe('ExecutionDetailPage', () => {
     })
     await flushPromises()
 
-    expect(getExecution).toHaveBeenCalledTimes(2)
+    expect(getExecution).toHaveBeenCalledTimes(1)
     const card = wrapper.get('[data-testid="execution-folder"]')
     expect(card.get('[data-testid="execution-folder-name"]').text()).toContain('albumA')
     expect(card.get('[data-testid="execution-folder-status"]').text()).toBe('执行中')
@@ -263,5 +264,50 @@ describe('ExecutionDetailPage', () => {
 
     expect(wrapper.get('[data-testid="execution-empty"]').text()).toContain('没有执行记录')
     expect(wrapper.find('[data-testid="execution-panel"]').exists()).toBe(false)
+  })
+})
+
+describe('ExecutionDetailPage component paging', () => {
+  function component(index: number): ExecutionComponent {
+    return {
+      component_index: index,
+      component_id: `comp-${index}`,
+      root_path: '/music/albumA',
+      partition: 'matched',
+      status: 'pending',
+      operations: 1,
+      completed_operations: 0,
+      committed: [],
+      removed: [],
+      remaining: [],
+      recovery: [],
+      inventory_synced: false,
+    }
+  }
+
+  it('reads the next page of a run too large for one read, and merges it', async () => {
+    const firstPage = [component(0), component(1)]
+    const getExecution = vi
+      .fn()
+      .mockResolvedValueOnce({ ...executionView, total_components: 3, components: firstPage })
+      .mockResolvedValueOnce({ ...executionView, total_components: 3, components: [component(2)] })
+    const wrapper = await mountPage(pageApi({ getExecution }))
+    await flushPromises()
+
+    // The read carried two of the three components: the panel offers the rest
+    // rather than pretending the run is smaller than it is.
+    expect(wrapper.get('[data-testid="execution-progress"]').text()).toContain('组件 1/3')
+    const more = wrapper.get('[data-testid="execution-load-more"]')
+    expect(more.text()).toContain('加载更多组件')
+
+    await more.trigger('click')
+    await flushPromises()
+
+    // The second read starts after the last component held and asks for a page.
+    expect(getExecution).toHaveBeenLastCalledWith('ws-1', 'conversion', 'exec-1', undefined, {
+      from: 2,
+      limit: 200,
+    })
+    expect(wrapper.find('[data-testid="execution-load-more"]').exists()).toBe(false)
   })
 })

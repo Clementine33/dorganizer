@@ -519,7 +519,9 @@ export interface ExecutionView {
   created_at: string
 }
 
-/** The progress event carries counts only; `components` needs the detail GET. */
+/** The progress event carries counts and the current position, never the
+ *  components themselves: those arrive as `component` events, and a client that
+ *  missed them reads the detail route. */
 export interface ExecutionProgressEvent {
   execution_id: string
   status: ExecutionStatus
@@ -535,6 +537,9 @@ export interface ExecutionProgressEvent {
 // Execution SSE events (execution_snapshot payload is an ExecutionView).
 export type ExecutionEvent =
   | { type: 'execution_snapshot'; data: ExecutionView }
+  /** One component's entry, as it appears in `components[]`, sent as its
+   *  result lands; the next terminal event always follows the results. */
+  | { type: 'component'; data: ExecutionComponent }
   | { type: 'progress'; data: ExecutionProgressEvent }
   | { type: 'succeeded'; data: { execution_id: string; plan_id: string } }
   | { type: 'failed'; data: { execution_id: string; error_code: string; error_message: string } }
@@ -764,6 +769,7 @@ export interface ApiClientContract {
     operation: OperationType,
     executionId: string,
     signal?: AbortSignal,
+    page?: { from: number; limit: number },
   ): Promise<ExecutionView>
   cancelExecution(
     worksetId: string,

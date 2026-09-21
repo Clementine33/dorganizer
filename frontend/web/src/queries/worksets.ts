@@ -260,10 +260,11 @@ export function cancelGenerationMutationOptions(api: ApiClientContract) {
 
 // ==================== Execution sessions ====================
 
-// One session's authoritative report. The SSE stream seeds this same entry
-// with snapshots and progress; the GET stays the fallback (a missed terminal
-// event) and the way to pick up the full per-component report after a terminal
-// event, because progress events carry counts only.
+// One session's authoritative detail. The SSE stream seeds this same entry with
+// its snapshot and keeps the open panel current through component events; the
+// GET stays the fallback (a missed terminal event, a reconnect) and the way to
+// read components the stream never sent — it is also the only source for the
+// pages beyond the ones the client holds.
 export function executionQueryOptions(
   api: ApiClientContract,
   worksetId: string | null | undefined,
@@ -352,8 +353,9 @@ export async function syncAfterExecutionTerminal(
     refreshOrRemoveQueries(queryClient, queryKeys.worksets.detail(worksetId)),
     refreshOrRemoveQueries(queryClient, queryKeys.worksets.operation(worksetId, operation)),
     refreshOrRemoveQueries(queryClient, queryKeys.worksets.revisionsPrefix(worksetId, operation)),
-    // Progress events carry counts only; the refreshed GET brings the full
-    // per-component report (committed/removed/recovery) into the open panel.
+    // The refreshed detail is the terminal calibration: it carries every
+    // component's result (committed/removed/recovery), including any the stream
+    // did not get to send.
     refreshOrRemoveQueries(queryClient, queryKeys.worksets.executionsPrefix(worksetId, operation)),
     ...(libraryId
       ? [

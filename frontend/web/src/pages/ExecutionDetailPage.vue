@@ -18,7 +18,16 @@ import type { FileDecision } from '@/lib/api/types'
  */
 const route = useRoute()
 const libraryId = computed(() => (route.params.libraryId as string) || '')
-const { worksetId, execution, executionView, queries, workspace } = useCurrentConversion(libraryId)
+const {
+  worksetId,
+  execution,
+  executionView,
+  hasMoreComponents,
+  loadMoreComponents,
+  loadingMoreComponents,
+  queries,
+  workspace,
+} = useCurrentConversion(libraryId)
 
 /** Each component's kept files, as the executed revision concluded them. */
 const kept = computed<Record<string, FileDecision[]>>(() => {
@@ -53,7 +62,14 @@ async function cancel() {
       当前版本没有执行记录。
     </p>
     <template v-else>
-      <ExecutionPanel :view="executionView" :kept="kept" :members="workspace.workset.value?.members ?? []" />
+      <ExecutionPanel
+        :view="executionView"
+        :kept="kept"
+        :members="workspace.workset.value?.members ?? []"
+        :has-more="hasMoreComponents"
+        :loading-more="loadingMoreComponents"
+        @load-more="loadMoreComponents()"
+      />
       <div v-if="running" class="flex flex-wrap items-center gap-2 px-3 py-2">
         <Button
           variant="destructive"

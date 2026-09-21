@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { ChevronRight, Folder } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { PARTITION_TEXT, keepReasonText } from '@/features/worksets/plan-readers'
 import { sessionFailureText } from '@/features/worksets/session-failure'
 import type {
@@ -31,7 +32,12 @@ const props = defineProps<{
   kept?: Record<string, FileDecision[]>
   /** The record's members, to name a folder the way the user chose it. */
   members?: WorksetMember[]
+  /** Whether the session holds components this panel has not read yet. */
+  hasMore?: boolean
+  loadingMore?: boolean
 }>()
+
+const emit = defineEmits<{ loadMore: [] }>()
 
 function keptFiles(component: ExecutionComponent): FileDecision[] {
   return props.kept?.[component.component_id] ?? []
@@ -286,5 +292,13 @@ const scope = computed(() => {
         </ul>
       </li>
     </ul>
+    <div v-if="props.hasMore" class="flex items-center gap-2 px-3 pb-2">
+      <Button variant="outline" size="sm" :disabled="props.loadingMore" data-testid="execution-load-more" @click="emit('loadMore')">
+        {{ props.loadingMore ? '加载中…' : '加载更多组件' }}
+      </Button>
+      <span class="text-[11px] text-[var(--text-muted)]">
+        已显示 {{ props.view.components.length }} / {{ props.view.total_components }} 个组件
+      </span>
+    </div>
   </section>
 </template>

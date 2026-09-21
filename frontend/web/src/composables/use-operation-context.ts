@@ -1,7 +1,7 @@
-import { computed, watch, type Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { useApiClient } from '@/lib/api/client'
-import { CONVERSION, type OperationType } from '@/lib/api/types'
+import { CONVERSION, type ExecutionComponent, type OperationType } from '@/lib/api/types'
 import {
   currentRecordQueryOptions,
   executionQueryOptions,
@@ -16,6 +16,9 @@ import { worksetDetailQueryOptions } from '@/queries/worksets'
 import { useWorksetGeneration } from '@/composables/use-workset-generation'
 import { useWorksetExecution } from '@/composables/use-workset-execution'
 import { useWorksetEditorStore } from '@/stores/workset-editor'
+
+/** How many components one page of a large run reads. */
+const EXECUTION_COMPONENT_PAGE = 200
 
 /**
  * The library's current conversion record and its operation context.
@@ -84,36 +87,65 @@ export function useOperationContext(
   const executionQuery = useQuery(
     computed(() => executionQueryOptions(api, worksetId.value, operation, executionRef.value?.id ?? null)),
   )
-  // While the stream is live its snapshot/progress is the freshest truth; once
-  // it ends the detail GET owns the full per-component report.
+  // A large run is read a page at a time: these are the components the client
+  // asked for on top of the ones the read or the stream carried.
+  const extraComponents = ref<ExecutionComponent[]>([])
+  const loadingMore = ref(false)
+  watch(executionRef, () => {
+    extraComponents.value = []
+  })
+
+  // While the stream is live its view is the freshest truth — the snapshot,
+  // then each component result as it lands. A component the stream never sent
+  // (attached late, or beyond the components read so far) is taken from the
+  // detail query, which the snapshot seeds; once the stream has ended that
+  // query owns everything. Components fetched by index are merged on top of
+  // whichever of the two is current.
   const executionView = computed(() => {
     const store = execution.store
     const detail = executionQuery.data.value
-    if (store.status === 'streaming' && store.view) {
-      // The stream carries counts only. The report itself is persisted at every
-      // component boundary, so the last refetch is at most one component
-      // behind — which is what lets a run's cards fill in as it goes.
-      if (detail && detail.execution_id === store.view.execution_id) {
-        return { ...store.view, components: detail.components }
-      }
-      return store.view
+    const base = store.status === 'streaming' && store.view ? store.view : (detail ?? store.view)
+    if (!base) return base
+    const known = new Set(base.components.map((component) => component.component_index))
+    const missing = extraComponents.value.filter(
+      (component) => !known.has(component.component_index),
+    )
+    if (missing.length === 0) return base
+    return {
+      ...base,
+      components: [...base.components, ...missing].sort(
+        (a, b) => a.component_index - b.component_index,
+      ),
     }
-    return detail ?? store.view
   })
 
-  // A finished component is one GET away: the wire only says the count moved,
-  // and reading the report again is what turns that into per-component facts.
-  // The first sighting is the snapshot itself — same persisted state, nothing
-  // to read — so only a boundary after it triggers a read.
-  watch(
-    () => execution.store.view?.completed_components ?? null,
-    (completed, previous) => {
-      if (completed === null || previous === null || completed === previous) return
-      if (execution.store.status !== 'streaming') return
-      if (executionQuery.isFetching.value) return
-      void executionQuery.refetch()
-    },
+  const hasMoreComponents = computed(
+    () => (executionView.value?.components.length ?? 0) < (executionView.value?.total_components ?? 0),
   )
+
+  /**
+   * Reads the components after the last one held, for a run too large to render
+   * in one read. The stream keeps filling in components that commit next; this
+   * only reaches back for what a bounded read left out.
+   */
+  async function loadMoreComponents() {
+    const view = executionView.value
+    if (!view || loadingMore.value) return
+    const from = view.components.reduce(
+      (last, component) => Math.max(last, component.component_index + 1),
+      0,
+    )
+    loadingMore.value = true
+    try {
+      const page = await api.getExecution(worksetId.value ?? '', operation, view.execution_id, undefined, {
+        from,
+        limit: EXECUTION_COMPONENT_PAGE,
+      })
+      extraComponents.value = [...extraComponents.value, ...page.components]
+    } finally {
+      loadingMore.value = false
+    }
+  }
 
   const saveMutation = useMutation(saveOperationDraftMutationOptions(api, queryClient))
   const startMutation = useMutation(startGenerationMutationOptions(api, queryClient))
@@ -174,6 +206,9 @@ export function useOperationContext(
     generation,
     execution,
     executionView,
+    hasMoreComponents,
+    loadMoreComponents,
+    loadingMoreComponents: loadingMore,
     editor,
     applySession,
     startGeneration,

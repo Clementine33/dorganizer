@@ -1,6 +1,11 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ApiClientContract, ExecutionEvent, ExecutionView } from '@/lib/api/types'
+import type {
+  ApiClientContract,
+  ExecutionComponent,
+  ExecutionEvent,
+  ExecutionView,
+} from '@/lib/api/types'
 import { apiStub } from '@/test/api-stub'
 import { useWorksetExecutionStore } from './workset-execution'
 
@@ -158,5 +163,48 @@ describe('workset execution store', () => {
     store.reset()
     await first
     expect(streamExecutionEvents).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('component events', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function component(index: number, status: string): ExecutionComponent {
+    return {
+      component_index: index,
+      component_id: `comp-${index}`,
+      root_path: `/music/album${index}`,
+      partition: 'matched',
+      status: status as ExecutionComponent['status'],
+      operations: 1,
+      completed_operations: status === 'succeeded' ? 1 : 0,
+      committed: status === 'succeeded' ? [`/music/album${index}/00.mp3`] : [],
+      removed: [],
+      remaining: [],
+      recovery: [],
+      inventory_synced: status === 'succeeded',
+    }
+  }
+
+  it('replaces the entry the snapshot carried and inserts one it did not', () => {
+    const store = useWorksetExecutionStore()
+    store.status = 'streaming'
+    store.view = view({ components: [component(0, 'pending'), component(2, 'pending')] })
+
+    store.applyEvent({ type: 'component', data: component(0, 'succeeded') })
+    expect(store.view?.components[0]?.status).toBe('succeeded')
+    expect(store.view?.components[0]?.committed).toEqual(['/music/album0/00.mp3'])
+
+    // A component beyond the page the snapshot carried arrives out of order:
+    // it lands where component order puts it, not at the end.
+    store.applyEvent({ type: 'component', data: component(1, 'succeeded') })
+    expect(store.view?.components.map((entry) => entry.component_index)).toEqual([0, 1, 2])
+    expect(store.view?.components[1]?.status).toBe('succeeded')
+  })
+
+  it('ignores a component event before any view exists', () => {
+    const store = useWorksetExecutionStore()
+    store.applyEvent({ type: 'component', data: component(0, 'succeeded') })
+    expect(store.view).toBeNull()
   })
 })
