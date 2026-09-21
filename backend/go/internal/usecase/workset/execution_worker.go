@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
@@ -318,7 +319,10 @@ func (d *dispatcher) persistProgress(
 	}, mustJSON(report))
 }
 
-// finishExecution writes the terminal status with the given report.
+// finishExecution writes the terminal status with the given report. A failure
+// is logged rather than swallowed: the row then stays running until the
+// startup sweep marks it interrupted, and that sweep is a fallback, not a
+// recovery of the session's real outcome.
 func (d *dispatcher) finishExecution(
 	ex *sqlite.PlanExecution,
 	status, code, message string,
@@ -327,7 +331,10 @@ func (d *dispatcher) finishExecution(
 	if report == nil {
 		report = []ExecutionComponentView{}
 	}
-	_ = d.svc.repo.FinishExecution(ex.ExecutionID, status, code, message, mustJSON(report))
+	err := d.svc.repo.FinishExecution(ex.ExecutionID, status, code, message, mustJSON(report))
+	if err != nil {
+		log.Printf("execution %s: terminal write failed (status=%s): %v", ex.ExecutionID, status, err)
+	}
 }
 
 // watchExecutionCancel polls the cooperative cancel flag of a running session
