@@ -277,6 +277,25 @@ CREATE TABLE IF NOT EXISTS entries_staging (
     PRIMARY KEY (session_id, path)
 );
 
+-- Generation credentials: what this app wrote at a path, and the facts that
+-- bind the record to those bytes. A row exists only for an output that passed
+-- the executor's stream and full-decode verification and was committed, so the
+-- row's presence is the verification. A file converted outside this app has no
+-- row at all: it is judged by its measured rate where that can judge it, and
+-- otherwise it is unconfirmed — never assumed adequate.
+CREATE TABLE IF NOT EXISTS generation_records (
+    path TEXT PRIMARY KEY,
+    codec TEXT NOT NULL,
+    encoder TEXT NOT NULL,
+    encoder_version TEXT NOT NULL,
+    bitrate_kbps INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- Scan session tracking
 CREATE TABLE IF NOT EXISTS scan_sessions (
     session_id TEXT PRIMARY KEY,

@@ -277,7 +277,7 @@ func validateOutput(name string, spec *reconcile.AudioOutputSpec) error {
 		return nil // an undeclared output is incomplete, not malformed
 	}
 	switch spec.Codec {
-	case reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac:
+	case reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac, reconcile.CodecOpus:
 	default:
 		return worksetusecase.NewError(
 			worksetusecase.ErrKindInvalidArgument,

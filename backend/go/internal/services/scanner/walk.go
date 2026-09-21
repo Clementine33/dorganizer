@@ -298,6 +298,7 @@ var AllowedExtensions = map[string]bool{
 	".mp3":  true,
 	".aac":  true,
 	".m4a":  true,
+	".opus": true,
 }
 
 // FileEntry represents a scanned file.

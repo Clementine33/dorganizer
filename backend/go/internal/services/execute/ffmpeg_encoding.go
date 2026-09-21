@@ -7,11 +7,74 @@ import (
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
-// encodedAudio is one ffmpeg invocation: the arguments plus the codec ffprobe
-// must report for the resulting file.
+// encodedArgs maps one encoded codec onto its ffmpeg invocation. The codec set
+// is enumerated rather than defaulted: a codec added to the profile vocabulary
+// must be given its encoder here instead of silently becoming an MP3.
+func encodedArgs(codec reconcile.Codec, bitrate string) (encodedAudio, error) {
+	switch codec {
+	case reconcile.CodecAac:
+		// AAC stays bitrate-controlled CBR: never quality/VBR (-q:a).
+		return encodedAudio{
+			Codec:   "aac",
+			Encoder: "aac",
+			Mode:    reconcile.EncodingMode(codec),
+			Args:    []string{"-c:a", "aac", "-b:a", bitrate, "-f", "ipod"},
+		}, nil
+	case reconcile.CodecMp3:
+		return encodedAudio{
+			Codec:   "mp3",
+			Encoder: "libmp3lame",
+			Mode:    reconcile.EncodingMode(codec),
+			Args:    []string{"-c:a", "libmp3lame", "-b:a", bitrate, "-f", "mp3"},
+		}, nil
+	case reconcile.CodecOpus:
+		// Opus is encoded as VBR (-b:a is its average target), which is what
+		// keeps its files small on content that does not need the bitrate. Its
+		// native 48 kHz also resamples a 44.1 kHz source; that is the format's
+		// own behaviour, not a defect of the encode.
+		return encodedAudio{
+			Codec:   "opus",
+			Encoder: "libopus",
+			Mode:    reconcile.EncodingMode(codec),
+			Args:    []string{"-c:a", "libopus", "-b:a", bitrate, "-f", "opus"},
+		}, nil
+	case reconcile.CodecWav, reconcile.CodecFlac:
+		return encodedAudio{}, fmt.Errorf("lossless codec %s is not a bitrate target", codec)
+	}
+	return encodedAudio{}, fmt.Errorf("unsupported target codec %q", codec)
+}
+
+// encodedAudio is one ffmpeg invocation: the arguments, the codec ffprobe must
+// report for the resulting file, and the encoder and rate-control mode a
+// generation credential records beside it.
 type encodedAudio struct {
-	Codec string
-	Args  []string
+	Codec   string
+	Encoder string
+	Mode    string
+	Args    []string
+}
+
+// encodedTarget resolves the invocation of one encoded target without a probed
+// source: the encoded arguments depend only on the codec and the bitrate, never
+// on the media being read. It is the single place that invocation is derived,
+// so a generation credential can never describe a different invocation than the
+// one that ran.
+func encodedTarget(codec reconcile.Codec, quality *reconcile.Quality) (encodedAudio, error) {
+	if quality == nil || quality.Kind != reconcile.QualityBitrate || quality.Bitrate <= 0 {
+		return encodedAudio{}, fmt.Errorf("positive bitrate target required")
+	}
+	return encodedArgs(codec, strconv.Itoa(quality.Bitrate)+"k")
+}
+
+// TargetFacts names the encoder and the rate-control mode one encoded target is
+// written with: what a generation credential records, and what makes a record
+// written under other settings no evidence for this one.
+func TargetFacts(spec reconcile.AudioOutputSpec) (encoder, mode string, err error) {
+	target, err := encodedTarget(spec.Codec, spec.Quality)
+	if err != nil {
+		return "", "", err
+	}
+	return target.Encoder, target.Mode, nil
 }
 
 // audioEncodingArgs preserves PCM precision, sample rate and channel count.
@@ -53,15 +116,8 @@ func audioEncodingArgs(input audioStream, spec reconcile.AudioOutputSpec) (encod
 			format = "s32"
 		}
 		return encodedAudio{Codec: "flac", Args: []string{"-c:a", "flac", "-sample_fmt", format, "-f", "flac"}}, nil
-	case reconcile.CodecMp3, reconcile.CodecAac:
-		if spec.Quality == nil || spec.Quality.Kind != reconcile.QualityBitrate || spec.Quality.Bitrate <= 0 {
-			return encodedAudio{}, fmt.Errorf("positive bitrate target required")
-		}
-		bitrate := strconv.Itoa(spec.Quality.Bitrate) + "k"
-		if spec.Codec == reconcile.CodecAac {
-			return encodedAudio{Codec: "aac", Args: []string{"-c:a", "aac", "-b:a", bitrate, "-f", "ipod"}}, nil
-		}
-		return encodedAudio{Codec: "mp3", Args: []string{"-c:a", "libmp3lame", "-b:a", bitrate, "-f", "mp3"}}, nil
+	case reconcile.CodecMp3, reconcile.CodecAac, reconcile.CodecOpus:
+		return encodedTarget(spec.Codec, spec.Quality)
 	default:
 		return encodedAudio{}, fmt.Errorf("unsupported target codec %q", spec.Codec)
 	}

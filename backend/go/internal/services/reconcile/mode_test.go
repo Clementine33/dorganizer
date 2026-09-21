@@ -144,9 +144,10 @@ func TestLenientDesignMatrix(t *testing.T) {
 
 	t.Run("satisfied MP3 only, no source for the wav: the stem is left as it is", func(t *testing.T) {
 		res, err := Reconcile(ReconcileInput{
-			RootPath: rjRoot,
-			Entries:  []AudioEntry{rjEntry("SEなし/mp3/00.mp3", 1, 320000)},
-			Policy:   policy, Classifier: classifier,
+			RootPath:   rjRoot,
+			Entries:    []AudioEntry{generated(rjEntry("SEなし/mp3/00.mp3", 1, 320000), CodecMp3, 320)},
+			Policy:     policy,
+			Classifier: classifier,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -170,7 +171,7 @@ func TestLenientDesignMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("low bitrate MP3 only: whole stem kept, nothing generated", func(t *testing.T) {
+	t.Run("MP3 only, no credential and no source: kept, conformance unconfirmed", func(t *testing.T) {
 		res, err := Reconcile(ReconcileInput{
 			RootPath: rjRoot,
 			Entries:  []AudioEntry{rjEntry("SEなし/mp3/00.mp3", 1, 128000)},
@@ -181,14 +182,20 @@ func TestLenientDesignMatrix(t *testing.T) {
 		}
 		c := singleComponent(t, res, 1)
 		if c.Status == StatusBlocked {
-			t.Fatalf("low bitrate alone must not block: %+v", c)
+			t.Fatalf("a file this app did not write must not block on its own: %+v", c)
 		}
 		if opCount(c, OpKindEncode) != 0 || opCount(c, OpKindRemoveObsolete) != 0 {
 			t.Fatalf("missing source must not plan ops: %+v", c.Operations)
 		}
+		// The file is already the declared shape: what is missing is the proof
+		// that it was written for this target, which no re-encode could supply
+		// (a lossy file is never upgraded) — so it stays, named as unconfirmed.
 		d, ok := findDecision(c, rjRoot+"/SEなし/mp3/00.mp3")
-		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
+		if !ok || d.Resolution != ResolutionKeep || d.ReasonCode != ReasonConformanceUnconfirmed {
 			t.Fatalf("mp3 decision: %+v ok=%v", d, ok)
+		}
+		if res.Summary.UnmetTargets == 0 {
+			t.Fatal("an unconfirmed target must still be counted as unmet")
 		}
 	})
 
@@ -249,7 +256,7 @@ func TestLenientDesignMatrix(t *testing.T) {
 		entries := []AudioEntry{
 			// Stem 00: wav + satisfied mp3.
 			rjEntry("SEなし/wav/00.wav", 1, 0),
-			rjEntry("SEなし/mp3/00.mp3", 1, 320000),
+			generated(rjEntry("SEなし/mp3/00.mp3", 1, 320000), CodecMp3, 320),
 			// Stem 01: wav only (needs an mp3).
 			rjEntry("SEなし/wav/01.wav", 1, 0),
 		}
@@ -419,12 +426,15 @@ func TestLenientFinalShape(t *testing.T) {
 	})
 }
 
-// TestLenientEncodedSatisfaction pins what counts as a satisfied encoded
-// output now that AAC bitrates are probed like MP3's.
+// TestLenientEncodedSatisfaction pins what counts as a satisfied encoded output:
+// the generation credential this app wrote for exactly that target, not any
+// number a probe can read off the file.
 func TestLenientEncodedSatisfaction(t *testing.T) {
-	t.Run("probed AAC at the target quality is satisfied and untouched", func(t *testing.T) {
+	t.Run("an m4a this app generated for the target is satisfied and untouched", func(t *testing.T) {
+		// Below the band a 256k AAC target accepts (the encoder saturates above
+		// 192k), so the record is what accepts this file: the rate alone rejects it.
 		res := reconcileRJ(t, []AudioEntry{
-			rjEntry("SEなし/m4a/00.m4a", 20000000, 256000),
+			generated(rjEntry("SEなし/m4a/00.m4a", 20000000, 145000), CodecAac, 256),
 		}, loneProfile(encodedOnly(CodecAac, 256)))
 
 		c := singleComponent(t, res, 1)
@@ -440,18 +450,18 @@ func TestLenientEncodedSatisfaction(t *testing.T) {
 		}
 	})
 
-	t.Run("unprobed AAC is never assumed adequate", func(t *testing.T) {
+	t.Run("a file with no credential is never assumed adequate", func(t *testing.T) {
 		res := reconcileRJ(t, []AudioEntry{
 			rjEntry("SEなし/m4a/00.m4a", 20000000, 0),
 		}, loneProfile(encodedOnly(CodecAac, 256)))
 
 		c := singleComponent(t, res, 1)
 		if d, ok := findDecision(c, rjRoot+"/SEなし/m4a/00.m4a"); !ok ||
-			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonUnmetTarget {
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonConformanceUnconfirmed {
 			t.Fatalf("aac decision: %+v ok=%v", d, ok)
 		}
 		if res.Summary.UnmetTargets == 0 {
-			t.Fatal("an unprobed aac bitrate must leave the target unmet")
+			t.Fatal("an unconfirmed m4a must leave the target unmet")
 		}
 	})
 
@@ -469,6 +479,150 @@ func TestLenientEncodedSatisfaction(t *testing.T) {
 			t.Fatalf("mp3 decision: %+v ok=%v", d, ok)
 		}
 	})
+}
+
+// TestEncodedTargetIsAcceptedOnItsCredential pins the second entry of the gate:
+// where a measured rate cannot judge the file — here below the band a 256k AAC
+// target accepts — a credential accepts it only when this app wrote it for
+// exactly that target and the bytes on disk are still the ones it wrote. Every
+// other shape of record is unconfirmed.
+func TestEncodedTargetIsAcceptedOnItsCredential(t *testing.T) {
+	cases := []struct {
+		name     string
+		entry    AudioEntry
+		accepted bool
+	}{
+		{
+			name:     "the credential for this target",
+			entry:    generated(rjEntry("SEなし/m4a/00.m4a", 20000000, 145000), CodecAac, 256),
+			accepted: true,
+		},
+		{
+			name:     "the credential of a target the settings have moved on from",
+			entry:    generated(rjEntry("SEなし/m4a/00.m4a", 20000000, 145000), CodecAac, 192),
+			accepted: false,
+		},
+		{
+			name: "a credential whose file changed since it was written",
+			entry: func() AudioEntry {
+				e := generated(rjEntry("SEなし/m4a/00.m4a", 20000000, 145000), CodecAac, 256)
+				e.Size++
+				return e
+			}(),
+			accepted: false,
+		},
+		{
+			name:     "a credential for another codec",
+			entry:    generated(rjEntry("SEなし/m4a/00.m4a", 20000000, 145000), CodecOpus, 256),
+			accepted: false,
+		},
+		{
+			name:     "no credential at all",
+			entry:    rjEntry("SEなし/m4a/00.m4a", 20000000, 145000),
+			accepted: false,
+		},
+		{
+			name:     "no credential, but a rate the target accepts",
+			entry:    rjEntry("SEなし/m4a/00.m4a", 20000000, 220685),
+			accepted: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := reconcileRJ(t, []AudioEntry{tc.entry}, loneProfile(encodedOnly(CodecAac, 256)))
+
+			c := singleComponent(t, res, 1)
+			d, ok := findDecision(c, rjRoot+"/SEなし/m4a/00.m4a")
+			if !ok || d.Resolution != ResolutionKeep {
+				t.Fatalf("decision = %+v ok=%v", d, ok)
+			}
+			want := ReasonConformanceUnconfirmed
+			if tc.accepted {
+				want = ReasonKeepEncodedSatisfied
+			}
+			if d.ReasonCode != want {
+				t.Fatalf("reason = %s, want %s", d.ReasonCode, want)
+			}
+			if (res.Summary.UnmetTargets == 0) != tc.accepted {
+				t.Fatalf("unmet = %d, accepted = %v", res.Summary.UnmetTargets, tc.accepted)
+			}
+		})
+	}
+}
+
+// TestAACAcceptanceBand pins the first entry for AAC against the rates this
+// toolchain's encoder actually writes (measured: exactly on target up to 192k,
+// ~0.86x for a 256k target and ~0.65x for 320k, because ffmpeg's native AAC
+// saturates near 222 kbps for stereo 44.1 kHz). A file the band does not accept
+// is unconfirmed — here it has no record and no source, so it stays as it is.
+func TestAACAcceptanceBand(t *testing.T) {
+	cases := []struct {
+		name     string
+		target   int
+		observed int64
+		want     string
+	}{
+		{"on target while the encoder can reach it", 192, 192155, ReasonKeepEncodedSatisfied},
+		{"below a reachable target its own rate does not accept", 192, 150000, ReasonConformanceUnconfirmed},
+		{"what the encoder writes for 256k is accepted", 256, 220685, ReasonKeepEncodedSatisfied},
+		{"what the encoder writes for 320k is accepted", 320, 203623, ReasonKeepEncodedSatisfied},
+		{"a target the encoder cannot reach still rejects 128k material", 320, 128000, ReasonConformanceUnconfirmed},
+		{"well above the declared shape is replaced too", 192, 320000, ReasonConformanceUnconfirmed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := reconcileRJ(t, []AudioEntry{
+				rjEntry("SEなし/m4a/00.m4a", 20000000, tc.observed),
+			}, loneProfile(encodedOnly(CodecAac, tc.target)))
+
+			c := singleComponent(t, res, 1)
+			if d, ok := findDecision(c, rjRoot+"/SEなし/m4a/00.m4a"); !ok || d.ReasonCode != tc.want {
+				t.Fatalf("decision = %+v ok=%v, want %s", d, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestOpusTargetIsAcceptedOnItsRecordWhateverItsAverage pins how the two entries
+// divide Opus. The same 160k setting averages 0.01x on silence, 0.68x on dense
+// noise and 1.13x on sparse material, so a rate at or above the target is proof
+// the content needed it (first entry), and a rate below it decides nothing — the
+// credential settles that one (second entry). Without either, the file is
+// unconfirmed rather than silently accepted, which is what a band alone used to
+// do wrong.
+func TestOpusTargetIsAcceptedOnItsRecordWhateverItsAverage(t *testing.T) {
+	for _, observed := range []int64{0, 64000, 109241, 165580} {
+		res := reconcileRJ(t, []AudioEntry{
+			generated(rjEntry("SEなし/opus/00.opus", 20000000, observed), CodecOpus, 160),
+		}, loneProfile(encodedOnly(CodecOpus, 160)))
+
+		c := singleComponent(t, res, 1)
+		if d, ok := findDecision(c, rjRoot+"/SEなし/opus/00.opus"); !ok ||
+			d.Resolution != ResolutionKeep || d.ReasonCode != ReasonKeepEncodedSatisfied {
+			t.Fatalf("observed %d: decision = %+v ok=%v", observed, d, ok)
+		}
+		if len(c.Operations) != 0 {
+			t.Fatalf("observed %d: a satisfied opus target must plan nothing: %+v", observed, c.Operations)
+		}
+	}
+
+	// The rate alone, on a file this app never wrote: at or above the target it
+	// is accepted (nothing to fix), below it nothing is claimed about the file.
+	for _, tc := range []struct {
+		observed int64
+		want     string
+	}{
+		{165580, ReasonKeepEncodedSatisfied},
+		{109241, ReasonConformanceUnconfirmed},
+	} {
+		res := reconcileRJ(t, []AudioEntry{
+			rjEntry("SEなし/opus/00.opus", 20000000, tc.observed),
+		}, loneProfile(encodedOnly(CodecOpus, 160)))
+		c := singleComponent(t, res, 1)
+		if d, ok := findDecision(c, rjRoot+"/SEなし/opus/00.opus"); !ok || d.ReasonCode != tc.want {
+			t.Fatalf("uncredentialed %d: decision = %+v ok=%v, want %s", tc.observed, d, ok, tc.want)
+		}
+	}
 }
 
 // TestLenientStrictRegression asserts strict behavior is reachable and

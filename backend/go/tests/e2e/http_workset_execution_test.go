@@ -275,8 +275,8 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	// albumA is fully satisfied (wav + 320k mp3): its component has zero
-	// operations. albumB holds a below-target 128k mp3 beside its wav source
+	// albumA is satisfied by measurement (wav + a 320k mp3): its component has
+	// zero operations. albumB holds a below-target 128k mp3 beside its wav source
 	// and a quality-unverifiable aac variant: the component rebuilds the mp3
 	// from the wav and declares the aac obsolete.
 	mustFFmpegEncode(t, "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4", filepath.Join(albumA, "00.wav"))
@@ -503,6 +503,48 @@ func TestHTTPWorksetExecutionLoop(t *testing.T) {
 	if opView.ActiveExecution != nil || opView.LatestExecution == nil ||
 		opView.LatestExecution.ExecutionID != execID || opView.LatestExecution.Status != "succeeded" {
 		t.Fatalf("operation execution state = %+v / %+v", opView.ActiveExecution, opView.LatestExecution)
+	}
+
+	// Regenerating the plan is the loop this closes: what the run wrote carries
+	// both facts the gate reads — a measured rate at the target and a generation
+	// record beside it — so the same draft finds nothing left to do. (The record
+	// carrying a file the rate alone cannot accept is covered at the task level,
+	// where the fixture is Opus VBR.)
+	var secondDraft struct {
+		Version int `json:"version"`
+	}
+	if code := doJSON(
+		t, f.client, f.ctx, f.base, http.MethodGet, f.opPath+"/draft", f.token, nil, &secondDraft,
+	); code != http.StatusOK {
+		t.Fatalf("second draft read: %d", code)
+	}
+	if code := doJSONWithHeaders(
+		t, f.client, f.ctx, f.base, http.MethodPost, f.opPath+"/revisions", f.token,
+		map[string]string{"Idempotency-Key": "exec-gen-2", "If-Match": strconv.Itoa(secondDraft.Version)},
+		nil, nil,
+	); code != http.StatusAccepted {
+		t.Fatalf("second generation: %d", code)
+	}
+	secondRevision := waitForLatestRevision(t, f.client, f.ctx, f.base, f.token, f.wsPath, f.opPath)
+	if secondRevision == f.revision {
+		t.Fatal("the second generation must produce a new revision")
+	}
+	var secondPlan struct {
+		Summary struct {
+			OperationCount int    `json:"operation_count"`
+			SummaryReason  string `json:"summary_reason"`
+		} `json:"summary"`
+		Counts struct {
+			UnmetTargets int `json:"unmet_targets"`
+		} `json:"counts"`
+	}
+	if code := doJSON(
+		t, f.client, f.ctx, f.base, http.MethodGet, f.opPath+"/revisions/"+secondRevision, f.token, nil, &secondPlan,
+	); code != http.StatusOK {
+		t.Fatalf("second revision detail: %d", code)
+	}
+	if secondPlan.Summary.OperationCount != 0 || secondPlan.Counts.UnmetTargets != 0 {
+		t.Fatalf("regenerated plan = %+v, want nothing left to do", secondPlan)
 	}
 }
 

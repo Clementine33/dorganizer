@@ -17,8 +17,26 @@ func rjEntry(rel string, size int64, bitrate int64) AudioEntry {
 	return AudioEntry{PathPosix: rjRoot + "/" + rel, Size: size, Mtime: 1700000000, Bitrate: bitrate}
 }
 
-// rjEntries builds the standard fixture. bitrateOverride can set a custom
-// bitrate for a specific mp3 (e.g. "SEなし/mp3/03.mp3" -> 128000).
+// generated stamps one entry with the generation credential of a file this app
+// wrote for that target: the credential's own size and mtime are the entry's, so
+// it describes exactly the file the entry observes.
+func generated(e AudioEntry, codec Codec, kbps int) AudioEntry {
+	e.Generated = &GeneratedFacts{
+		Codec:       codec,
+		BitrateKbps: kbps,
+		Mode:        EncodingMode(codec),
+		Size:        e.Size,
+		Mtime:       e.Mtime,
+	}
+	return e
+}
+
+// rjEntries builds the standard fixture: every mp3 carries a generation
+// credential for the mp3@320 target the profiles ask for, because a library
+// already at its target is exactly what a credentialed file is. bitrateOverride
+// names the files that are observed at another bitrate and carry no credential —
+// the shape of a file this app did not write (e.g. "SEなし/mp3/03.mp3" -> 128000,
+// or -> 0 for a bitrate no probe could establish).
 func rjEntries(bitrateOverride map[string]int64) []AudioEntry {
 	entries := []AudioEntry{}
 	for _, partition := range []string{"SEあり", "SEなし"} {
@@ -26,8 +44,10 @@ func rjEntries(bitrateOverride map[string]int64) []AudioEntry {
 			file := num2(i)
 			wav := rjEntry(partition+"/wav/"+file+".wav", 200000000, 0)
 			mp3 := rjEntry(partition+"/mp3/"+file+".mp3", 20000000, 320000)
-			if br, ok := bitrateOverride[partition+"/mp3/"+file+".mp3"]; ok {
-				mp3.Bitrate = br
+			if _, ok := bitrateOverride[partition+"/mp3/"+file+".mp3"]; ok {
+				mp3.Bitrate = bitrateOverride[partition+"/mp3/"+file+".mp3"]
+			} else {
+				mp3 = generated(mp3, CodecMp3, 320)
 			}
 			if br, ok := bitrateOverride[partition+"/wav/"+file+".wav"]; ok {
 				wav.Bitrate = br
@@ -363,9 +383,9 @@ func TestReconcile_UnknownBitrate(t *testing.T) {
 	if matched == nil || unmatched == nil {
 		t.Fatalf("expected matched and unmatched components, got %d", len(res.Components))
 	}
-	if matched.Status != StatusBlocked || matched.ReasonCode != ReasonQualityUnknown {
+	if matched.Status != StatusBlocked || matched.ReasonCode != ReasonConformanceUnconfirmed {
 		t.Fatalf(
-			"unknown bitrate without source should block with QUALITY_UNKNOWN, got %s %s",
+			"a file with no credential and no source should block with CONFORMANCE_UNCONFIRMED, got %s %s",
 			matched.Status,
 			matched.ReasonCode,
 		)
@@ -651,10 +671,10 @@ func TestReconcile_LosslessToFlacDeletesOnlyNonTargetLossless(t *testing.T) {
 	}
 }
 
-func TestReconcile_AacUnknownBitrateRebuildsOrBlocks(t *testing.T) {
-	// The planner probes MP3 and AAC bitrates alike, so a file whose bitrate is
-	// still unknown is never assumed adequate. With a lossless source the lane
-	// rebuilds; without one the component blocks.
+func TestReconcile_AacWithoutCredentialRebuildsOrBlocks(t *testing.T) {
+	// Nothing but a generation credential makes an encoded target satisfied, so a
+	// file this app did not write is never assumed adequate. With a lossless
+	// source the lane rebuilds; without one the component blocks.
 	policy := wavMp3Profile()
 	target := &AudioOutputSpec{Codec: CodecAac, Quality: &Quality{Kind: QualityBitrate, Bitrate: 128}}
 	policy.Matched = DesiredProfile{Encoded: target}
@@ -680,13 +700,17 @@ func TestReconcile_AacUnknownBitrateRebuildsOrBlocks(t *testing.T) {
 		t.Fatalf("missing aac encode target: %+v", res.Components[0].Operations)
 	}
 
-	// Without source: blocked, zero operations.
+	// Without source: blocked, zero operations, and the reason names what is
+	// actually missing — a confirmation, not a source.
 	noSource := []AudioEntry{
 		rjEntry("SEなし/m4a/00.m4a", 20, 0),
 	}
 	blocked := reconcileRJ(t, noSource, policy)
 	if len(blocked.Components) != 1 || blocked.Components[0].Status != StatusBlocked {
 		t.Fatalf("aac without source should block: %+v", blocked.Components)
+	}
+	if blocked.Components[0].ReasonCode != ReasonConformanceUnconfirmed {
+		t.Fatalf("block reason = %s, want %s", blocked.Components[0].ReasonCode, ReasonConformanceUnconfirmed)
 	}
 	if len(blocked.Components[0].Operations) != 0 {
 		t.Fatalf("blocked component must have zero operations")
@@ -725,15 +749,16 @@ func TestReconcile_EmptyProfileRemovesThePartition(t *testing.T) {
 	}
 }
 
-func TestReconcile_AacProbedBitrateSatisfiesTarget(t *testing.T) {
-	// The inventory decides: a probed 256 kbps AAC is the declared output, so
-	// nothing is rebuilt. The undeclared lossless lane is still obsolete.
+func TestReconcile_AacWithItsCredentialSatisfiesTarget(t *testing.T) {
+	// The credential decides: the m4a this app generated for the declared target
+	// is the declared output, so nothing is rebuilt. The undeclared lossless lane
+	// is still obsolete.
 	policy := wavMp3Profile()
 	policy.Matched = DesiredProfile{Encoded: encodedTarget(CodecAac, 256)}
 	policy.Unmatched = policy.Matched
 	entries := []AudioEntry{
 		rjEntry("SEあり/wav/00.wav", 100, 0),
-		rjEntry("SEあり/m4a/00.m4a", 20, 256000),
+		generated(rjEntry("SEあり/m4a/00.m4a", 20, 256000), CodecAac, 256),
 	}
 	res := reconcileRJ(t, entries, policy)
 

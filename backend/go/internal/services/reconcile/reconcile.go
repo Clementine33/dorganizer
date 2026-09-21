@@ -20,21 +20,82 @@ const (
 
 // bitrateSatisfactionTolerance mirrors the historical threshold semantics: a
 // 320 kbps target accepts an observed bitrate >= 319 kbps (319000 bps), because
-// header-level probes can under-report VBR averages slightly. It applies to
-// every encoded codec: MP3 and AAC are both compared on their probed bitrate.
+// header-level probes can under-report a rate slightly. It applies to the codecs
+// compared on a floor rather than a band (MP3, and Opus's measurement entry).
 const bitrateSatisfactionTolerance = 1000
 
+// The acceptance band of an AAC target, as a percentage of it. ffmpeg's native
+// AAC encoder delivers its target exactly while the target is within reach
+// (measured: 128k and 192k both land at 1.00x), and saturates near 222 kbps for
+// stereo 44.1 kHz above that (asked for 256k it writes ~0.86x, for 320k ~0.65x).
+// A tight band therefore only applies while the encoder can honour the target;
+// above that the floor has to admit what it can actually produce, or every plan
+// would rebuild its own output forever. The ceiling is the target's own meaning:
+// a file well above the declared shape is replaced like a file below it.
+const (
+	aacTightFloor     = 95
+	aacSaturatedFloor = 60
+	aacCeiling        = 110
+	// aacExactAbove is where "the encoder can honour the target" stops.
+	aacExactAbove = 192000
+)
+
+// measuredBitrateSatisfies is the first entry of the encoded-lane gate: a file
+// whose own measured rate already answers the target is not touched, whoever
+// wrote it. The bands follow what this toolchain's encoders actually write. An
+// unknown rate (0) never satisfies: it is not evidence of anything.
+func measuredBitrateSatisfies(bitrate int64, spec *AudioOutputSpec) bool {
+	if spec.Quality == nil || spec.Quality.Bitrate <= 0 {
+		return false
+	}
+	target := int64(spec.Quality.Bitrate) * 1000
+	switch spec.Codec {
+	case CodecMp3:
+		return bitrate >= target-bitrateSatisfactionTolerance
+	case CodecAac:
+		floor := int64(aacTightFloor)
+		if target > aacExactAbove {
+			floor = aacSaturatedFloor
+		}
+		return bitrate >= target*floor/100 && bitrate <= target*aacCeiling/100
+	case CodecOpus:
+		// Opus is written VBR, so its average is a fact about the content; a rate
+		// at or above the target can only mean the content needed that much, and
+		// one below it decides nothing (see satisfiedEncoded).
+		return bitrate >= target-bitrateSatisfactionTolerance
+	case CodecWav, CodecFlac:
+		// Lossless targets carry no bitrate; the lane rules decide those.
+		return false
+	}
+	return false
+}
+
 // satisfiedEncoded reports whether an observed encoded variant satisfies the
-// target spec using observable facts only: the target codec at or above the
-// target bitrate. The planner enriches what the scan left unknown (MP3, AAC
-// and their containers), so an unprobed bitrate is never assumed adequate —
-// an unknown one fails the comparison and, without a source to rebuild from,
-// keeps the stem as an unmet target instead of a silently satisfied one.
+// target spec. Two entries accept a file, in this order:
+//
+//  1. Its own measured rate already answers the target — the first entry, and
+//     all MP3 ever needs: MP3 is written CBR and lands exactly on its setting, so
+//     the number leaves nothing to ask.
+//  2. A generation credential proves this app wrote the file for exactly this
+//     target and that the bytes are still the ones it wrote. This is what settles
+//     the codecs a measurement cannot judge: Opus VBR (the same 160k setting
+//     averages 0.01x on silence, 0.68x on dense noise, 1.13x on sparse material)
+//     and AAC above the point where the encoder saturates.
+//
+// A file neither entry accepts is unconfirmed, never silently adequate. That is
+// the whole claim: a measured rate is not evidence of quality either — a
+// low-bitrate file re-encoded to a high target would not regain what it lost.
 func satisfiedEncoded(f GroupedFile, spec *AudioOutputSpec) bool {
 	if f.Codec != spec.Codec {
 		return false
 	}
-	return f.Bitrate >= int64(spec.Quality.Bitrate)*1000-bitrateSatisfactionTolerance
+	if measuredBitrateSatisfies(f.Bitrate, spec) {
+		return true
+	}
+	if spec.Codec == CodecMp3 {
+		return false
+	}
+	return f.Generated.Matches(*spec, f.Size, f.Mtime)
 }
 
 // sameStemPath derives a target path beside the given source path, preserving
@@ -156,12 +217,11 @@ type groupPlan struct {
 	losslessObsolete  []GroupedFile
 	losslessBlocked   string // reason code when the lane cannot be satisfied
 
-	encodedTarget         []GroupedFile
-	encodedKeep           []GroupedFile
-	encodedObsolete       []GroupedFile
-	encodedNeedsRebuild   bool
-	encodedQualityUnknown bool
-	encodedTargetPath     string
+	encodedTarget       []GroupedFile
+	encodedKeep         []GroupedFile
+	encodedObsolete     []GroupedFile
+	encodedNeedsRebuild bool
+	encodedTargetPath   string
 }
 
 //nolint:gocognit,gocyclo,cyclop,funlen // per-lane decision table (lossless/encoded/ops); each case is a straight-line rule
@@ -273,9 +333,6 @@ func reconcileComponent(
 					p.encodedKeep = append(p.encodedKeep, f)
 				} else {
 					below = append(below, f)
-					if f.Bitrate == 0 {
-						p.encodedQualityUnknown = true
-					}
 				}
 			}
 			if len(p.encodedTarget) == 0 || len(below) > 0 {
@@ -346,11 +403,25 @@ func reconcileComponent(
 					break
 				}
 				if p.source == "" {
-					reason := ReasonSourceMissing
-					if p.encodedQualityUnknown && len(p.encodedTarget) > 0 {
-						reason = ReasonQualityUnknown
+					// A candidate of the declared codec that no credential confirms
+					// is a different fact from a stem holding nothing to build from,
+					// and it is the one the review can act on: without a lossless
+					// source there is nothing to regenerate it from, and re-encoding
+					// a lossy file would not restore what it lost.
+					if len(p.encodedTarget) > 0 {
+						block(
+							ReasonConformanceUnconfirmed,
+							"stem %s holds an unconfirmed %s target and no lossless source to regenerate it from",
+							p.stem,
+							profile.Encoded.Codec,
+						)
+						break
 					}
-					block(reason, "stem %s cannot rebuild encoded target without a lossless source", p.stem)
+					block(
+						ReasonSourceMissing,
+						"stem %s cannot rebuild encoded target without a lossless source",
+						p.stem,
+					)
 					break
 				}
 				switch len(p.encodedTarget) {

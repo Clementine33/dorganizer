@@ -1,6 +1,7 @@
 package conversion
 
 import (
+	"database/sql"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -28,15 +29,17 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
 }
 
 // collectRootEntries loads recognized audio entries under a planning root with
-// the metadata needed for fingerprinting (same semantics as the planner's own
-// collection).
+// the metadata needed for fingerprinting, plus the generation credential of any
+// file this app wrote (same semantics as the planner's own collection).
 func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
 	rootPosix := normalizeScopePath(root)
 	prefix := strings.TrimSuffix(rootPosix, "/")
 	likePrefix := escapeLikePattern(prefix)
 	rows, err := repo.DB().Query(`
-		SELECT path, COALESCE(size, 0), COALESCE(mtime, 0), COALESCE(bitrate, 0), COALESCE(format, '')
-		FROM entries WHERE is_dir = 0 AND (path = ? OR path LIKE ? ESCAPE '\')
+		SELECT e.path, COALESCE(e.size, 0), COALESCE(e.mtime, 0), COALESCE(e.bitrate, 0), COALESCE(e.format, ''),
+		       g.codec, g.bitrate_kbps, g.mode, g.size, g.mtime
+		FROM entries e LEFT JOIN generation_records g ON g.path = e.path
+		WHERE e.is_dir = 0 AND (e.path = ? OR e.path LIKE ? ESCAPE '\')
 	`, rootPosix, likePrefix+"/%")
 	if err != nil {
 		return nil, err
@@ -47,8 +50,22 @@ func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.Audio
 	seen := map[string]struct{}{}
 	for rows.Next() {
 		var e reconcile.AudioEntry
-		if err := rows.Scan(&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format); err != nil {
+		var codec, mode sql.NullString
+		var bitrateKbps, recordSize, recordMtime sql.NullInt64
+		if err := rows.Scan(
+			&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format,
+			&codec, &bitrateKbps, &mode, &recordSize, &recordMtime,
+		); err != nil {
 			return nil, err
+		}
+		if codec.Valid {
+			e.Generated = &reconcile.GeneratedFacts{
+				Codec:       reconcile.Codec(codec.String),
+				BitrateKbps: int(bitrateKbps.Int64),
+				Mode:        mode.String,
+				Size:        recordSize.Int64,
+				Mtime:       recordMtime.Int64,
+			}
 		}
 		if _, ok := seen[e.PathPosix]; ok {
 			continue

@@ -521,12 +521,15 @@ type InventoryFile struct {
 // SyncObservedInventory applies the observed disk changes of an execution to the
 // entries inventory without a rescan: removed paths lose their row, changed
 // paths are refreshed with the scan merge's content_rev semantics (a changed
-// size/mtime bumps content_rev and clears the bitrate fact). rootPath is the
-// scan root the entries belong to.
+// size/mtime bumps content_rev and clears the bitrate fact), and the generation
+// credentials of the outputs this execution committed are written beside them,
+// so the next plan reads them with the inventory. rootPath is the scan root the
+// entries belong to.
 func (r *Repository) SyncObservedInventory(
 	rootPath string,
 	removed []string,
 	changed []InventoryFile,
+	generated []GenerationRecord,
 ) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -538,9 +541,20 @@ func (r *Repository) SyncObservedInventory(
 		if _, err := tx.Exec("DELETE FROM entries WHERE path = ?", p); err != nil {
 			return fmt.Errorf("remove inventory row %s: %w", p, err)
 		}
+		// A credential describes the bytes that were there. With the file gone,
+		// it describes nothing — and a later arrival at the same path would
+		// otherwise inherit it.
+		if _, err := tx.Exec("DELETE FROM generation_records WHERE path = ?", p); err != nil {
+			return fmt.Errorf("remove generation record %s: %w", p, err)
+		}
 	}
 	for _, f := range changed {
 		if err := upsertObservedFile(tx, rootPath, f); err != nil {
+			return err
+		}
+	}
+	for _, g := range generated {
+		if err := upsertGenerationRecord(tx, g); err != nil {
 			return err
 		}
 	}

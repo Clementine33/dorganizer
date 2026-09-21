@@ -42,6 +42,45 @@ describe('UnitFields', () => {
     })
   })
 
+  it('offers the named presets as shortcuts over the manual pair', async () => {
+    const wrapper = mountFields({
+      lossless: { codec: 'wav' },
+      encoded: { codec: 'mp3', quality: { kind: 'bitrate', bitrate: 320 } },
+    })
+
+    // A stored pair lights its own preset up: the choice is read from the value,
+    // never stored as a mode beside it.
+    expect(wrapper.get('[data-testid="common-matched-preset-mp3-320"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="common-matched-preset-aac-256"]').attributes('aria-pressed')).toBe('false')
+
+    await wrapper.get('[data-testid="common-matched-preset-opus-160"]').trigger('click')
+    expect(wrapper.emitted('change')?.[0]?.[0]).toEqual({
+      lossless: { codec: 'wav' },
+      encoded: { codec: 'opus', quality: { kind: 'bitrate', bitrate: 160 } },
+    })
+  })
+
+  it('keeps a hand-made pair as it is: no preset matches, the manual controls own it', () => {
+    const wrapper = mountFields({ encoded: { codec: 'aac', quality: { kind: 'bitrate', bitrate: 192 } } })
+
+    for (const preset of ['opus-160', 'aac-256', 'mp3-320']) {
+      expect(wrapper.get(`[data-testid="common-matched-preset-${preset}"]`).attributes('aria-pressed')).toBe('false')
+    }
+    // Nothing is written until a control changes: opening the editor is not a change.
+    expect(wrapper.emitted('change')).toBeUndefined()
+    expect((wrapper.get('[data-testid="common-matched-bitrate"]').element as HTMLInputElement).value).toBe('192')
+  })
+
+  it('names what the opus target does to the file it writes', () => {
+    const mp3 = mountFields({ encoded: { codec: 'mp3', quality: { kind: 'bitrate', bitrate: 320 } } })
+    expect(mp3.find('[data-testid="encoded-codec-hint"]').exists()).toBe(false)
+
+    const opus = mountFields({ encoded: { codec: 'opus', quality: { kind: 'bitrate', bitrate: 160 } } })
+    const hint = opus.get('[data-testid="encoded-codec-hint"]').text()
+    expect(hint).toContain('48 kHz')
+    expect(hint).toContain('VBR')
+  })
+
   it('warns that an empty profile removes the partition audio', () => {
     const empty = mountFields({})
     expect(empty.get('[data-testid="empty-profile-warning"]').text()).toContain('该分类下的音频将被移除')

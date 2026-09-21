@@ -453,6 +453,12 @@ running session sets a cooperative flag, and the worker stops at the
 component's next safe stage boundary (a started commit finishes, so a recovery
 copy is never destroyed halfway). Cancellation is idempotent.
 
+**Metadata.** An encode carries the source's tags into every target
+(`-map_metadata 0`): `.mp3` and `.m4a` on the container, `.flac` and `.opus` in
+their own tag blocks. Embedded pictures are not part of the model — the
+workflow's first source is WAV, which cannot hold one — so no target gets
+container-specific picture handling.
+
 **Inventory sync.** After each component the observed disk changes are applied
 to the entries inventory for the affected paths only (removed sources lose
 their row, committed outputs and `Delete/…` recovery files are refreshed with
@@ -493,6 +499,12 @@ every revision the draft produces; the execution uses the frozen value.
   ]
 }
 ```
+
+A profile names a codec per lane: `lossless` is `wav` or `flac` and carries no
+quality; `encoded` is `mp3`, `aac` (an `.m4a`) or `opus` (an `.opus`) and
+requires a positive `quality.bitrate`. The settings offer three named pairs —
+Opus 160, AAC 256, MP3 320 — but a preset writes that same codec + bitrate pair,
+so nothing about it is stored or validated differently from a hand-made one.
 
 - **Absence means inheritance.** A unit missing from `overrides` follows the
   common value, whatever that value is now. Null is never the way to express
@@ -536,9 +548,45 @@ audio: every observed file in it is removed. `available_sources` differs in
 left exactly as it is and recorded as `UNMET_TARGET` (no generation, no
 cleanup), where strict blocks the whole Component with zero operations.
 Ambiguity and path conflicts block in both.
-An encoded output is satisfied by the target codec at or above the target
-bitrate (1 kbps tolerance for probe under-reporting); MP3 and AAC are both
-compared on the probed bitrate, and an unprobed one never counts as satisfying.
+An encoded output is accepted by two entries, in this order:
+
+1. **Its own measured rate**, compared per codec — a file that already measures
+   its target is not touched, whoever wrote it:
+
+   | Codec | Accepted when |
+   | --- | --- |
+   | MP3 | probed bitrate at or above the target (1 kbps tolerance for probe under-reporting) |
+   | AAC | inside `[0.95, 1.10]x` of a target up to 192k, inside `[0.60, 1.10]x` above it |
+   | Opus | probed average at or above the target |
+
+   MP3 is written CBR and lands exactly on target — the number leaves nothing to
+   ask, so MP3 is judged by it alone. AAC is exact while the encoder can honour
+   the target and saturates near 222 kbps for stereo 44.1 kHz above it (measured:
+   1.00x at 192k, 0.86x for a 256k target, 0.65x for 320k), so above that the
+   floor admits what can be produced instead of rebuilding its own output
+   forever; the ceiling replaces a file well above the declared shape like one
+   below it. A bitrate no probe can establish never accepts.
+2. **A generation record.** An execution writes one per committed encoded output
+   — codec, encoder, target bitrate, rate-control mode (CBR/VBR), the encoder
+   version, the output's size and mtime, and the SHA-256 of its bytes — and only
+   after the stream check and the full decode passed, so the record's presence is
+   the verification. It accepts the file only when it names exactly the current
+   codec, bitrate and mode *and* its size and mtime still match what the
+   inventory observes (the same content proxy the scan and the inventory
+   fingerprint use; the hash is what keeps a deeper re-check possible later).
+
+The second entry is what settles the codecs a measurement cannot judge: Opus is
+written VBR, where the same 160k setting averages 0.01x on silence, 0.68x on
+dense noise and 1.13x on sparse material, and AAC saturates above 192k as above.
+A file neither entry accepts is **unconfirmed**, never silently adequate — and no
+measured rate is evidence of quality either, since a low-bitrate file re-encoded
+to a high target would not regain what it never had. Where a qualified lossless
+source exists the target is regenerated once and recorded; where none exists the
+file is kept as it is and the stem counts as `UNMET_TARGETS` (relaxed mode marks
+that kept file `CONFORMANCE_UNCONFIRMED`; strict mode blocks the component with
+the same code and zero operations). Lossless targets carry no record: a lossless
+file is accepted on its codec.
+
 `StepSummary.unmet_targets` counts kept-but-unsatisfied stems; `summary_reason`
 may be `UNMET_TARGETS`. New operation drafts seed `mode: "available_sources"`.
 

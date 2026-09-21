@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
@@ -46,6 +47,22 @@ func (f FFmpeg) Check() error {
 	return nil
 }
 
+// ToolVersion reports the encoder's own version line, the diagnostic a
+// generation credential records beside its facts: it names the binary that
+// wrote a file without claiming it as part of the file's identity — a re-encode
+// with a newer encoder is the same generation, an encode with other settings is
+// not. An unavailable tool reports an empty string rather than failing the
+// generation it describes.
+func ToolVersion(ctx context.Context, cfg ToolsConfig) string {
+	encoder, _ := newFFmpeg(cfg).paths()
+	out, err := exec.CommandContext(ctx, encoder, "-version").Output()
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(string(out), "\n")
+	return strings.TrimSpace(line)
+}
+
 type audioStream struct {
 	Codec      string `json:"codec_name"`
 	SampleRate string `json:"sample_rate"`
@@ -75,6 +92,8 @@ func (f FFmpeg) probe(ctx context.Context, path string) (audioStream, error) {
 }
 
 // Encode creates and decodes a staged output before its caller can commit it.
+// The source's tags come with it; its embedded picture does not — the workflow's
+// first source is WAV, which has none, so no container gets special handling.
 // AAC uses bitrate-controlled CBR (-b:a), never quality/VBR (-q:a).
 // The destination must be a new absolute staging path. Partial output on failure
 // belongs to the caller; this adapter never commits, removes or replaces media.
@@ -128,8 +147,14 @@ func (f FFmpeg) Encode(ctx context.Context, src, dst string, spec reconcile.Audi
 		math.Abs(inputDuration-outputDuration) > 0.1 {
 		return fmt.Errorf("output duration does not match source")
 	}
-	if output.Channels != input.Channels || output.SampleRate != input.SampleRate {
-		return fmt.Errorf("output changed sample rate or channel count")
+	if output.Channels != input.Channels {
+		return fmt.Errorf("output changed channel count")
+	}
+	// Opus is a 48 kHz format: a 44.1 kHz source is resampled by the codec
+	// itself, which is the one sample-rate change that is the format's, not a
+	// defect of the encode.
+	if output.SampleRate != input.SampleRate && spec.Codec != reconcile.CodecOpus {
+		return fmt.Errorf("output changed sample rate")
 	}
 	if output, err := exec.CommandContext(ctx, encoder, "-nostdin", "-v", "error", "-xerror", "-i", dst, "-map", "0:a:0", "-f", "null", "-").
 		CombinedOutput(); err != nil {

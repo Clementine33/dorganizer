@@ -55,6 +55,21 @@ function encodeAlbum(root: string, name: string, opts: { m4a?: boolean } = {}): 
   return dir
 }
 
+/** Tags on the lossless source, so a conversion's metadata handling is visible. */
+function tagSource(file: string, title: string): void {
+  const tagged = `${file}.tagged`
+  // -f wav explicitly: the staging name keeps the album's own stem.
+  run('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-i', file, '-metadata', `title=${title}`, '-metadata', 'artist=Onsei E2E', '-f', 'wav', '-c:a', 'pcm_s16le', tagged])
+  cpSync(tagged, file)
+  rmSync(tagged, { force: true })
+}
+
+/** One field of an ffprobe JSON probe, as a string. */
+function probe(file: string, entries: string): string {
+  const raw = run('ffprobe', ['-v', 'error', '-show_entries', entries, '-of', 'json', file])
+  return raw
+}
+
 function mp3Bitrate(file: string): number {
   // ffprobe takes no -nostdin here (unlike ffmpeg); the Go e2e probes the same way.
   const raw = run('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=bit_rate', '-of', 'json', file])
@@ -217,6 +232,49 @@ test.describe('workset execution', () => {
     await page.getByTestId('workspace-breadcrumb').getByRole('link', { name: '转换' }).click()
     await expect(page.getByTestId('start-execution')).toBeDisabled()
     await expect(page.getByTestId('start-execution')).toHaveAttribute('title', /需重新生成/)
+  })
+
+  test('an encoded preset reaches the disk: Opus 160 with the source tags kept', async ({ page }) => {
+    const root = makeFixtureRoot('exec-preset')
+    const album = encodeAlbum(root, 'preset-album')
+    // The lossless source carries tags, so what a conversion does with them is
+    // observable on the output rather than assumed.
+    tagSource(path.join(album, '00.wav'), 'プリセット 曲')
+
+    await addLibraryAndScan(page, root, 'E2E Exec Preset')
+    await createWorksetForAllFolders(page)
+
+    // The settings offer the named pairs; the manual codec + bitrate stay the
+    // way to compose anything else.
+    await page.getByTestId('nav-conversion-settings').click()
+    await expect(page.getByTestId('conversion-settings')).toBeVisible()
+    for (const partition of ['matched', 'unmatched']) {
+      await page.getByTestId(`common-${partition}-preset-opus-160`).click()
+    }
+    await expect(page.getByTestId('common-matched-preset-opus-160')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('encoded-codec-hint').first()).toContainText('48 kHz')
+    await page.getByTestId('apply-common').click()
+    await expect(page.getByTestId('apply-common')).toBeDisabled()
+    await page.getByRole('link', { name: '← 转换列表' }).click()
+    await expect(page).toHaveURL(/\/conversion$/)
+
+    await generatePlan(page)
+    await startExecution(page)
+    await expect(page.getByTestId('execution-status')).toHaveText('已完成', { timeout: 90_000 })
+
+    // Disk truth: the target is an Opus file at the preset bitrate, the source's
+    // tags came with it, and the mp3 it replaced is in the library's Delete/.
+    const opus = path.join(album, '00.opus')
+    expect(existsSync(opus)).toBe(true)
+    const streams = JSON.parse(probe(opus, 'stream=codec_name,bit_rate'))
+    expect(streams.streams[0].codec_name).toBe('opus')
+    const format = JSON.parse(probe(opus, 'format=bit_rate:format_tags:stream_tags'))
+    expect(Number(format.format.bit_rate)).toBeGreaterThanOrEqual(158_000)
+    const tags = { ...(format.format.tags ?? {}), ...(format.streams?.[0]?.tags ?? {}) }
+    expect(tags.title).toBe('プリセット 曲')
+    expect(tags.artist).toBe('Onsei E2E')
+    expect(existsSync(path.join(album, '00.mp3'))).toBe(false)
+    expect(existsSync(path.join(root, 'Delete', 'preset-album', '00.mp3'))).toBe(true)
   })
 
   test('a source drifting after planning fails the run and preserves every file', async ({ page }) => {

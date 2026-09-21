@@ -361,6 +361,13 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 	}
 	seed("/music/album/changed.mp3", 100, 1000, 3, 5000)
 	seed("/music/album/gone.mp3", 100, 1000, 1, nil)
+	if _, err := repo.DB().Exec(`
+		INSERT INTO generation_records
+			(path, codec, encoder, encoder_version, bitrate_kbps, mode, size, mtime, content_sha256, created_at)
+		VALUES ('/music/album/gone.mp3', 'mp3', 'libmp3lame', 'ffmpeg version n9.0.1', 320, 'cbr', 100, 1000, 'stale', ?)
+	`, now); err != nil {
+		t.Fatalf("seed generation record: %v", err)
+	}
 
 	err := repo.SyncObservedInventory("/music",
 		[]string{"/music/album/gone.mp3"},
@@ -368,6 +375,11 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 			{Path: "/music/album/changed.mp3", Size: 222, Mtime: 2000},
 			{Path: "/music/album/Delete/gone.mp3", Size: 100, Mtime: 1000},
 		},
+		[]sqlite.GenerationRecord{{
+			Path: "/music/album/changed.mp3", Codec: "mp3", Encoder: "libmp3lame",
+			EncoderVersion: "ffmpeg version n9.0.1", BitrateKbps: 320, Mode: "cbr",
+			Size: 222, Mtime: 2000, ContentSHA256: "0f1e2d",
+		}},
 	)
 	if err != nil {
 		t.Fatalf("SyncObservedInventory: %v", err)
@@ -394,6 +406,7 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 	if n != 0 {
 		t.Fatal("removed source row must be gone")
 	}
+	assertGenerationRecords(t, repo)
 
 	var parent, name string
 	var revNew int64
@@ -409,7 +422,7 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 	// An unchanged observation keeps the surviving bitrate fact and revision.
 	err = repo.SyncObservedInventory("/music", nil, []sqlite.InventoryFile{
 		{Path: "/music/album/changed.mp3", Size: 222, Mtime: 2000},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
@@ -420,5 +433,39 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 	}
 	if contentRev != 4 || dirty != 0 {
 		t.Fatalf("unchanged observation must not bump the revision: rev=%d dirty=%d", contentRev, dirty)
+	}
+}
+
+// assertGenerationRecords checks how a credential follows the inventory: a
+// removed path loses its record (it described bytes that are no longer there,
+// and a later arrival at that path must not inherit it), and a committed
+// output's record lands beside its refreshed row carrying the encoder that
+// wrote it and the hash of those bytes.
+func assertGenerationRecords(t *testing.T, repo *sqlite.Repository) {
+	t.Helper()
+	var n int
+	if err := repo.DB().QueryRow(
+		"SELECT COUNT(*) FROM generation_records WHERE path = '/music/album/gone.mp3'",
+	).Scan(&n); err != nil {
+		t.Fatalf("removed record: %v", err)
+	}
+	if n != 0 {
+		t.Fatal("the credential of a removed path must go with it")
+	}
+
+	var codec, encoder, mode, digest string
+	var kbps, recordSize, recordMtime int64
+	if err := repo.DB().QueryRow(`
+		SELECT codec, encoder, bitrate_kbps, mode, size, mtime, content_sha256
+		FROM generation_records WHERE path = '/music/album/changed.mp3'
+	`).Scan(&codec, &encoder, &kbps, &mode, &recordSize, &recordMtime, &digest); err != nil {
+		t.Fatalf("generation record: %v", err)
+	}
+	if codec != "mp3" || encoder != "libmp3lame" || kbps != 320 || mode != "cbr" ||
+		recordSize != 222 || recordMtime != 2000 || digest != "0f1e2d" {
+		t.Fatalf(
+			"record = %s/%s %dk %s size=%d mtime=%d %s",
+			codec, encoder, kbps, mode, recordSize, recordMtime, digest,
+		)
 	}
 }

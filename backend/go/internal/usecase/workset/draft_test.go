@@ -3,6 +3,7 @@ package workset_test
 import (
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -148,7 +149,7 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 	}
 
 	badCodec := draftDoc()
-	badCodec.Matched.Lossless.Codec = "opus"
+	badCodec.Matched.Lossless.Codec = "vorbis"
 	if _, err := f.svc.SaveDraft(
 		f.ctx,
 		ws.WorksetID,
@@ -159,6 +160,26 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 	); err == nil {
 		t.Fatal("unknown codec must be refused")
 	}
+
+	// Opus is part of the vocabulary as an encoded target, and an encoded target
+	// without its bitrate stays incomplete rather than malformed.
+	opusTarget := draftDoc()
+	opusTarget.Matched.Encoded = &reconcile.AudioOutputSpec{
+		Codec:   reconcile.CodecOpus,
+		Quality: &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 160},
+	}
+	opusDoc, err := f.svc.SaveDraft(
+		f.ctx,
+		ws.WorksetID,
+		worksetusecase.OperationTypeConversion,
+		worksetusecase.SaveDraftRequest{
+			Document: draftJSON(t, opusTarget), IfMatchVersion: version,
+		},
+	)
+	if err != nil {
+		t.Fatalf("an Opus encoded target must save: %v", err)
+	}
+	version = opusDoc.Version
 
 	// An undeclared output is incomplete, not malformed: it saves.
 	undeclared := draftDoc()

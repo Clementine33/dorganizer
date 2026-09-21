@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/services/execute"
@@ -48,7 +49,9 @@ func TestFFmpegEncodesFrozenTargets(t *testing.T) {
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	for _, codec := range []reconcile.Codec{reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac} {
+	for _, codec := range []reconcile.Codec{
+		reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac, reconcile.CodecOpus,
+	} {
 		t.Run(string(codec), func(t *testing.T) {
 			spec := reconcile.AudioOutputSpec{Codec: codec}
 			if !spec.Lossless() {
@@ -59,6 +62,16 @@ func TestFFmpegEncodesFrozenTargets(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertEncodedStream(t, probeStream(t, dst), codec, spec)
+			if codec == reconcile.CodecOpus {
+				// VBR: the average follows the content, not the setting — this
+				// fixture's noise averages ~0.75x of it. What matters here is that
+				// the file carries a measurable average at all (Ogg declares no
+				// stream bitrate); the planner does not judge an Opus file by it.
+				container := probeContainerBitrate(t, dst)
+				if container < 192000*30/100 || container > 192000*130/100 {
+					t.Fatalf("opus container average out of plausible range: %d", container)
+				}
+			}
 			if err := encoder.Encode(t.Context(), src, dst, spec); err == nil {
 				t.Fatal("must not replace an existing target")
 			}
@@ -68,6 +81,87 @@ func TestFFmpegEncodesFrozenTargets(t *testing.T) {
 	if err != nil || string(before) != string(after) {
 		t.Fatalf("source changed: %v", err)
 	}
+}
+
+// TestFFmpegKeepsTags pins what a conversion does to a file's metadata: every
+// target carries the source's tags across, wherever that container keeps them
+// (MP3, MP4 and FLAC on the format, Ogg/Opus on the stream). Embedded pictures
+// are deliberately out of scope: the workflow's first source is WAV, which
+// cannot hold one, so no target gets container-specific handling for it.
+func TestFFmpegKeepsTags(t *testing.T) {
+	encoder, wav := audioFixture(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tagged.flac")
+	runFFmpeg(t,
+		"-i", wav,
+		"-metadata", "title=Tïtle 標題", "-metadata", "artist=Ärtist", "-metadata", "album=Álbum",
+		"-metadata", "track=7", "-c:a", "flac", src,
+	)
+	if tags := probeTags(t, src); tags["title"] != "Tïtle 標題" || tags["artist"] != "Ärtist" {
+		t.Fatalf("fixture lost its tags: %v", tags)
+	}
+
+	for _, codec := range []reconcile.Codec{
+		reconcile.CodecMp3, reconcile.CodecAac, reconcile.CodecFlac, reconcile.CodecWav, reconcile.CodecOpus,
+	} {
+		t.Run(string(codec), func(t *testing.T) {
+			spec := reconcile.AudioOutputSpec{Codec: codec}
+			if !spec.Lossless() {
+				spec.Quality = &reconcile.Quality{Kind: reconcile.QualityBitrate, Bitrate: 192}
+			}
+			dst := filepath.Join(t.TempDir(), "output"+reconcile.ExtForCodec(codec))
+			if err := encoder.Encode(t.Context(), src, dst, spec); err != nil {
+				t.Fatal(err)
+			}
+			tags := probeTags(t, dst)
+			if tags["title"] != "Tïtle 標題" || tags["artist"] != "Ärtist" || tags["album"] != "Álbum" {
+				t.Fatalf("tags did not survive: %v", tags)
+			}
+		})
+	}
+}
+
+func runFFmpeg(t *testing.T, args ...string) {
+	t.Helper()
+	//nolint:gosec // The tool path and every argument come from this test's own fixtures.
+	cmd := exec.CommandContext(t.Context(), "ffmpeg", append([]string{"-nostdin", "-v", "error", "-y"}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg %v: %v: %s", args, err, output)
+	}
+}
+
+// probeTags reads the tags ffprobe reports, wherever the container keeps them:
+// MP3, MP4 and FLAC carry them on the format, Ogg/Opus on the stream.
+func probeTags(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := exec.CommandContext(t.Context(), "ffprobe", "-v", "error",
+		"-show_entries", "format_tags:stream_tags", "-of", "json", path).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Format struct {
+			Tags map[string]string `json:"tags"`
+		} `json:"format"`
+		Streams []struct {
+			Tags map[string]string `json:"tags"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	tags := map[string]string{}
+	for key, value := range result.Format.Tags {
+		tags[strings.ToLower(key)] = value
+	}
+	for _, stream := range result.Streams {
+		for key, value := range stream.Tags {
+			if _, exists := tags[strings.ToLower(key)]; !exists {
+				tags[strings.ToLower(key)] = value
+			}
+		}
+	}
+	return tags
 }
 
 type probedStream struct {
@@ -122,6 +216,35 @@ func assertEncodedStream(
 	if codec == reconcile.CodecMp3 && stream.Bitrate != "192000" {
 		t.Fatalf("wrong CBR: %s", stream.Bitrate)
 	}
+	if codec == reconcile.CodecOpus {
+		// Ogg declares no per-stream bitrate at all; the container's average is
+		// the fact the planner reads, checked where the output path is known.
+		if stream.Bitrate != "" {
+			t.Fatalf("opus stream bitrate unexpectedly declared: %s", stream.Bitrate)
+		}
+	}
+}
+
+func probeContainerBitrate(t *testing.T, path string) int64 {
+	t.Helper()
+	data, err := exec.CommandContext(t.Context(), "ffprobe", "-v", "error",
+		"-show_entries", "format=bit_rate", "-of", "json", path).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Format struct {
+			Bitrate string `json:"bit_rate"`
+		} `json:"format"`
+	}
+	if unmarshalErr := json.Unmarshal(data, &result); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	bitrate, parseErr := strconv.ParseInt(result.Format.Bitrate, 10, 64)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	return bitrate
 }
 
 func TestFFmpegRefusesInvalidAndCanceledConversion(t *testing.T) {

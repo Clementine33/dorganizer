@@ -37,6 +37,19 @@ const ENCODED_CODECS = [
   { value: '', label: '不需要' },
   { value: 'mp3', label: 'MP3' },
   { value: 'aac', label: 'AAC' },
+  { value: 'opus', label: 'Opus' },
+]
+
+/**
+ * The encoded lane's named shortcuts. A preset writes one codec and bitrate
+ * pair — the same value the manual controls produce — so nothing new is stored
+ * and any pair can still be composed by hand; a pair that matches a preset
+ * simply lights it up.
+ */
+const PRESETS = [
+  { value: 'opus-160', codec: 'opus', bitrate: 160, label: 'Opus 160' },
+  { value: 'aac-256', codec: 'aac', bitrate: 256, label: 'AAC 256' },
+  { value: 'mp3-320', codec: 'mp3', bitrate: 320, label: 'MP3 320' },
 ]
 
 const profile = computed<DesiredProfile>(() => cloneProfile(props.value))
@@ -82,6 +95,18 @@ function setBitrate(bitrate: number) {
 const losslessCodec = computed(() => profile.value.lossless?.codec ?? '')
 const encodedCodec = computed(() => profile.value.encoded?.codec ?? '')
 const bitrate = computed(() => profile.value.encoded?.quality?.bitrate ?? 320)
+
+/** Which preset the stored pair is, if any: the shortcut lights up, nothing more. */
+const matchedPreset = computed(
+  () =>
+    PRESETS.find((preset) => preset.codec === encodedCodec.value && preset.bitrate === bitrate.value)?.value ?? null,
+)
+
+function applyPreset(preset: (typeof PRESETS)[number]) {
+  const next = cloneProfile(props.value)
+  next.encoded = { codec: preset.codec, quality: { kind: 'bitrate', bitrate: preset.bitrate } }
+  emit('change', next)
+}
 </script>
 
 <template>
@@ -147,6 +172,32 @@ const bitrate = computed(() => profile.value.encoded?.quality?.bitrate ?? 320)
         />
         kbps
       </label>
+      <!-- Shortcuts for the three pairs this app is run with; the manual codec
+           and bitrate above stay the way to compose anything else. -->
+      <span class="flex items-center gap-1" :data-testid="`${scope}-${unit}-presets`">
+        <span class="text-[11px] text-[var(--text-muted)]">预设</span>
+        <button
+          v-for="preset in PRESETS"
+          :key="preset.value"
+          type="button"
+          class="rounded-md border px-1.5 py-1 font-mono text-[11px] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          :class="
+            matchedPreset === preset.value
+              ? 'border-[var(--brand-border)] bg-[var(--brand-weak)] font-medium'
+              : 'border-[var(--control-border)] hover:bg-muted'
+          "
+          :disabled="disabled"
+          :aria-pressed="matchedPreset === preset.value"
+          :title="`${preset.codec.toUpperCase()} ${preset.bitrate} kbps`"
+          :data-testid="`${scope}-${unit}-preset-${preset.value}`"
+          @click="applyPreset(preset)"
+        >
+          {{ preset.label }}
+        </button>
+      </span>
+      <p v-if="encodedCodec === 'opus'" class="text-[11px] text-[var(--text-muted)]" data-testid="encoded-codec-hint">
+        Opus 以 VBR 编码（码率为平均值，体积更小），采样率固定 48 kHz。
+      </p>
     </div>
     <p
       v-if="(unit === 'matched' || unit === 'unmatched') && !profile.lossless && !profile.encoded"

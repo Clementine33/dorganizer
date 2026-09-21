@@ -2,11 +2,15 @@ package conversion
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/execute"
@@ -22,35 +26,36 @@ func (t *Task) PrepareUnit(
 	_ *sqlite.Repository,
 	in worksetusecase.UnitRunInput,
 ) (worksetusecase.PreparedUnit, error) {
-	component, err := t.prepareComponent(ctx, in)
+	component, profile, err := t.prepareComponent(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return &preparedUnit{in: in, component: component}, nil
+	return &preparedUnit{in: in, component: component, profile: profile, tools: t.tools()}, nil
 }
 
 // prepareComponent decodes the frozen unit payloads and prechecks the
 // component; a component failure is mapped onto the seam error, keeping the
-// stage and code its report entry carries.
+// stage and code its report entry carries. The decoded profile comes back with
+// it: it is what the credentials of the committed outputs are written from.
 func (t *Task) prepareComponent(
 	ctx context.Context,
 	in worksetusecase.UnitRunInput,
-) (*execute.PreparedComponent, error) {
+) (*execute.PreparedComponent, reconcile.DesiredProfile, error) {
 	var outcome reconcile.ComponentOutcome
 	if err := json.Unmarshal(in.Outcome, &outcome); err != nil {
-		return nil, worksetusecase.NewError(
+		return nil, reconcile.DesiredProfile{}, worksetusecase.NewError(
 			worksetusecase.ErrKindInternal, "REVISION_LOAD_FAILED", "frozen component is unreadable", err,
 		)
 	}
 	var profile reconcile.DesiredProfile
 	if err := json.Unmarshal(in.Unit.Payload, &profile); err != nil {
-		return nil, worksetusecase.NewError(
+		return nil, reconcile.DesiredProfile{}, worksetusecase.NewError(
 			worksetusecase.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
 		)
 	}
 	mode, modeErr := deleteModeFromOptions(in.Options)
 	if modeErr != nil {
-		return nil, modeErr
+		return nil, reconcile.DesiredProfile{}, modeErr
 	}
 	component, prepErr := execute.PrepareComponent(ctx, execute.ComponentRunRequest{
 		Root:       in.Unit.RootPath,
@@ -63,16 +68,19 @@ func (t *Task) prepareComponent(
 		RecoveryRoot: in.WorksetRoot,
 	})
 	if prepErr != nil {
-		return nil, unitFailureOf(prepErr)
+		return nil, reconcile.DesiredProfile{}, unitFailureOf(prepErr)
 	}
-	return component, nil
+	return component, profile, nil
 }
 
-// preparedUnit is one prepared conversion unit: the frozen inputs plus the
-// component whose staged outputs the session encodes and commits.
+// preparedUnit is one prepared conversion unit: the frozen inputs, the profile
+// its outputs are written for, and the component whose staged outputs the
+// session encodes and commits.
 type preparedUnit struct {
 	in        worksetusecase.UnitRunInput
 	component *execute.PreparedComponent
+	profile   reconcile.DesiredProfile
+	tools     execute.ToolsConfig
 }
 
 // EncodeTasks is how many staged outputs Commit expects.
@@ -90,7 +98,9 @@ func (p *preparedUnit) EncodeTask(ctx context.Context, index int) error {
 // observed facts plus the inventory refresh the generic side applies.
 func (p *preparedUnit) Commit(ctx context.Context) (worksetusecase.UnitResult, error) {
 	res, err := p.component.Commit(ctx)
-	return p.resultOf(res, err), nil
+	result := p.resultOf(res, err)
+	p.recordGenerations(ctx, &result)
+	return result, nil
 }
 
 // Discard cleans the staged outputs of a unit that will not commit.
@@ -124,6 +134,87 @@ func (p *preparedUnit) resultOf(res execute.ComponentRunResult, cause error) wor
 func unitFailureOf(err error) error {
 	stage, code, message := componentErrorOf(err)
 	return worksetusecase.NewError(worksetusecase.ErrKindInternal, code, message, err).WithStage(stage)
+}
+
+// recordGenerations gathers the generation credential of every encoded output
+// this unit committed: the target it was written for, the encoder that wrote
+// it, and the hash of the bytes now sitting at its path. These are the facts the
+// next plan judges such a file by where its measured rate cannot — a VBR average,
+// or an encoder that saturates — so they are read back from the committed file
+// itself, never from the plan that asked for it.
+//
+// A failure here discloses itself on the unit and drops the whole batch with
+// the inventory refresh: a generation is then committed but unrecorded, which
+// costs one redundant rebuild and never a wrong acceptance.
+func (p *preparedUnit) recordGenerations(ctx context.Context, result *worksetusecase.UnitResult) {
+	version, probed := "", false
+	for _, path := range result.Committed {
+		spec, ok := p.encodedSpecFor(path)
+		if !ok {
+			continue
+		}
+		if !probed {
+			version, probed = execute.ToolVersion(ctx, p.tools), true
+		}
+		encoder, mode, factsErr := execute.TargetFacts(spec)
+		if factsErr != nil {
+			result.InventoryError = fmt.Sprintf("generation facts for %s: %v", path, factsErr)
+			return
+		}
+		info, statErr := os.Stat(filepath.FromSlash(path))
+		if statErr != nil {
+			result.InventoryError = fmt.Sprintf("stat committed output %s: %v", path, statErr)
+			return
+		}
+		digest, hashErr := fileSHA256(filepath.FromSlash(path))
+		if hashErr != nil {
+			result.InventoryError = fmt.Sprintf("hash committed output %s: %v", path, hashErr)
+			return
+		}
+		result.Generated = append(result.Generated, sqlite.GenerationRecord{
+			Path:           path,
+			Codec:          string(spec.Codec),
+			Encoder:        encoder,
+			EncoderVersion: version,
+			BitrateKbps:    spec.Quality.Bitrate,
+			Mode:           mode,
+			Size:           info.Size(),
+			Mtime:          info.ModTime().Unix(),
+			ContentSHA256:  digest,
+			CreatedAt:      time.Now(),
+		})
+	}
+}
+
+// encodedSpecFor returns the encoded target one committed path was written for,
+// or false when the unit's profile declares none for that extension. The
+// lossless lane carries no credential: a lossless target is accepted on its
+// codec, where there is no rate to mis-read.
+func (p *preparedUnit) encodedSpecFor(path string) (reconcile.AudioOutputSpec, bool) {
+	spec := p.profile.Encoded
+	if spec == nil || spec.Quality == nil {
+		return reconcile.AudioOutputSpec{}, false
+	}
+	if reconcile.ExtForCodec(spec.Codec) != strings.ToLower(filepath.Ext(path)) {
+		return reconcile.AudioOutputSpec{}, false
+	}
+	return *spec, true
+}
+
+// fileSHA256 hashes one committed output: the credential's binding to the exact
+// bytes, kept so a deep re-check stays possible even though a plan compares the
+// cheaper size and mtime.
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 // fillInventoryFacts gathers the observed disk facts of one unit: the removed

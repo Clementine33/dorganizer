@@ -117,7 +117,7 @@ func validateProfileOutput(spec *AudioOutputSpec) error {
 		}
 		return nil
 	}
-	if spec.Codec == CodecMp3 || spec.Codec == CodecAac {
+	if spec.Codec == CodecMp3 || spec.Codec == CodecAac || spec.Codec == CodecOpus {
 		if spec.Quality == nil || spec.Quality.Kind != QualityBitrate || spec.Quality.Bitrate <= 0 {
 			return fmt.Errorf("encoded output %s requires a positive bitrate quality", spec.Codec)
 		}

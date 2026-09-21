@@ -189,7 +189,10 @@ describe('kept files', () => {
   it("explains each kept file in the plan's own words", () => {
     expect(keepReasonText('UNMET_TARGET')).toBe('目标未满足')
     expect(keepReasonText('KEEP_ENCODED_SATISFIED')).toBe('已满足编码目标')
+    expect(keepReasonText('CONFORMANCE_UNCONFIRMED')).toBe('目标符合性未确认')
     expect(keepReasonText(undefined)).toBe('原样保留')
+    // A code an older build planned still reads in words, not as a machine code.
+    expect(keepReasonText('QUALITY_UNKNOWN')).toBe('质量未知')
     // An unknown code stays readable rather than disappearing.
     expect(keepReasonText('SOME_NEW_CODE')).toBe('SOME_NEW_CODE')
   })

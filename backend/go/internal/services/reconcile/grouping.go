@@ -13,6 +13,7 @@ var codecByExt = map[string]Codec{
 	".mp3":  CodecMp3,
 	".aac":  CodecAac,
 	".m4a":  CodecAac,
+	".opus": CodecOpus,
 }
 
 // parseFile derives grouping facts from a stored entry. The second return

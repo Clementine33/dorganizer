@@ -382,15 +382,22 @@ func parseExecutionReport(raw string) ([]ExecutionComponentView, error) {
 
 // syncUnitInventory applies this unit's observed disk changes to the entries
 // inventory: removed sources lose their row, committed outputs and soft-delete
-// destinations are refreshed from disk. A sync failure (or a task-side stat
-// failure) is disclosed on the unit instead of being reported as "unchanged".
+// destinations are refreshed from disk, and the outputs this unit generated are
+// credentialed so the next plan can accept them without re-encoding. A sync
+// failure (or a task-side stat failure) is disclosed on the unit instead of
+// being reported as "unchanged".
 func (d *dispatcher) syncUnitInventory(worksetRoot string, res UnitResult, entry *ExecutionComponentView) {
 	if res.InventoryError != "" {
 		entry.InventorySynced = false
 		entry.InventorySyncError = res.InventoryError
 		return
 	}
-	if err := d.svc.repo.SyncObservedInventory(worksetRoot, res.InventoryRemoved, res.InventoryRefreshed); err != nil {
+	if err := d.svc.repo.SyncObservedInventory(
+		worksetRoot,
+		res.InventoryRemoved,
+		res.InventoryRefreshed,
+		res.Generated,
+	); err != nil {
 		entry.InventorySynced = false
 		entry.InventorySyncError = err.Error()
 		return

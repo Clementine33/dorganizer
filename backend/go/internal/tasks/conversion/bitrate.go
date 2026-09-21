@@ -26,9 +26,10 @@ const bitratePersistRetryLimit = 3
 const bitratePersistRetryBase = 50 * time.Millisecond
 
 // bitrateAnalyzer probes the missing MP3/AAC bitrates of a planning root with
-// ffprobe and persists them on the scanned entries. It is part of planning:
-// the reconcile compares observed bitrates against the desired output specs,
-// so the facts it reads must be as exact as the inventory can make them.
+// ffprobe and persists them on the scanned entries. It is part of planning: the
+// probed rate is the first entry of the encoded-lane gate — a file measuring its
+// target is skipped however it was made — so the facts it reads must be as
+// exact as the inventory can make them.
 type bitrateAnalyzer struct {
 	repo        *sqlite.Repository
 	ffprobePath string
@@ -105,9 +106,15 @@ func (a *bitrateAnalyzer) enrichMissing(ctx context.Context, entries []reconcile
 }
 
 func (a *bitrateAnalyzer) probeBitrate(ctx context.Context, pathPosix string) (int64, error) {
+	// The stream's own bit rate is the exact fact (MP3, AAC). Ogg/Opus declares
+	// none, so the container's average is read as the fallback: for the CBR the
+	// executor writes, that average sits a little above the target, which is
+	// what the satisfaction comparison can use. A format that reports neither
+	// stays unknown, and an unknown bitrate is never assumed adequate.
 	//nolint:gosec // Tool path comes from local config; arguments are passed directly without a shell.
 	data, err := exec.CommandContext(ctx, a.ffprobePath, "-v", "error", "-select_streams", "a:0",
-		"-show_entries", "stream=bit_rate", "-of", "json", "-i", filepath.FromSlash(pathPosix)).Output()
+		"-show_entries", "stream=bit_rate:format=bit_rate", "-of", "json",
+		"-i", filepath.FromSlash(pathPosix)).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -115,6 +122,9 @@ func (a *bitrateAnalyzer) probeBitrate(ctx context.Context, pathPosix string) (i
 		Streams []struct {
 			Bitrate string `json:"bit_rate"`
 		} `json:"streams"`
+		Format struct {
+			Bitrate string `json:"bit_rate"`
+		} `json:"format"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return 0, err
@@ -122,7 +132,13 @@ func (a *bitrateAnalyzer) probeBitrate(ctx context.Context, pathPosix string) (i
 	if len(result.Streams) != 1 {
 		return 0, nil
 	}
-	return strconv.ParseInt(result.Streams[0].Bitrate, 10, 64)
+	if result.Streams[0].Bitrate != "" {
+		return strconv.ParseInt(result.Streams[0].Bitrate, 10, 64)
+	}
+	if result.Format.Bitrate == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(result.Format.Bitrate, 10, 64)
 }
 
 type bitrateUpdate struct {
@@ -130,6 +146,9 @@ type bitrateUpdate struct {
 	bitrate   int64
 }
 
+// selectScopedProbeCandidates names the encoded containers whose bitrate is
+// worth asking ffprobe for: the targets the planner compares a stored file
+// against.
 func selectScopedProbeCandidates(entries []reconcile.AudioEntry) []int {
 	idx := make([]int, 0, len(entries))
 	for i := range entries {
@@ -137,7 +156,7 @@ func selectScopedProbeCandidates(entries []reconcile.AudioEntry) []int {
 			continue
 		}
 		switch strings.ToLower(path.Ext(entries[i].PathPosix)) {
-		case ".mp3", ".aac", ".m4a":
+		case ".mp3", ".aac", ".m4a", ".opus":
 			idx = append(idx, i)
 		}
 	}

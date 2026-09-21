@@ -27,6 +27,7 @@ const (
 	CodecFlac Codec = "flac"
 	CodecMp3  Codec = "mp3"
 	CodecAac  Codec = "aac" // .aac or .m4a container
+	CodecOpus Codec = "opus"
 )
 
 // ExtForCodec returns the canonical container extension for a target codec.
@@ -40,6 +41,8 @@ func ExtForCodec(c Codec) string {
 		return ".mp3"
 	case CodecAac:
 		return ".m4a"
+	case CodecOpus:
+		return ".opus"
 	}
 	return ""
 }
@@ -49,14 +52,71 @@ func IsLosslessCodec(c Codec) bool {
 	return c == CodecWav || c == CodecFlac
 }
 
+// Rate-control modes of an encoded target (the record's own vocabulary).
+const (
+	ModeCBR = "cbr"
+	ModeVBR = "vbr"
+)
+
+// EncodingMode names the rate-control mode this app writes for an encoded
+// codec. It is part of the target's identity: a file generated under another
+// mode is not evidence for this one.
+func EncodingMode(c Codec) string {
+	if c == CodecOpus {
+		return ModeVBR
+	}
+	return ModeCBR
+}
+
+// GeneratedFacts is one file's generation credential: the target this app
+// generated it for, and the facts that bind the record to those exact bytes.
+// It is present only for an output this app wrote, verified (stream and full
+// decode) and committed — a file generated elsewhere carries none, and a file
+// that changed since its generation no longer matches its own record.
+//
+// It is the second entry of the encoded-lane gate, for what a measurement
+// cannot settle: a file it accepts is proven to have been produced by the
+// declared configuration, which is not a claim about how it sounds — a
+// low-bitrate source encoded to a high target still holds the audio it started
+// with.
+type GeneratedFacts struct {
+	Codec       Codec
+	BitrateKbps int
+	Mode        string
+	Size        int64
+	Mtime       int64
+}
+
+// Matches reports whether the credential proves this exact file was generated
+// for the given target. Size and mtime are the entry's observed facts: they are
+// the same content proxy the scanner and the fingerprint use, so a rewrite that
+// preserves both is the one blind spot this shares with them.
+func (g *GeneratedFacts) Matches(spec AudioOutputSpec, size, mtime int64) bool {
+	switch {
+	case g == nil:
+		return false // generated elsewhere: unconfirmed, never assumed adequate
+	case g.Size != size || g.Mtime != mtime:
+		return false // the file on disk is no longer the one that was generated
+	case g.Codec != spec.Codec:
+		return false
+	case spec.Quality == nil || spec.Quality.Kind != QualityBitrate:
+		return false
+	default:
+		return g.BitrateKbps == spec.Quality.Bitrate && g.Mode == EncodingMode(spec.Codec)
+	}
+}
+
 // AudioEntry is an observed recognized-audio file. Size and Mtime feed the
-// metadata inventory fingerprint; Bitrate is an enriched fact (0 = unknown).
+// metadata inventory fingerprint; Bitrate is the enriched fact the gate reads
+// first, and Generated is the generation credential that settles what the
+// bitrate cannot (VBR averages, a saturating encoder).
 type AudioEntry struct {
 	PathPosix string
 	Size      int64
 	Mtime     int64
 	Bitrate   int64
 	Format    string
+	Generated *GeneratedFacts
 }
 
 // FileTuple is the (path, size, mtime) snapshot persisted per component for
@@ -166,12 +226,16 @@ const (
 
 // Stable reason/error codes (machines, not prose).
 const (
-	ReasonSourceMissing         = "SOURCE_MISSING"
-	ReasonSourceAmbiguous       = "SOURCE_AMBIGUOUS"
-	ReasonTargetPathAmbiguous   = "TARGET_PATH_AMBIGUOUS"
-	ReasonTargetPathConflict    = "TARGET_PATH_CONFLICT"
-	ReasonQualityUnknown        = "QUALITY_UNKNOWN"
-	ReasonLosslessUnfulfillable = "LOSSLESS_TARGET_UNFULFILLABLE"
+	ReasonSourceMissing       = "SOURCE_MISSING"
+	ReasonSourceAmbiguous     = "SOURCE_AMBIGUOUS"
+	ReasonTargetPathAmbiguous = "TARGET_PATH_AMBIGUOUS"
+	ReasonTargetPathConflict  = "TARGET_PATH_CONFLICT"
+	// ReasonConformanceUnconfirmed is an observed file of the declared codec
+	// that no generation credential proves was written for this target. It
+	// replaced QUALITY_UNKNOWN, which said the same thing about a bitrate no
+	// probe could establish.
+	ReasonConformanceUnconfirmed = "CONFORMANCE_UNCONFIRMED"
+	ReasonLosslessUnfulfillable  = "LOSSLESS_TARGET_UNFULFILLABLE"
 )
 
 // Summary reasons.
@@ -270,8 +334,9 @@ type ComponentOutcome struct {
 }
 
 // StepSummary aggregates the audio step outcomes. UnmetTargets counts stems
-// kept with a target that could not be satisfied (relaxed mode); it is
-// independent of OperationCount and BlockedCount.
+// kept with a target that could not be satisfied (relaxed mode), whether the
+// shape was out of reach or an existing file of it could not be confirmed; it
+// is independent of OperationCount and BlockedCount.
 type StepSummary struct {
 	ComponentCount int    `json:"component_count"`
 	BlockedCount   int    `json:"blocked_count"`

@@ -238,6 +238,9 @@ type UnitResult struct {
 	// InventoryRefreshed the on-disk facts it re-reads into the inventory.
 	InventoryRemoved   []string
 	InventoryRefreshed []sqlite.InventoryFile
+	// Generated are the generation credentials of the outputs this unit
+	// committed: what the next plan reads to accept them without re-encoding.
+	Generated []sqlite.GenerationRecord
 }
 
 // RevisionMemberFacts is one member's frozen effective configuration.

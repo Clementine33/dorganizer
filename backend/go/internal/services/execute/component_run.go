@@ -236,6 +236,8 @@ func codecMatchesSpec(codec string, spec reconcile.AudioOutputSpec) bool {
 		return codec == "mp3"
 	case reconcile.CodecAac:
 		return codec == "aac"
+	case reconcile.CodecOpus:
+		return codec == "opus"
 	}
 	return false
 }

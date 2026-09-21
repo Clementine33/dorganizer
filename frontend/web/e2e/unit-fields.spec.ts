@@ -70,16 +70,16 @@ for (const isMobile of [false, true]) {
       await encoded.press('Enter')
       await expect(page.getByRole('option', { name: '不需要', exact: true })).toBeFocused()
       await page.keyboard.press('End')
-      await expect(page.getByRole('option', { name: 'AAC', exact: true })).toBeFocused()
+      await expect(page.getByRole('option', { name: 'Opus', exact: true })).toBeFocused()
       await page.keyboard.press('Enter')
-      await expect(encoded).toHaveText(/AAC/)
+      await expect(encoded).toHaveText(/Opus/)
       await expect(page.getByTestId('test-matched-bitrate')).toBeEnabled()
 
       const lossless = page.getByTestId('test-matched-lossless')
       await lossless.click()
       await page.getByRole('option', { name: '不需要', exact: true }).click()
       await expect(lossless).toHaveText(/不需要/)
-      await expect(encoded).toHaveText(/AAC/)
+      await expect(encoded).toHaveText(/Opus/)
 
       await page.locator('#panel').evaluate(el => {
         (el.firstElementChild as HTMLElement).style.height = 'calc(100dvh - 90px)'

@@ -164,6 +164,8 @@ func detectFormatFromPath(path string, isDir bool) string {
 		return "audio/aac"
 	case ".ogg":
 		return "audio/ogg"
+	case ".opus":
+		return "audio/opus"
 	default:
 		return ""
 	}

@@ -43,18 +43,33 @@ func (d *stemDecision) encode(source, target, reason string) {
 	d.targets = appendUnique(d.targets, map[string]bool{}, target)
 }
 
-// countUnmetTargets counts stems in one component kept with an unmet target.
+// countUnmetTargets counts stems in one component kept with a target that could
+// not be satisfied, whether the shape was out of reach (UNMET_TARGET) or an
+// existing file of that shape could not be confirmed (CONFORMANCE_UNCONFIRMED).
 func countUnmetTargets(c ComponentOutcome) int {
 	n := 0
 	for _, v := range c.Variants {
 		for _, d := range v.Decisions {
-			if d.ReasonCode == ReasonUnmetTarget {
+			if d.ReasonCode == ReasonUnmetTarget || d.ReasonCode == ReasonConformanceUnconfirmed {
 				n++
 				break
 			}
 		}
 	}
 	return n
+}
+
+// unmetReason names why one file of an unreachable stem stays. Everything keeps
+// the stem-level reason except a file that already is the declared encoded
+// shape and cannot be confirmed: for that one the shape is not out of reach,
+// only its provenance is unproven, and nothing here could settle it — the tool
+// never upgrades a lossy file.
+func unmetReason(f GroupedFile, profile DesiredProfile) string {
+	if profile.Encoded != nil && !f.Lossless && f.Codec == profile.Encoded.Codec &&
+		!satisfiedEncoded(f, profile.Encoded) {
+		return ReasonConformanceUnconfirmed
+	}
+	return ReasonUnmetTarget
 }
 
 // lenientComponent plans one component with the available_sources (relaxed)
@@ -68,8 +83,11 @@ func countUnmetTargets(c ComponentOutcome) int {
 //  2. A stem that cannot reach the declared shape is left exactly as it is and
 //     recorded as an unmet target: no generation, no cleanup. Neither mode
 //     weakens the rule that nothing is removed without a replacement.
-//  3. Files whose quality cannot be verified (an unprobed bitrate) are never
-//     counted as satisfying a target; where a source exists they are rebuilt.
+//  3. An observed encoded file is accepted when its own measured rate answers
+//     the target, or — for the codecs a measurement cannot judge — when a
+//     generation credential proves this app wrote it for exactly that target. A
+//     file neither entry accepts is regenerated from the stem's source where one
+//     exists and kept as CONFORMANCE_UNCONFIRMED where none does.
 //  4. No fake upgrades: lossless is never generated from lossy media, and a
 //     codec change is never a lossy-to-lossy re-encode.
 //  5. Source ambiguity and target-path conflicts still block the affected
@@ -165,11 +183,11 @@ func lenientStem(g StemGroup, profile DesiredProfile, occupied map[string]struct
 	}
 	if needsOutput && src == nil {
 		// The declared shape is out of reach: every observed file stays and the
-		// stem is reported as an unmet target. Removing what the profile does
-		// not want would leave the stem with less than it has, not with what
-		// was asked for.
+		// stem is reported as unmet. Removing what the profile does not want
+		// would leave the stem with less than it has, not with what was asked
+		// for.
 		for _, f := range g.Files {
-			d.keep(f.PathPosix, ReasonUnmetTarget)
+			d.keep(f.PathPosix, unmetReason(f, profile))
 		}
 		return d
 	}
