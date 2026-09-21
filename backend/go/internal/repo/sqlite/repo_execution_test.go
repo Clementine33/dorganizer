@@ -3,7 +3,9 @@ package sqlite_test
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -67,11 +69,11 @@ func insertExecutionRow(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExe
 		INSERT INTO plan_executions (
 			execution_id, workset_id, operation_type, plan_id, status,
 			idempotency_key, request_hash, expected_operation_version, request_json,
-			total_components, total_operations, report_json, created_at, updated_at
+			total_components, total_operations, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, 'queued', ?, ?, 0, ?, 0, 0, ?, ?, ?)
+		VALUES (?, ?, ?, ?, 'queued', ?, ?, 0, ?, 0, 0, ?, ?)
 	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID,
-		e.IdempotencyKey, e.RequestHash, e.RequestJSON, e.ReportJSON, now, now); err != nil {
+		e.IdempotencyKey, e.RequestHash, e.RequestJSON, now, now); err != nil {
 		t.Fatalf("insert execution row %s: %v", e.ExecutionID, err)
 	}
 }
@@ -96,7 +98,6 @@ func newExecution(id, worksetID, planID, key string) *sqlite.PlanExecution {
 		IdempotencyKey:  key,
 		RequestHash:     "hash-" + key,
 		RequestJSON:     `{"delete_mode":"soft","units":[]}`,
-		ReportJSON:      `[]`,
 		TotalComponents: 0,
 		CreatedAt:       time.Now(),
 	}
@@ -134,10 +135,10 @@ func TestPlanExecutionClaimCancelAndTerminalGuard(t *testing.T) {
 	}
 
 	// Terminal write, then a late worker write must not downgrade it.
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", "", `[]`); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", ""); finishErr != nil {
 		t.Fatalf("FinishExecution: %v", finishErr)
 	}
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusFailed, "X", "late", `[]`); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusFailed, "X", "late"); finishErr != nil {
 		t.Fatalf("late FinishExecution: %v", finishErr)
 	}
 	done, err := repo.GetExecution("exec-1")
@@ -242,18 +243,25 @@ func TestPlanExecutionCancelQueuedSkipsTheWorker(t *testing.T) {
 	}
 }
 
-func TestPlanExecutionInterruptStaleKeepsPartialReport(t *testing.T) {
+func TestPlanExecutionInterruptStaleKeepsPartialResults(t *testing.T) {
 	repo := newExecutionRepo(t)
 	seedExecutionWorkset(t, repo, "ws-1", "/music")
 	queued := newExecution("exec-q", "ws-1", "plan-1", "key-q")
 	running := newExecution("exec-r", "ws-1", "plan-2", "key-r")
-	running.ReportJSON = `[{"component_index":0,"status":"pending"}]`
 	// Rows are written directly: this scenario exercises the startup
 	// interruption of leftovers, not the guarded creation path.
 	insertExecutionRow(t, repo, queued)
 	insertExecutionRow(t, repo, running)
 	if _, err := repo.NextQueuedExecution(); err != nil {
 		t.Fatalf("claim: %v", err)
+	}
+	if err := repo.SaveExecutionComponentResult("exec-r", sqlite.ExecutionComponentResult{
+		ComponentIndex:      0,
+		Status:              "succeeded",
+		CompletedOperations: 2,
+		ResultJSON:          `{"committed":["/music/a/01.mp3"]}`,
+	}, sqlite.ExecutionProgress{CurrentComponentID: "u1", CurrentComponentIndex: 1}); err != nil {
+		t.Fatalf("save component result: %v", err)
 	}
 
 	n, err := repo.InterruptStaleExecutions()
@@ -276,8 +284,15 @@ func TestPlanExecutionInterruptStaleKeepsPartialReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetExecution: %v", err)
 	}
-	if kept.ReportJSON == "" || kept.ReportJSON == "[]" {
-		t.Fatalf("interrupted session lost its partial report: %q", kept.ReportJSON)
+	if kept.CompletedComponents != 1 || kept.CompletedOperations != 2 {
+		t.Fatalf("interrupted session lost its counters: %+v", kept)
+	}
+	results, err := repo.ListExecutionComponentResults("exec-r", 0, 0)
+	if err != nil {
+		t.Fatalf("ListExecutionComponentResults: %v", err)
+	}
+	if len(results) != 1 || results[0].ResultJSON != `{"committed":["/music/a/01.mp3"]}` {
+		t.Fatalf("interrupted session lost its component results: %+v", results)
 	}
 }
 
@@ -338,7 +353,7 @@ func TestPlanExecutionActiveForRootGuard(t *testing.T) {
 	if other, guardErr := repo.HasActiveExecutionForRoot("/elsewhere"); guardErr != nil || other {
 		t.Fatalf("unrelated root guard = %v %v, want false", other, guardErr)
 	}
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", "", `[]`); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", ""); finishErr != nil {
 		t.Fatalf("FinishExecution: %v", finishErr)
 	}
 	active, err = repo.HasActiveExecutionForRoot("/music")
@@ -468,4 +483,201 @@ func assertGenerationRecords(t *testing.T, repo *sqlite.Repository) {
 			codec, encoder, kbps, mode, recordSize, recordMtime, digest,
 		)
 	}
+}
+
+// TestSaveExecutionComponentResultIsReplaySafe pins the two properties the
+// boundary write leans on: a result asked for twice is stored once, and the
+// session's counters are recomputed from the stored results rather than
+// incremented, so a replay after an uncertain commit cannot double-count.
+func TestSaveExecutionComponentResultIsReplaySafe(t *testing.T) {
+	repo := newExecutionRepo(t)
+	seedExecutionWorkset(t, repo, "ws-1", "/music")
+	if err := createExecution(t, repo, newExecution("exec-1", "ws-1", "plan-1", "key-1"), "plan-1"); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+
+	first := sqlite.ExecutionComponentResult{
+		ComponentIndex:      0,
+		Status:              "succeeded",
+		CompletedOperations: 3,
+		ResultJSON:          `{"committed":["/music/a/01.mp3"]}`,
+	}
+	progress := sqlite.ExecutionProgress{CurrentComponentIndex: 1}
+	if err := repo.SaveExecutionComponentResult("exec-1", first, progress); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	// The same write again, as a retry after an uncertain commit would send it.
+	if replayErr := repo.SaveExecutionComponentResult("exec-1", first, progress); replayErr != nil {
+		t.Fatalf("replayed save: %v", replayErr)
+	}
+
+	row, err := repo.GetExecution("exec-1")
+	if err != nil {
+		t.Fatalf("GetExecution: %v", err)
+	}
+	if row.CompletedComponents != 1 || row.CompletedOperations != 3 {
+		t.Fatalf("replayed write double-counted: %+v", row)
+	}
+	results, err := repo.ListExecutionComponentResults("exec-1", 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("replayed write duplicated the row: %+v", results)
+	}
+
+	// A component that is still pending neither counts nor hides its facts.
+	if pendingErr := repo.SaveExecutionComponentResult("exec-1", sqlite.ExecutionComponentResult{
+		ComponentIndex: 1,
+		Status:         "pending",
+		ResultJSON:     `{"remaining":["/music/b/01.mp3"]}`,
+	}, sqlite.ExecutionProgress{}); pendingErr != nil {
+		t.Fatalf("pending save: %v", pendingErr)
+	}
+	row, err = repo.GetExecution("exec-1")
+	if err != nil {
+		t.Fatalf("GetExecution: %v", err)
+	}
+	if row.CompletedComponents != 1 {
+		t.Fatalf("a pending component counted as completed: %+v", row)
+	}
+	results, err = repo.ListExecutionComponentResults("exec-1", 1, 0)
+	if err != nil {
+		t.Fatalf("list from 1: %v", err)
+	}
+	if len(results) != 1 || results[0].ResultJSON != `{"remaining":["/music/b/01.mp3"]}` {
+		t.Fatalf("pending facts were not kept: %+v", results)
+	}
+	if page, err := repo.ListExecutionComponentResults("exec-1", 1, 1); err != nil || len(page) != 1 {
+		t.Fatalf("limited page = %+v err=%v", page, err)
+	}
+}
+
+// TestExecutionComponentResultsGoWithTheirSession pins the cleanup path: the
+// child rows are removed with the session they belong to, so a retired plan
+// cannot leave them behind.
+func TestExecutionComponentResultsGoWithTheirSession(t *testing.T) {
+	repo := newExecutionRepo(t)
+	seedExecutionWorkset(t, repo, "ws-1", "/music")
+	if err := createExecution(t, repo, newExecution("exec-1", "ws-1", "plan-1", "key-1"), "plan-1"); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := repo.SaveExecutionComponentResult("exec-1", sqlite.ExecutionComponentResult{
+		ComponentIndex: 0,
+		Status:         "succeeded",
+		ResultJSON:     `{}`,
+	}, sqlite.ExecutionProgress{}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := repo.DB().Exec("DELETE FROM plan_executions WHERE plan_id = 'plan-1'"); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	results, err := repo.ListExecutionComponentResults("exec-1", 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("component results outlived their session: %+v", results)
+	}
+}
+
+// BenchmarkExecutionComponentResults measures what one execution session's
+// writes cost now that each component commits its own result: the boundary
+// transaction is one result row plus the counter recomputation, and nothing is
+// rewritten as the run grows. Run it with
+//
+//	go test ./internal/repo/sqlite -run '^$' -bench ExecutionComponentResults
+//
+// The reported metrics are per session (b.N sessions) and per component: the
+// point of the redesign is that the result bytes scale with the work that
+// happened, and the WAL bytes with the rows written, not with the square of the
+// component count.
+func BenchmarkExecutionComponentResults(b *testing.B) {
+	const components = 1000
+	dir := b.TempDir()
+	dbPath := filepath.Join(dir, "bench.db")
+	repo, err := sqlite.NewRepository(dbPath)
+	if err != nil {
+		b.Fatalf("new repo: %v", err)
+	}
+	b.Cleanup(func() { _ = repo.Close() })
+	seedBenchWorkset(b, repo)
+	// Keep the WAL from checkpointing mid-run so its growth is what the session
+	// itself wrote.
+	if _, err := repo.DB().Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
+		b.Fatalf("disable autocheckpoint: %v", err)
+	}
+
+	result := sqlite.ExecutionComponentResult{
+		Status:              "succeeded",
+		CompletedOperations: 2,
+		ResultJSON: `{"committed":["/music/albumA/01.mp3","/music/albumA/02.mp3"],` +
+			`"removed":["/music/albumA/01.wav"],"recovery":["/music/Delete/albumA/01.wav"]}`,
+	}
+
+	var walBytes, resultBytes int64
+	b.ResetTimer()
+	for i := range b.N {
+		// One session per revision is a storage invariant, so each iteration
+		// gets its own plan id.
+		executionID := "exec-bench-" + strconv.Itoa(i)
+		if _, err := repo.DB().Exec(`
+			INSERT INTO plan_executions (
+				execution_id, workset_id, operation_type, plan_id, status,
+				request_json, total_components, created_at, updated_at
+			) VALUES (?, 'ws-bench', 'conversion', ?, 'running', '{}', ?, '', '')
+		`, executionID, "plan-bench-"+strconv.Itoa(i), components); err != nil {
+			b.Fatalf("seed session: %v", err)
+		}
+		before := fileSize(b, dbPath+"-wal")
+		for c := range components {
+			if err := repo.SaveExecutionComponentResult(executionID, sqlite.ExecutionComponentResult{
+				ComponentIndex:      c,
+				Status:              result.Status,
+				CompletedOperations: result.CompletedOperations,
+				ResultJSON:          result.ResultJSON,
+			}, sqlite.ExecutionProgress{CurrentComponentIndex: c + 1}); err != nil {
+				b.Fatalf("save component %d: %v", c, err)
+			}
+		}
+		if err := repo.FinishExecution(executionID, sqlite.ExecStatusSucceeded, "", ""); err != nil {
+			b.Fatalf("finish: %v", err)
+		}
+		walBytes += fileSize(b, dbPath+"-wal") - before
+		resultBytes += int64(len(result.ResultJSON)) * components
+	}
+	b.StopTimer()
+
+	b.ReportMetric(float64(walBytes)/float64(b.N)/float64(components), "WAL-bytes/component")
+	b.ReportMetric(float64(resultBytes)/float64(b.N)/float64(components), "result-bytes/component")
+	b.ReportMetric(float64(components), "components/session")
+}
+
+func seedBenchWorkset(b *testing.B, repo *sqlite.Repository) {
+	b.Helper()
+	now := time.Now().Format(time.RFC3339Nano)
+	for _, stmt := range []string{
+		`INSERT INTO libraries (id, name, root_path, root_path_key, created_at, updated_at)
+		 VALUES ('lib-bench', 'bench', '/music', '/music', ?, ?)`,
+		`INSERT INTO worksets (id, title, library_id, root_path, root_path_key, version, created_at, updated_at)
+		 VALUES ('ws-bench', 'bench', 'lib-bench', '/music', '/music', 1, ?, ?)`,
+		`INSERT INTO plans (plan_id, root_path, snapshot_token, task_kind, task_schema_version, created_at)
+		 VALUES ('plan-bench', '/music', 'snap', 'conversion', 1, ?)`,
+	} {
+		if _, err := repo.DB().Exec(stmt, now, now); err != nil {
+			b.Fatalf("seed bench workset: %v", err)
+		}
+	}
+}
+
+func fileSize(b *testing.B, path string) int64 {
+	b.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		b.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Size()
 }

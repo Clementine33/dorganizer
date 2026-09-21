@@ -399,7 +399,11 @@ type Service interface {
 		worksetID, operationType, planID string,
 		req StartExecutionRequest,
 	) (*StartExecutionResult, error)
-	GetExecution(ctx context.Context, worksetID, operationType, executionID string) (*ExecutionView, error)
+	GetExecution(
+		ctx context.Context,
+		worksetID, operationType, executionID string,
+		page ExecutionPage,
+	) (*ExecutionView, error)
 	CancelExecution(
 		ctx context.Context,
 		worksetID, operationType, executionID string,

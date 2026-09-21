@@ -30,10 +30,11 @@ const (
 )
 
 // PlanExecution is one persisted execution session: the durable record of one
-// revision being executed against the disk. RequestJSON freezes the
-// ordered execution units (generic identity plus the task's opaque payload)
-// and the frozen session options at creation time; ReportJSON is the unit
-// outcome report.
+// revision being executed against the disk. RequestJSON freezes the ordered
+// execution units (generic identity plus the task's opaque payload) and the
+// frozen session options at creation time. The per-component facts live in
+// execution_component_results, one row per component: this row carries the
+// session state, the counters derived from those rows, and where the run is.
 type PlanExecution struct {
 	ExecutionID              string
 	WorksetID                string
@@ -52,7 +53,6 @@ type PlanExecution struct {
 	CurrentComponentID       string
 	CurrentComponentIndex    int
 	CurrentPhase             string
-	ReportJSON               string
 	CancelRequested          bool
 	ErrorCode                string
 	ErrorMessage             string
@@ -65,8 +65,15 @@ type PlanExecution struct {
 const executionColumns = `execution_id, workset_id, operation_type, plan_id, status,
 	idempotency_key, request_hash, expected_operation_version, request_json,
 	total_components, completed_components, total_operations, completed_operations,
-	current_root, current_component_id, current_component_index, current_phase, report_json,
+	current_root, current_component_id, current_component_index, current_phase,
 	cancel_requested, error_code, error_message, started_at, finished_at, created_at, updated_at`
+
+// executionProgressColumns is the control-only projection the cancel watchdog
+// and the event stream poll: no request payload, no per-component result.
+const executionProgressColumns = `execution_id, workset_id, operation_type, plan_id, status,
+	cancel_requested, total_components, completed_components, total_operations, completed_operations,
+	current_root, current_component_id, current_component_index, current_phase,
+	error_code, error_message, started_at, finished_at, created_at, updated_at`
 
 func scanExecution(scanner interface{ Scan(...any) error }) (*PlanExecution, error) {
 	var e PlanExecution
@@ -91,8 +98,50 @@ func scanExecution(scanner interface{ Scan(...any) error }) (*PlanExecution, err
 		&e.CurrentComponentID,
 		&e.CurrentComponentIndex,
 		&e.CurrentPhase,
-		&e.ReportJSON,
 		&cancelRequested,
+		&e.ErrorCode,
+		&e.ErrorMessage,
+		&startedAt,
+		&finishedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	e.CancelRequested = cancelRequested != 0
+	if startedAt.Valid && startedAt.String != "" {
+		e.StartedAt = parseTimestamp(startedAt.String)
+	}
+	if finishedAt.Valid && finishedAt.String != "" {
+		e.FinishedAt = parseTimestamp(finishedAt.String)
+	}
+	e.CreatedAt = parseTimestamp(createdAt)
+	e.UpdatedAt = parseTimestamp(updatedAt)
+	return &e, nil
+}
+
+// scanExecutionProgress scans executionProgressColumns into the same type,
+// leaving the fields the projection does not carry at their zero value.
+func scanExecutionProgress(scanner interface{ Scan(...any) error }) (*PlanExecution, error) {
+	var e PlanExecution
+	var startedAt, finishedAt sql.NullString
+	var cancelRequested int
+	var createdAt, updatedAt string
+	if err := scanner.Scan(
+		&e.ExecutionID,
+		&e.WorksetID,
+		&e.OperationType,
+		&e.PlanID,
+		&e.Status,
+		&cancelRequested,
+		&e.TotalComponents,
+		&e.CompletedComponents,
+		&e.TotalOperations,
+		&e.CompletedOperations,
+		&e.CurrentRoot,
+		&e.CurrentComponentID,
+		&e.CurrentComponentIndex,
+		&e.CurrentPhase,
 		&e.ErrorCode,
 		&e.ErrorMessage,
 		&startedAt,
@@ -153,9 +202,9 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 		INSERT INTO plan_executions (
 			execution_id, workset_id, operation_type, plan_id, status,
 			idempotency_key, request_hash, expected_operation_version, request_json,
-			total_components, total_operations, report_json, created_at, updated_at
+			total_components, total_operations, created_at, updated_at
 		)
-		SELECT ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?
+		SELECT ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE EXISTS (
 			SELECT 1 FROM worksets w WHERE w.id = ? AND w.library_id IS NOT NULL
 		)
@@ -174,7 +223,7 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 		)
 	`, e.ExecutionID, e.WorksetID, e.OperationType, e.PlanID,
 		e.IdempotencyKey, e.RequestHash, e.ExpectedOperationVersion, e.RequestJSON,
-		e.TotalComponents, e.TotalOperations, e.ReportJSON, now, now,
+		e.TotalComponents, e.TotalOperations, now, now,
 		e.WorksetID,
 		e.WorksetID, e.OperationType, g.ExpectedOperationVersion, e.PlanID,
 		e.WorksetID, e.OperationType, g.ExpectedDraftHash,
@@ -409,46 +458,169 @@ func (r *Repository) NextQueuedExecution() (*PlanExecution, error) {
 	return e, nil
 }
 
-// ExecutionProgress is the component-boundary progress of a running session.
-// Completed counts only operations that already happened on disk.
+// ExecutionProgress is the position of a running session: the component it is
+// working on, or the empty position once the run is over. The counters are
+// derived from the component result rows inside the same transaction, so they
+// can never drift from the facts.
 type ExecutionProgress struct {
-	CompletedComponents   int
-	CompletedOperations   int
 	CurrentRoot           string
 	CurrentComponentID    string
 	CurrentComponentIndex int
 	CurrentPhase          string
 }
 
-// UpdateExecutionProgress records component-boundary progress and the current
-// report. ReportJSON is the complete report: pending entries included.
-func (r *Repository) UpdateExecutionProgress(
-	executionID string,
-	p ExecutionProgress,
-	reportJSON string,
-) error {
+// ExecutionComponentResult is one component's observed result. The frozen
+// identity of the component (id, root path, partition, operation count) is not
+// repeated here: it lives in the session's frozen worklist and is joined back
+// on read.
+type ExecutionComponentResult struct {
+	ComponentIndex      int
+	Status              string
+	CompletedOperations int
+	ResultJSON          string
+	UpdatedAt           time.Time
+}
+
+// UpdateExecutionPosition records where a running session is without touching
+// any component result. It is used for the first unit of a run, which no
+// boundary has written yet; later boundaries publish the next position with
+// their own result.
+func (r *Repository) UpdateExecutionPosition(executionID string, p ExecutionProgress) error {
 	_, err := r.db.Exec(`
 		UPDATE plan_executions SET
-			completed_components = ?, completed_operations = ?,
 			current_root = ?, current_component_id = ?, current_component_index = ?,
-			current_phase = ?, report_json = ?, updated_at = ?
+			current_phase = ?, updated_at = ?
 		WHERE execution_id = ?
-	`, p.CompletedComponents, p.CompletedOperations, p.CurrentRoot, p.CurrentComponentID,
-		p.CurrentComponentIndex, p.CurrentPhase, reportJSON, time.Now().Format(timeFormat), executionID)
+	`, p.CurrentRoot, p.CurrentComponentID, p.CurrentComponentIndex, p.CurrentPhase,
+		time.Now().Format(timeFormat), executionID)
 	return err
 }
 
-// FinishExecution writes a terminal status with the final report. Only
-// queued/running rows transition, so a terminal status never regresses and a
-// canceled-queued session is not resurrected by a worker finishing a stale run.
+// SaveExecutionComponentResult writes one component's result and moves the
+// session's position in a single transaction. The counters are recomputed from
+// the result rows rather than adjusted, so replaying this call after a failed
+// commit cannot double-count; the result row itself is replaced wholesale, which
+// is what makes the replay idempotent. p is the position the run moves to —
+// the next component to work on — and is left empty for the last one.
+func (r *Repository) SaveExecutionComponentResult(
+	executionID string,
+	res ExecutionComponentResult,
+	p ExecutionProgress,
+) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin component result tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		INSERT INTO execution_component_results (
+			execution_id, component_index, status, completed_operations, result_json, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(execution_id, component_index) DO UPDATE SET
+			status = excluded.status,
+			completed_operations = excluded.completed_operations,
+			result_json = excluded.result_json,
+			updated_at = excluded.updated_at
+	`, executionID, res.ComponentIndex, res.Status, res.CompletedOperations, res.ResultJSON,
+		time.Now().Format(timeFormat)); err != nil {
+		return fmt.Errorf("save component result: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE plan_executions SET
+			completed_components = (
+				SELECT COUNT(*) FROM execution_component_results
+				WHERE execution_id = ? AND status <> 'pending'
+			),
+			completed_operations = (
+				SELECT COALESCE(SUM(completed_operations), 0) FROM execution_component_results
+				WHERE execution_id = ?
+			),
+			current_root = ?, current_component_id = ?, current_component_index = ?,
+			current_phase = ?, updated_at = ?
+		WHERE execution_id = ?
+	`, executionID, executionID, p.CurrentRoot, p.CurrentComponentID, p.CurrentComponentIndex,
+		p.CurrentPhase, time.Now().Format(timeFormat), executionID); err != nil {
+		return fmt.Errorf("update execution position: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// ListExecutionComponentResults returns the results of one session in
+// component order, starting at fromIndex (inclusive). A limit of zero or less
+// returns every remaining row.
+func (r *Repository) ListExecutionComponentResults(
+	executionID string,
+	fromIndex, limit int,
+) ([]ExecutionComponentResult, error) {
+	query := `
+		SELECT component_index, status, completed_operations, result_json, updated_at
+		FROM execution_component_results
+		WHERE execution_id = ? AND component_index >= ?
+		ORDER BY component_index
+	`
+	args := []any{executionID, fromIndex}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list component results: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]ExecutionComponentResult, 0)
+	for rows.Next() {
+		var res ExecutionComponentResult
+		var updatedAt string
+		if err := rows.Scan(
+			&res.ComponentIndex, &res.Status, &res.CompletedOperations, &res.ResultJSON, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan component result: %w", err)
+		}
+		res.UpdatedAt = parseTimestamp(updatedAt)
+		results = append(results, res)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate component results: %w", err)
+	}
+	return results, nil
+}
+
+// GetExecutionProgress reads the control fields of one session without its
+// frozen request or any component result: what the cancel watchdog and the
+// event stream poll. It returns ErrExecutionNotFound for an unknown session.
+func (r *Repository) GetExecutionProgress(executionID string) (*PlanExecution, error) {
+	row := r.db.QueryRow(
+		`SELECT `+executionProgressColumns+` FROM plan_executions WHERE execution_id = ?`,
+		executionID,
+	)
+	e, err := scanExecutionProgress(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrExecutionNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// FinishExecution writes a terminal status. Only queued/running rows
+// transition, so a terminal status never regresses and a canceled-queued
+// session is not resurrected by a worker finishing a stale run. The component
+// results are already durable: this row holds no report to rewrite.
 func (r *Repository) FinishExecution(
-	executionID, status, errorCode, errorMessage, reportJSON string,
+	executionID, status, errorCode, errorMessage string,
 ) error {
 	_, err := r.db.Exec(`
 		UPDATE plan_executions SET status = ?, error_code = ?, error_message = ?,
-			report_json = ?, finished_at = ?, updated_at = ?
+			finished_at = ?, updated_at = ?
 		WHERE execution_id = ? AND status IN ('queued','running')
-	`, status, errorCode, errorMessage, reportJSON, time.Now().Format(timeFormat),
+	`, status, errorCode, errorMessage, time.Now().Format(timeFormat),
 		time.Now().Format(timeFormat), executionID)
 	return err
 }

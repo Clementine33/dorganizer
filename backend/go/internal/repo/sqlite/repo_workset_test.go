@@ -495,7 +495,6 @@ func TestPersistOperationRevisionRetiresTheReplacedExecution(t *testing.T) {
 		PlanID:        "plan-r1",
 		Status:        "succeeded",
 		RequestJSON:   "{}",
-		ReportJSON:    "[]",
 		CreatedAt:     now,
 	}, ExecutionGuards{
 		ExpectedOperationVersion: 2,

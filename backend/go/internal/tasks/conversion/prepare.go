@@ -254,8 +254,8 @@ func underRecoveryDir(componentRoot, p string) bool {
 	return len(parts) > 1 && parts[0] == execute.RecoveryDirName
 }
 
-// nonNil turns a nil path slice into an empty one so the persisted report never
-// marshals a planned-empty list as JSON null.
+// nonNil turns a nil path slice into an empty one so a persisted component
+// result never marshals a planned-empty list as JSON null.
 func nonNil(paths []string) []string {
 	if paths == nil {
 		return []string{}

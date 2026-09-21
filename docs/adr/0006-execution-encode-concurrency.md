@@ -75,7 +75,10 @@ file, whose encode is single-threaded and cannot be split.
    being downgraded to pending. Post-stop writes therefore never widen beyond
    today's single operation. Progress is written as soon as a head is known —
    at the start of each commit-order iteration, before preparation or delivery
-   can block, including N = 1 when the window empties after each commit. Empty
+   can block, including N = 1 when the window empties after each commit. (Each
+   boundary now publishes the next head along with the result it commits, so
+   only the first iteration needs a write of its own; the observable rule is
+   unchanged. See ADR 0009.) Empty
    executions retain their existing completion/cancellation rules and start
    no worker pool. A sealed notification is not a permanent commit permit:
    the coordinator rechecks the stop before admission, and `Commit` checks it

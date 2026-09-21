@@ -84,7 +84,7 @@ type Repository struct {
 // The marker row in schema_meta is what makes an older database recognisable:
 // a database without it (or with another version) is refused at open time, and
 // neither migrated nor cleared (ADR 0007 §7, spec D2).
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 // ErrIncompatibleDatabase marks a database this build must not open: it was
 // created by a different schema generation, so the operator has to point
@@ -556,9 +556,10 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
 -- canceled|interrupted. A revision is executed at most once: the unique
 -- idempotency index holds the key for the session's whole life, and the
 -- plan_id index answers "has this revision already been executed".
--- report_json is the per-component outcome report (pending entries included);
--- it is replaced on every component boundary so a crash leaves the facts of
--- everything that already happened on disk.
+-- This row carries the session's own state only. What each component did is
+-- in execution_component_results, committed as that component finishes, so a
+-- crash leaves every finished component's facts on disk without the session
+-- row ever holding a report that grows with the worklist.
 CREATE TABLE IF NOT EXISTS plan_executions (
     execution_id TEXT PRIMARY KEY,
     workset_id TEXT NOT NULL REFERENCES worksets(id) ON DELETE CASCADE,
@@ -577,7 +578,6 @@ CREATE TABLE IF NOT EXISTS plan_executions (
     current_component_id TEXT NOT NULL DEFAULT '',
     current_component_index INTEGER NOT NULL DEFAULT 0,
     current_phase TEXT NOT NULL DEFAULT '',
-    report_json TEXT NOT NULL DEFAULT '[]',
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     error_code TEXT NOT NULL DEFAULT '',
     error_message TEXT NOT NULL DEFAULT '',
@@ -597,6 +597,25 @@ CREATE INDEX IF NOT EXISTS idx_plan_executions_op_status
     ON plan_executions(workset_id, operation_type, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_plan_executions_queue
     ON plan_executions(status, created_at, execution_id);
+
+-- One component's observed result, written in the boundary transaction that
+-- moves the session past it. The parts a component cannot observe for itself —
+-- its id, root path, partition and operation count — stay in the session's
+-- frozen request; the status and completed_operations columns exist so the
+-- session's counters can be recomputed from the rows instead of incremented,
+-- which is what makes a replayed boundary write idempotent. result_json holds
+-- the result itself (stage, error, committed/removed/remaining/recovery,
+-- inventory sync), and a component with no row is pending: nothing has run
+-- for it yet.
+CREATE TABLE IF NOT EXISTS execution_component_results (
+    execution_id TEXT NOT NULL REFERENCES plan_executions(execution_id) ON DELETE CASCADE,
+    component_index INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    completed_operations INTEGER NOT NULL DEFAULT 0,
+    result_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (execution_id, component_index)
+);
 
 -- Global custom classifier tag library. Holds user-entered literal tags for
 -- cross-workset reuse. Case-insensitively unique normalized_tag prevents duplicates.

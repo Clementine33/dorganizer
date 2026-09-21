@@ -411,6 +411,7 @@ func (f *execFixture) waitTerminal(executionID string) *worksetusecase.Execution
 	for time.Now().Before(deadline) {
 		view, err := f.svc.GetExecution(
 			f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, executionID,
+			worksetusecase.ExecutionPage{},
 		)
 		if err != nil {
 			f.t.Fatalf("GetExecution: %v", err)
@@ -1043,5 +1044,122 @@ func TestARootWithATrailingSlashStillOwnsItsSubtree(t *testing.T) {
 	started := f.mustStart("plan-slash", "k-slash")
 	if done := f.waitTerminal(started.ExecutionID); done.Status != "succeeded" {
 		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+}
+
+// TestExecutionDetailPagesTheComponentList covers the paging contract of the
+// detail read: the component list is ordered by component index, the page
+// starts where the caller says, and the counters describe the whole session
+// rather than the page, so a client can tell how much is left.
+func TestExecutionDetailPagesTheComponentList(t *testing.T) {
+	f, _ := poolFixture(t, 1, poolUnit(0), poolUnit(0), poolUnit(0))
+	f.seedRevision(
+		"plan-page",
+		poolComponent("u0", "albumA"),
+		poolComponent("u1", "albumB"),
+		poolComponent("u2", "albumA"),
+	)
+	started := f.mustStart("plan-page", "k-page")
+	done := f.waitTerminal(started.ExecutionID)
+	if done.Status != "succeeded" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
+	}
+
+	firstPage, err := f.svc.GetExecution(
+		f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, started.ExecutionID,
+		worksetusecase.ExecutionPage{Limit: 2},
+	)
+	if err != nil {
+		t.Fatalf("GetExecution(page 1): %v", err)
+	}
+	if len(firstPage.Components) != 2 || firstPage.Components[0].ComponentIndex != 0 ||
+		firstPage.Components[1].ComponentIndex != 1 {
+		t.Fatalf("page 1 components = %+v", firstPage.Components)
+	}
+	if firstPage.TotalComponents != 3 || firstPage.CompletedComponents != 3 {
+		t.Fatalf("page 1 counters = %+v", firstPage)
+	}
+	secondPage, err := f.svc.GetExecution(
+		f.t.Context(), f.worksetID, worksetusecase.OperationTypeConversion, started.ExecutionID,
+		worksetusecase.ExecutionPage{FromIndex: 2},
+	)
+	if err != nil {
+		t.Fatalf("GetExecution(page 2): %v", err)
+	}
+	if len(secondPage.Components) != 1 || secondPage.Components[0].ComponentIndex != 2 {
+		t.Fatalf("page 2 components = %+v", secondPage.Components)
+	}
+	if secondPage.Components[0].Status != worksetusecase.ExecComponentSucceeded {
+		t.Fatalf("page 2 component status = %s", secondPage.Components[0].Status)
+	}
+}
+
+// TestExecutionSubscriptionPushesEachComponentResult covers the incremental
+// half of the stream: a client attached before a component commits receives
+// that component's own result as its own event, rather than having to re-read
+// the detail to notice it moved.
+func TestExecutionSubscriptionPushesEachComponentResult(t *testing.T) {
+	f, obs := poolFixture(t, 1, poolUnit(1))
+	obs.gate("u0")
+	f.seedRevision("plan-push", poolComponent("u0", "albumA"))
+	started := f.mustStart("plan-push", "k-push")
+	obs.waitEvent(t, "encode u0#0") // attached while the only component is in flight
+
+	type event struct {
+		name string
+		data map[string]any
+	}
+	events := make(chan event, 16)
+	ctx, cancel := context.WithTimeout(f.t.Context(), 30*time.Second)
+	defer cancel()
+	go func() {
+		_ = f.svc.SubscribeExecution(
+			ctx, f.worksetID, worksetusecase.OperationTypeConversion, started.ExecutionID,
+			func(name string, data any) error {
+				raw, _ := json.Marshal(data)
+				var m map[string]any
+				_ = json.Unmarshal(raw, &m)
+				events <- event{name: name, data: m}
+				return nil
+			},
+		)
+	}()
+
+	// The snapshot is the state at attach: the component is still pending.
+	first := <-events
+	if first.name != worksetusecase.ExecutionEventSnapshot {
+		t.Fatalf("first event = %s, want %s", first.name, worksetusecase.ExecutionEventSnapshot)
+	}
+	components, _ := first.data["components"].([]any)
+	if len(components) != 1 {
+		t.Fatalf("snapshot components = %+v", first.data["components"])
+	}
+	if entry, _ := components[0].(map[string]any); entry["status"] != worksetusecase.ExecComponentPending {
+		t.Fatalf("snapshot component status = %v, want pending", entry["status"])
+	}
+
+	obs.release("u0")
+	var pushed bool
+	for {
+		select {
+		case ev := <-events:
+			switch ev.name {
+			case worksetusecase.ExecutionEventComponent:
+				if ev.data["component_index"] != float64(0) ||
+					ev.data["status"] != worksetusecase.ExecComponentSucceeded {
+					t.Fatalf("component event = %+v", ev.data)
+				}
+				pushed = true
+			case worksetusecase.ExecutionEventSucceeded:
+				if !pushed {
+					t.Fatal("the session finished without ever pushing its component result")
+				}
+				return
+			case worksetusecase.ExecutionEventFailed, worksetusecase.ExecutionEventCanceled:
+				t.Fatalf("unexpected terminal event %s: %+v", ev.name, ev.data)
+			}
+		case <-ctx.Done():
+			t.Fatal("no terminal event")
+		}
 	}
 }

@@ -96,7 +96,7 @@ What a plan was made from: per Planning Root, the identity, inventory fingerprin
 _Avoid_: Snapshot token, ETag.
 
 **Execution Session**:
-The asynchronous, durable run of one Plan Revision: globally serialized, with one shared pool of encode workers running single-file encode tasks across every member folder and a single coordinator committing components in frozen order. Cooperatively cancelable — a stop is checked between commit operations and stops admission at once — with a per-unit report that survives a crash and no automatic retry.
+The asynchronous, durable run of one Plan Revision: globally serialized, with one shared pool of encode workers running single-file encode tasks across every member folder and a single coordinator committing components in frozen order. Cooperatively cancelable — a stop is checked between commit operations and stops admission at once — with a per-component result that survives a crash and no automatic retry.
 _Avoid_: Run, job.
 
 **Obsolete Audio Handling**:

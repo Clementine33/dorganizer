@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"runtime"
 	"sync"
 
@@ -233,12 +234,10 @@ type sessionRun struct {
 	ctx    context.Context
 	report []ExecutionComponentView
 
-	pool      *encodePool
-	window    int
-	open      []*openUnit
-	next      int
-	completed int
-	doneOps   int
+	pool   *encodePool
+	window int
+	open   []*openUnit
+	next   int
 }
 
 // fill opens frozen units into the window, in frozen order, until it is full
@@ -373,7 +372,7 @@ func (s *sessionRun) stopSession(observed sessionStop) {
 	}
 	if stop.err == nil {
 		s.discardOpen(nil)
-		s.d.finishExecution(s.ex, sqlite.ExecStatusCanceled, "CANCELED", "execution canceled", s.report)
+		s.d.finishExecution(s.ex, sqlite.ExecStatusCanceled, "CANCELED", "execution canceled")
 		return
 	}
 	s.reportFailedUnit(stop)
@@ -384,7 +383,6 @@ func (s *sessionRun) stopSession(observed sessionStop) {
 		sqlite.ExecStatusFailed,
 		entry.ErrorCode,
 		unitStopMessage(stop.unit, entry),
-		s.report,
 	)
 }
 
@@ -395,23 +393,31 @@ func (s *sessionRun) stopSession(observed sessionStop) {
 func (s *sessionRun) stopAfterHead(status, code, message string) {
 	s.pool.shutdown()
 	s.discardOpen(nil)
-	s.d.finishExecution(s.ex, status, code, message, s.report)
+	s.d.finishExecution(s.ex, status, code, message)
 }
 
 // reportFailedUnit fills the failing unit's own entry: a unit whose encode
 // task failed reports its discarded facts, and one that never prepared takes
-// the error's stage and code.
+// the error's stage and code. Its write failing is logged, not escalated: the
+// session is already ending, and the disk state it describes is unchanged.
 func (s *sessionRun) reportFailedUnit(stop sessionStop) {
 	if stop.reported {
 		return
 	}
 	entry := &s.report[stop.reportIdx]
+	var writeErr error
 	if stop.open == nil {
 		applyPrepareFailure(entry, stop.err)
-		s.countUnit(stop.unit, 0)
-		return
+		writeErr = s.persistEntry(entry, ExecutionUnit{})
+	} else {
+		writeErr = s.recordUnit(stop.unit, entry, stop.open.prepared.Discard(stop.err), ExecutionUnit{})
 	}
-	s.recordUnit(stop.unit, entry, stop.open.prepared.Discard(stop.err))
+	if writeErr != nil {
+		log.Printf(
+			"execution %s: failed component %s could not be recorded: %v",
+			s.ex.ExecutionID, stop.unit.ID, writeErr,
+		)
+	}
 }
 
 // discardOpen cleans every unit still open, skipping the one the stop already
@@ -429,20 +435,34 @@ func (s *sessionRun) discardOpen(except *openUnit) {
 		entry := &s.report[unit.reportIdx]
 		entry.Remaining = append(entry.Remaining, res.Remaining...)
 		entry.Recovery = append(entry.Recovery, res.Recovery...)
+		// These facts exist nowhere else, so they are written here rather than
+		// left to a terminal report that no longer exists. A failure is logged
+		// and the session still ends.
+		if err := s.persistEntry(entry, ExecutionUnit{}); err != nil {
+			log.Printf(
+				"execution %s: discarded component %s could not be recorded: %v",
+				s.ex.ExecutionID, unit.frozen.ID, err,
+			)
+		}
 	}
 }
 
 // recordUnit applies one unit's result to its report entry, syncs the observed
-// inventory and persists the progress at its boundary.
-func (s *sessionRun) recordUnit(unit ExecutionUnit, entry *ExecutionComponentView, res UnitResult) {
+// inventory and persists the result with the next position.
+func (s *sessionRun) recordUnit(
+	unit ExecutionUnit,
+	entry *ExecutionComponentView,
+	res UnitResult,
+	next ExecutionUnit,
+) error {
 	applyUnitResult(entry, res)
 	s.d.syncUnitInventory(s.run.rootPath, res, entry)
-	s.countUnit(unit, entry.CompletedOps)
+	return s.persistEntry(entry, next)
 }
 
-// countUnit advances the session's progress and persists it.
-func (s *sessionRun) countUnit(unit ExecutionUnit, completedOps int) {
-	s.completed++
-	s.doneOps += completedOps
-	s.d.persistProgress(s.ex.ExecutionID, s.completed, s.doneOps, unit, s.report)
+// persistEntry writes one component's current facts, moving the session to the
+// given position. The counters are not passed: the repository recomputes them
+// from the stored results, so a replay cannot double-count.
+func (s *sessionRun) persistEntry(entry *ExecutionComponentView, next ExecutionUnit) error {
+	return s.d.persistUnitResult(s.ex.ExecutionID, entry, next)
 }

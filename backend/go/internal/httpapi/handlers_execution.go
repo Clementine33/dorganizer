@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -67,19 +69,54 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 // getExecution handles GET
-// /api/v1/worksets/{id}/operations/{type}/executions/{executionId}.
+// /api/v1/worksets/{id}/operations/{type}/executions/{executionId}. The
+// optional components_from/components_limit parameters page a large run: the
+// component list is ordered by component index, so a client walks it from the
+// index after the last one it holds. Without them the response carries every
+// component, as it always has.
 func (s *Server) getExecution(w http.ResponseWriter, r *http.Request) {
 	svc, err := s.worksetService()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "workset service not configured")
 		return
 	}
-	view, err := svc.GetExecution(r.Context(), r.PathValue("id"), r.PathValue("type"), r.PathValue("executionId"))
+	page, err := executionPageOf(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_PAGE", err.Error())
+		return
+	}
+	view, err := svc.GetExecution(
+		r.Context(),
+		r.PathValue("id"),
+		r.PathValue("type"),
+		r.PathValue("executionId"),
+		page,
+	)
 	if err != nil {
 		writeWorksetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// executionPageOf reads the optional paging parameters of a detail request.
+func executionPageOf(r *http.Request) (worksetusecase.ExecutionPage, error) {
+	var page worksetusecase.ExecutionPage
+	for name, target := range map[string]*int{
+		"components_from":  &page.FromIndex,
+		"components_limit": &page.Limit,
+	} {
+		raw := r.URL.Query().Get(name)
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return worksetusecase.ExecutionPage{}, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		*target = value
+	}
+	return page, nil
 }
 
 // cancelExecution handles POST

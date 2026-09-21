@@ -239,7 +239,7 @@ func (f *fixture) awaitExecution(worksetID, operationType, executionID string) *
 	f.t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		v, err := f.svc.GetExecution(f.ctx, worksetID, operationType, executionID)
+		v, err := f.svc.GetExecution(f.ctx, worksetID, operationType, executionID, worksetusecase.ExecutionPage{})
 		if err != nil {
 			f.t.Fatalf("GetExecution: %v", err)
 		}

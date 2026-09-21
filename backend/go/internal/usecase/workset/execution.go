@@ -25,6 +25,7 @@ const (
 // Execution event names streamed by Subscribe.
 const (
 	ExecutionEventSnapshot    = "execution_snapshot"
+	ExecutionEventComponent   = "component"
 	ExecutionEventProgress    = "progress"
 	ExecutionEventSucceeded   = "succeeded"
 	ExecutionEventFailed      = "failed"
@@ -51,9 +52,10 @@ type StartExecutionResult struct {
 	Created   bool
 }
 
-// ExecutionComponentView is one component's frozen work and observed outcome.
-// It is also the persisted report shape, so a crash keeps every component's
-// facts without a second table.
+// ExecutionComponentView is one component's frozen work and observed outcome:
+// the wire shape of a `components[]` entry and of one `component` event. The
+// frozen half comes from the session's worklist, the observed half from the
+// component's own result row (ADR 0009).
 type ExecutionComponentView struct {
 	ComponentIndex     int      `json:"component_index"`
 	ComponentID        string   `json:"component_id"`
@@ -288,7 +290,11 @@ func (s *serviceImpl) replayExecution(
 			nil,
 		)
 	}
-	return &StartExecutionResult{Execution: executionViewOf(existing), Created: false}, true, nil
+	view, err := s.executionViewOf(existing, ExecutionPage{})
+	if err != nil {
+		return nil, false, err
+	}
+	return &StartExecutionResult{Execution: view, Created: false}, true, nil
 }
 
 // executionEligibility checks every gate of the execution authorization in
@@ -444,23 +450,12 @@ func executionOptionsOf(e *sqlite.PlanExecution) json.RawMessage {
 	return req.Options
 }
 
-// executionFoldersOf reads the session's scope back out of the same payload,
-// so a client that did not start the run still knows which folders it covered.
-func executionFoldersOf(e *sqlite.PlanExecution) []string {
-	req, err := parseExecutionRequest(e.RequestJSON)
-	if err != nil {
-		return nil
-	}
-	return req.Folders
-}
-
 func (s *serviceImpl) persistExecution(
 	op *sqlite.Operation,
 	planID, key, requestHash, revisionDraftHash string,
 	frozen FrozenExecution,
 	selection []string,
 ) (*StartExecutionResult, error) {
-	report := initialComponentReport(frozen.Units)
 	exec := &sqlite.PlanExecution{
 		ExecutionID:              "exec-" + newToken(),
 		WorksetID:                op.WorksetID,
@@ -477,7 +472,6 @@ func (s *serviceImpl) persistExecution(
 		}),
 		TotalComponents: len(frozen.Units),
 		TotalOperations: frozen.TotalOperations,
-		ReportJSON:      mustJSON(report),
 		CreatedAt:       time.Now(),
 	}
 	createErr := s.enqueue(func() error {
@@ -496,7 +490,11 @@ func (s *serviceImpl) persistExecution(
 			existing, loadErr := s.repo.GetExecutionByOperationKey(op.WorksetID, op.OperationType, key)
 			if loadErr == nil && existing != nil {
 				if existing.RequestHash == requestHash {
-					return &StartExecutionResult{Execution: executionViewOf(existing), Created: false}, nil
+					view, viewErr := s.executionViewOf(existing, ExecutionPage{})
+					if viewErr != nil {
+						return nil, viewErr
+					}
+					return &StartExecutionResult{Execution: view, Created: false}, nil
 				}
 				return nil, NewError(
 					ErrKindConflict,
@@ -540,12 +538,16 @@ func (s *serviceImpl) persistExecution(
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to start execution", err)
 	}
 	s.dispatcher.wakeExecution()
-	return &StartExecutionResult{Execution: executionViewOf(exec), Created: true}, nil
+	view, err := s.executionViewOf(exec, ExecutionPage{})
+	if err != nil {
+		return nil, err
+	}
+	return &StartExecutionResult{Execution: view, Created: true}, nil
 }
 
-// initialComponentReport builds the full report skeleton: every frozen
-// component exists as pending from the moment the session does, so an
-// interrupted session still names what it never executed.
+// initialComponentReport builds the report skeleton: every frozen component
+// exists as pending from the moment the session does, so an interrupted session
+// still names what it never executed.
 func initialComponentReport(units []ExecutionUnit) []ExecutionComponentView {
 	report := make([]ExecutionComponentView, 0, len(units))
 	for _, u := range units {
@@ -565,10 +567,41 @@ func initialComponentReport(units []ExecutionUnit) []ExecutionComponentView {
 	return report
 }
 
-// GetExecution returns the session view scoped to a workset operation.
+// ExecutionPage selects which components a detail read carries. The frozen
+// worklist is ordered by component index, so FromIndex is where the page starts
+// (inclusive — the zero page is the whole run) and Limit of zero means "to the
+// end". A client showing a large run pages through it with the index after the
+// last component it holds, while the event stream keeps it current on the
+// components that finish afterwards.
+type ExecutionPage struct {
+	FromIndex int
+	Limit     int
+}
+
+// pageUnits applies the page to the frozen worklist.
+func pageUnits(units []ExecutionUnit, page ExecutionPage) []ExecutionUnit {
+	if page.FromIndex <= 0 && page.Limit <= 0 {
+		return units
+	}
+	paged := make([]ExecutionUnit, 0, len(units))
+	for _, u := range units {
+		if u.Index < page.FromIndex {
+			continue
+		}
+		if page.Limit > 0 && len(paged) >= page.Limit {
+			break
+		}
+		paged = append(paged, u)
+	}
+	return paged
+}
+
+// GetExecution returns the session view scoped to a workset operation. page
+// selects which components the view carries; the zero page carries all of them.
 func (s *serviceImpl) GetExecution(
 	ctx context.Context,
 	worksetID, operationType, executionID string,
+	page ExecutionPage,
 ) (*ExecutionView, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -577,7 +610,7 @@ func (s *serviceImpl) GetExecution(
 	if err != nil {
 		return nil, err
 	}
-	return executionViewOf(e), nil
+	return s.executionViewOf(e, page)
 }
 
 // CancelExecution cancels a session. It is idempotent: terminal rows keep their
@@ -601,7 +634,7 @@ func (s *serviceImpl) CancelExecution(
 			s.dispatcher.wakeExecution()
 		}
 	}
-	return s.GetExecution(ctx, worksetID, operationType, executionID)
+	return s.GetExecution(ctx, worksetID, operationType, executionID, ExecutionPage{})
 }
 
 // loadExecution loads a session and checks its operation ownership: a session
@@ -628,15 +661,23 @@ func notExecutable(reasons []string) error {
 		WithDetails(reasons)
 }
 
-// executionViewOf converts a persisted row to its view payload.
-func executionViewOf(e *sqlite.PlanExecution) *ExecutionView {
+// executionViewOf assembles the session view: the row's own fields, the frozen
+// worklist it carries, and the result rows that exist for the requested page.
+// The worklist says what the session could run and in which order; a component
+// without a result row is pending, because nothing has happened for it yet.
+func (s *serviceImpl) executionViewOf(e *sqlite.PlanExecution, page ExecutionPage) (*ExecutionView, error) {
+	req, err := parseExecutionRequest(e.RequestJSON)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "REQUEST_LOAD_FAILED", "failed to load the frozen request", err)
+	}
+	units := pageUnits(req.Units, page)
 	view := &ExecutionView{
 		ExecutionID:         e.ExecutionID,
 		WorksetID:           e.WorksetID,
 		OperationType:       e.OperationType,
 		PlanID:              e.PlanID,
 		Status:              e.Status,
-		Options:             executionOptionsOf(e),
+		Options:             req.Options,
 		TotalComponents:     e.TotalComponents,
 		CompletedComponents: e.CompletedComponents,
 		TotalOperations:     e.TotalOperations,
@@ -649,14 +690,94 @@ func executionViewOf(e *sqlite.PlanExecution) *ExecutionView {
 		StartedAt:           formatTime(e.StartedAt),
 		FinishedAt:          formatTime(e.FinishedAt),
 		CreatedAt:           formatTime(e.CreatedAt),
-		Components:          []ExecutionComponentView{},
-		SelectedFolders:     executionFoldersOf(e),
+		Components:          initialComponentReport(units),
+		SelectedFolders:     req.Folders,
 	}
-	var report []ExecutionComponentView
-	if err := json.Unmarshal([]byte(e.ReportJSON), &report); err == nil {
-		view.Components = report
+	results, err := s.repo.ListExecutionComponentResults(e.ExecutionID, page.FromIndex, page.Limit)
+	if err != nil {
+		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load component results", err)
 	}
-	return view
+	byIndex := make(map[int]int, len(view.Components))
+	for i := range view.Components {
+		byIndex[view.Components[i].ComponentIndex] = i
+	}
+	for _, res := range results {
+		at, ok := byIndex[res.ComponentIndex]
+		if !ok {
+			continue // a result outside the requested page
+		}
+		applyComponentResult(&view.Components[at], res)
+	}
+	return view, nil
+}
+
+// applyComponentResult folds one result row onto its component's view entry.
+// The identity fields stay as the frozen worklist wrote them: a result row only
+// adds what the component itself observed.
+func applyComponentResult(entry *ExecutionComponentView, res sqlite.ExecutionComponentResult) {
+	entry.Status = res.Status
+	entry.CompletedOps = res.CompletedOperations
+	var facts componentResultFacts
+	if err := json.Unmarshal([]byte(res.ResultJSON), &facts); err != nil {
+		// An unreadable result is reported as a failed component rather than as
+		// a pending one: the row exists, so something did happen for it.
+		entry.Status = ExecComponentFailed
+		entry.ErrorCode = "RESULT_UNREADABLE"
+		entry.ErrorMessage = "the recorded component result could not be read"
+		return
+	}
+	entry.Stage = facts.Stage
+	entry.Committed = nonNilStrings(facts.Committed)
+	entry.Removed = nonNilStrings(facts.Removed)
+	entry.Remaining = nonNilStrings(facts.Remaining)
+	entry.Recovery = nonNilStrings(facts.Recovery)
+	entry.ErrorCode = facts.ErrorCode
+	entry.ErrorMessage = facts.ErrorMessage
+	entry.InventorySynced = facts.InventorySynced
+	entry.InventorySyncError = facts.InventorySyncError
+}
+
+// componentResultFacts is the part of a component's result that its frozen
+// worklist cannot describe, and so the part that is stored per component.
+type componentResultFacts struct {
+	Stage              string   `json:"stage,omitempty"`
+	Committed          []string `json:"committed,omitempty"`
+	Removed            []string `json:"removed,omitempty"`
+	Remaining          []string `json:"remaining,omitempty"`
+	Recovery           []string `json:"recovery,omitempty"`
+	ErrorCode          string   `json:"error_code,omitempty"`
+	ErrorMessage       string   `json:"error_message,omitempty"`
+	InventorySynced    bool     `json:"inventory_synced"`
+	InventorySyncError string   `json:"inventory_sync_error,omitempty"`
+}
+
+// componentResultRow folds one view entry into the row the repository stores.
+func componentResultRow(entry *ExecutionComponentView) sqlite.ExecutionComponentResult {
+	return sqlite.ExecutionComponentResult{
+		ComponentIndex:      entry.ComponentIndex,
+		Status:              entry.Status,
+		CompletedOperations: entry.CompletedOps,
+		ResultJSON: mustJSON(componentResultFacts{
+			Stage:              entry.Stage,
+			Committed:          entry.Committed,
+			Removed:            entry.Removed,
+			Remaining:          entry.Remaining,
+			Recovery:           entry.Recovery,
+			ErrorCode:          entry.ErrorCode,
+			ErrorMessage:       entry.ErrorMessage,
+			InventorySynced:    entry.InventorySynced,
+			InventorySyncError: entry.InventorySyncError,
+		}),
+	}
+}
+
+// nonNilStrings keeps an absent list a list in the payload: the wire shape has
+// always carried empty arrays rather than null.
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 // executionRefOf converts a persisted row to its compact reference.

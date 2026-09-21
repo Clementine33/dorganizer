@@ -29,6 +29,14 @@ const ExecPhaseComponent = "component"
 // boundaries, never mid-write.
 const cancelPollInterval = 500 * time.Millisecond
 
+// Result writes are retried a bounded number of times before the session stops.
+// The retry is for a transient lock or a momentarily busy disk: it re-runs the
+// write, never the encode or the commit that produced the result.
+const (
+	resultWriteAttempts = 3
+	resultWriteBackoff  = 50 * time.Millisecond
+)
+
 // runExecutionLoop is the single execution worker: sessions run one at a time,
 // globally serialized, so two worksets can never write overlapping roots
 // concurrently and a scan can never overlap an execution.
@@ -62,29 +70,47 @@ type executionRun struct {
 	plan     *sqlite.PlanDetail
 }
 
-// prepareExecution loads the frozen units, the persisted report and the
-// frozen unit payloads. A session whose persisted state cannot be resolved
-// fails closed with a stable code instead of running a guessed worklist.
+// prepareExecution loads the frozen units, the component results already
+// recorded for them and the frozen unit payloads. A session whose persisted
+// state cannot be resolved fails closed with a stable code instead of running a
+// guessed worklist.
 func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, bool) {
 	req, err := parseExecutionRequest(ex.RequestJSON)
 	if err != nil {
-		d.finishExecution(ex, sqlite.ExecStatusFailed, "REQUEST_LOAD_FAILED", "failed to load the frozen request", nil)
+		d.finishExecution(ex, sqlite.ExecStatusFailed, "REQUEST_LOAD_FAILED", "failed to load the frozen request")
 		return nil, false
 	}
-	report, err := parseExecutionReport(ex.ReportJSON)
-	if err != nil || len(report) != len(req.Units) {
+	report := initialComponentReport(req.Units)
+	results, err := d.svc.repo.ListExecutionComponentResults(ex.ExecutionID, 0, 0)
+	if err != nil {
 		d.finishExecution(
 			ex,
 			sqlite.ExecStatusFailed,
 			"REQUEST_LOAD_FAILED",
-			"failed to load the execution report",
-			nil,
+			"failed to load the component results",
 		)
 		return nil, false
 	}
+	reportIdx := make(map[int]int, len(report))
+	for i := range report {
+		reportIdx[report[i].ComponentIndex] = i
+	}
+	for _, res := range results {
+		at, ok := reportIdx[res.ComponentIndex]
+		if !ok {
+			d.finishExecution(
+				ex,
+				sqlite.ExecStatusFailed,
+				"REQUEST_LOAD_FAILED",
+				"a component result does not belong to the frozen worklist",
+			)
+			return nil, false
+		}
+		applyComponentResult(&report[at], res)
+	}
 	w, err := d.svc.repo.GetWorkset(ex.WorksetID)
 	if err != nil {
-		d.finishExecution(ex, sqlite.ExecStatusFailed, "WORKSET_LOAD_FAILED", "failed to load workset", report)
+		d.finishExecution(ex, sqlite.ExecStatusFailed, "WORKSET_LOAD_FAILED", "failed to load workset")
 		return nil, false
 	}
 	plan, err := d.svc.repo.GetPlanDetail(ex.PlanID)
@@ -94,7 +120,6 @@ func (d *dispatcher) prepareExecution(ex *sqlite.PlanExecution) (*executionRun, 
 			sqlite.ExecStatusFailed,
 			"REVISION_LOAD_FAILED",
 			"failed to load the frozen revision",
-			report,
 		)
 		return nil, false
 	}
@@ -122,7 +147,6 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 			sqlite.ExecStatusFailed,
 			"REQUEST_LOAD_FAILED",
 			"operation task is not registered",
-			run.report,
 		)
 		return
 	}
@@ -143,33 +167,30 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		if code == "CANCELED" {
 			status = sqlite.ExecStatusCanceled
 		}
-		d.finishExecution(ex, status, code, message, report)
+		d.finishExecution(ex, status, code, message)
 		return
 	}
 	// The report is indexed by the frozen unit order and every unit needs its
 	// frozen payload; a mismatch would mislabel facts, so the session fails
 	// closed before anything is written.
 	if code, message, ready := worklistReady(req, run); !ready {
-		d.finishExecution(ex, sqlite.ExecStatusFailed, code, message, report)
+		d.finishExecution(ex, sqlite.ExecStatusFailed, code, message)
 		return
 	}
 
 	session := &sessionRun{
-		d:         d,
-		ex:        ex,
-		run:       run,
-		task:      task,
-		ctx:       ctx,
-		report:    report,
-		window:    d.svc.encodeWindow(),
-		completed: ex.CompletedComponents,
-		doneOps:   ex.CompletedOperations,
+		d:      d,
+		ex:     ex,
+		run:    run,
+		task:   task,
+		ctx:    ctx,
+		report: report,
+		window: d.svc.encodeWindow(),
 	}
 	// An empty execution keeps its existing completion rules: no worker pool
 	// starts and no frozen unit is indexed.
 	if len(req.Units) == 0 {
-		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, ExecutionUnit{}, report)
-		d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
+		d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "")
 		return
 	}
 	session.pool = newEncodePool(ctx, cancel, session.window)
@@ -179,10 +200,14 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 			session.stopSession(*stop)
 			return
 		}
-		// Progress is written before preparation or delivery can block, so the
-		// head being worked on is never displayed as a previous one — including
-		// at N = 1, where the window empties after every commit.
-		d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, req.Units[i], report)
+		// The head being worked on is never displayed as a previous one —
+		// including at N = 1, where the window empties after every commit. Each
+		// boundary publishes the next head with the result it commits, so only
+		// the first unit needs a write of its own, before preparation or
+		// delivery can block (ADR 0006 decision 4).
+		if i == 0 {
+			d.persistPosition(ex.ExecutionID, req.Units[i])
+		}
 		if stop := session.fill(req.Units); stop != nil {
 			session.stopSession(*stop)
 			return
@@ -201,28 +226,50 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		res, commitErr := head.prepared.Commit(session.ctx)
 		entry := &report[head.reportIdx]
 		session.open = session.open[1:]
-		session.recordUnit(head.frozen, entry, res)
+		if writeErr := session.recordUnit(head.frozen, entry, res, nextUnit(req.Units, i)); writeErr != nil {
+			// The component committed on disk but its result is not durable.
+			// Nothing here may claim otherwise: the session stops, and the
+			// teardown leaves the component's real facts unpersisted rather
+			// than inventing them.
+			code, message := taskFailureOf(writeErr)
+			log.Printf(
+				"execution %s: component %s committed but its result could not be persisted: %v",
+				ex.ExecutionID, head.frozen.ID, writeErr,
+			)
+			session.stopAfterHead(
+				sqlite.ExecStatusFailed,
+				code,
+				fmt.Sprintf("component %s: %s", head.frozen.ID, message),
+			)
+			return
+		}
 		if session.settleHead(head, entry, commitErr) {
 			return
 		}
 	}
 	session.pool.shutdown()
-	d.persistProgress(ex.ExecutionID, session.completed, session.doneOps, ExecutionUnit{}, report)
-	d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "", report)
+	d.finishExecution(ex, sqlite.ExecStatusSucceeded, "", "")
 }
 
-// worklistReady checks the frozen worklist's two invariants before any write:
-// the report is indexed by unit order, and every unit has its frozen payload.
+// worklistReady checks the frozen worklist's invariant before any write: every
+// unit has its frozen payload. The report is built from the worklist itself, so
+// it cannot disagree with it.
 func worklistReady(req *executionRequest, run *executionRun) (code, message string, ready bool) {
 	for i := range req.Units {
-		if run.report[i].ComponentIndex != req.Units[i].Index {
-			return "REQUEST_LOAD_FAILED", "worklist and report disagree", false
-		}
 		if _, ok := run.outcomes[req.Units[i].Index]; !ok {
 			return "REVISION_LOAD_FAILED", "frozen component is unreadable", false
 		}
 	}
 	return "", "", true
+}
+
+// nextUnit is the unit after position i in the frozen worklist, or the empty
+// position when i is the last one: that is what a boundary write publishes.
+func nextUnit(units []ExecutionUnit, i int) ExecutionUnit {
+	if i+1 < len(units) {
+		return units[i+1]
+	}
+	return ExecutionUnit{}
 }
 
 // applyPrepareFailure records a failed preparation on the unit's own entry: the
@@ -302,36 +349,61 @@ func applyUnitResult(entry *ExecutionComponentView, res UnitResult) {
 	}
 }
 
-// persistProgress records the component-boundary progress plus the full report.
-func (d *dispatcher) persistProgress(
-	executionID string,
-	completed, doneOps int,
-	u ExecutionUnit,
-	report []ExecutionComponentView,
-) {
-	_ = d.svc.repo.UpdateExecutionProgress(executionID, sqlite.ExecutionProgress{
-		CompletedComponents:   completed,
-		CompletedOperations:   doneOps,
+// executionPositionOf names the component a session is working on, or the empty
+// position once it has moved past the last one.
+func executionPositionOf(u ExecutionUnit) sqlite.ExecutionProgress {
+	return sqlite.ExecutionProgress{
 		CurrentRoot:           u.RootPath,
 		CurrentComponentID:    u.ID,
 		CurrentComponentIndex: u.Index,
 		CurrentPhase:          ExecPhaseComponent,
-	}, mustJSON(report))
+	}
 }
 
-// finishExecution writes the terminal status with the given report. A failure
-// is logged rather than swallowed: the row then stays running until the
-// startup sweep marks it interrupted, and that sweep is a fallback, not a
-// recovery of the session's real outcome.
-func (d *dispatcher) finishExecution(
-	ex *sqlite.PlanExecution,
-	status, code, message string,
-	report []ExecutionComponentView,
-) {
-	if report == nil {
-		report = []ExecutionComponentView{}
+// persistPosition records which component the run is on without touching any
+// component result. A failure is not fatal: the next boundary write states the
+// position again along with the result it commits.
+func (d *dispatcher) persistPosition(executionID string, u ExecutionUnit) {
+	_ = d.svc.repo.UpdateExecutionPosition(executionID, executionPositionOf(u))
+}
+
+// persistUnitResult commits one component's result and moves the session to the
+// next component in one short transaction, retrying a bounded number of times.
+// The retry replays the write only: the filesystem work already happened, and
+// the result row is replaced wholesale, so a replay cannot double-count. A
+// failure that survives the retries is returned — the caller stops the session
+// rather than pretending the result is durable.
+func (d *dispatcher) persistUnitResult(
+	executionID string,
+	entry *ExecutionComponentView,
+	next ExecutionUnit,
+) error {
+	var err error
+	for range resultWriteAttempts {
+		err = d.svc.repo.SaveExecutionComponentResult(
+			executionID,
+			componentResultRow(entry),
+			executionPositionOf(next),
+		)
+		if err == nil {
+			return nil
+		}
+		time.Sleep(resultWriteBackoff)
 	}
-	err := d.svc.repo.FinishExecution(ex.ExecutionID, status, code, message, mustJSON(report))
+	return NewError(
+		ErrKindInternal,
+		"RESULT_PERSIST_FAILED",
+		"the component result could not be persisted",
+		err,
+	)
+}
+
+// finishExecution writes the terminal status. A failure is logged rather than
+// swallowed: the row then stays running until the startup sweep marks it
+// interrupted, and that sweep is a fallback, not a recovery of the session's
+// real outcome.
+func (d *dispatcher) finishExecution(ex *sqlite.PlanExecution, status, code, message string) {
+	err := d.svc.repo.FinishExecution(ex.ExecutionID, status, code, message)
 	if err != nil {
 		log.Printf("execution %s: terminal write failed (status=%s): %v", ex.ExecutionID, status, err)
 	}
@@ -373,18 +445,6 @@ func parseExecutionRequest(raw string) (*executionRequest, error) {
 		return nil, err
 	}
 	return &req, nil
-}
-
-// parseExecutionReport decodes the persisted per-component report.
-func parseExecutionReport(raw string) ([]ExecutionComponentView, error) {
-	if raw == "" {
-		return []ExecutionComponentView{}, nil
-	}
-	var report []ExecutionComponentView
-	if err := json.Unmarshal([]byte(raw), &report); err != nil {
-		return nil, err
-	}
-	return report, nil
 }
 
 // syncUnitInventory applies this unit's observed disk changes to the entries

@@ -348,8 +348,8 @@ All routes require auth and use the standard error envelope.
 | POST | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/cancel` | Cooperative cancel; idempotent on terminal sessions. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}` | The immutable snapshot of the record's **current** plan (a replaced plan no longer resolves — 404): `root_path`, `snapshot_token`, `status`, `summary`, the plan payload in its task envelope (`task: {kind, schema_version, payload}` — conversion: policy, classifier, summary, components), `counts`, frozen `members[]` (effective settings + per-unit `sources`), `roots[]`, `component_roots[]`, and `execution` (the session that ran this revision, if any). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/revisions/{planId}/executions` | Execute the operation's current revision (see below), optionally scoped to some of its folders. Body optional: `{"folder_paths":["albumA",…]}` — record-relative member paths; absent or empty runs the whole revision. The worklist and the session options (the obsolete-audio handling the draft declares) are always the frozen revision's. `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"execution":…}`; 200 with the same session for a key replay. |
-| GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}` | Session detail, including the per-component report. A session of another workset or operation is 404. |
-| GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/events` | SSE execution stream (`execution_snapshot`, `progress`, terminal event). |
+| GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}` | Session detail, including each component's result. Optional `components_from` (default 0, inclusive) and `components_limit` (default: every remaining component) page the component list, which is ordered by `component_index`; a session of another workset or operation is 404. |
+| GET | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/events` | SSE execution stream (`execution_snapshot`, `component`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/executions/{executionId}/cancel` | Cooperative cancel; idempotent on terminal sessions (200 with the session either way). |
 
 ### Execution sessions
@@ -383,7 +383,7 @@ some of its members. A path the record does not hold is refused with
 were asked for would be a scope change nobody approved; a selected folder the
 plan found nothing to do in simply contributes no components, which is the
 plan's conclusion about that folder, not a refusal. The session's own
-`total_components`, report and SSE progress cover the scope alone, and
+`total_components`, the component list and SSE progress cover the scope alone, and
 `selected_folders` (the record-relative paths) says what that scope was, so a
 client that did not start the run can tell it was partial.
 
@@ -411,10 +411,12 @@ folders before planning, so a plan is never made from a stale inventory.
 `canceled` | `interrupted`; a terminal status never regresses. Sessions run
 serially (one worker) in frozen root/component order; the first component
 failure stops admission, and every later component stays `pending` in the
-report. `report_json` is rewritten at every component boundary, so a crash
-keeps the facts of everything that already happened on disk. On startup any
-leftover queued/running session is marked `interrupted`: partial results stay
-visible, nothing is resumed, re-encoded or re-deleted, and the in-flight
+report. Each component's result is committed as its own row the moment it
+finishes — one short transaction that also advances the session's counters and
+its position — so a crash keeps the facts of everything that already happened on
+disk, and nothing ever rewrites what the components before it did. On startup
+any leftover queued/running session is marked `interrupted`: partial results
+stay visible, nothing is resumed, re-encoded or re-deleted, and the in-flight
 component's disk state must be treated as unverified (a temporary
 `<target>.tmp.<token>` output may remain).
 
@@ -422,12 +424,19 @@ component's disk state must be treated as unverified (a temporary
 `operation_type`, `plan_id`, `status`, `options` (the task-owned frozen
 session options — conversion: `{"delete_mode":"soft"|"hard"}`),
 `total_components`,
-`completed_components` (components that are no longer pending),
+`completed_components` (components that are no longer pending — derived from the
+recorded component results, never incremented on its own),
 `total_operations`, `completed_operations`, `current_root`,
 `current_component_id`, `current_phase` (`component` while a component runs),
 `components[]`, `selected_folders` (the scope this session ran; absent when it
 ran the whole revision), `error_code`, `error_message`, `started_at`,
 `finished_at`, `created_at`.
+
+`components[]` carries the run's scope: the frozen worklist in component order,
+with each component's own result folded in. A component with no recorded result
+at all is `pending` with empty lists — nothing has run for it yet. The list is
+ordered by `component_index` and may be paged through the detail route's
+`components_from`/`components_limit`.
 
 Each `components[]` entry: `component_index`, `component_id`, `root_path`,
 `partition`, `status` (`pending` | `succeeded` | `failed` | `canceled`),
@@ -439,14 +448,17 @@ replaced-old copies, leftover temporaries), `error_code`, `error_message`,
 `inventory_synced`, `inventory_sync_error`.
 
 **Events.** Every connection first receives `execution_snapshot` (the full
-detail above), then `progress` (counts + current component; never a fabricated
-percentage) and exactly one terminal event: `succeeded`, `failed`, `canceled`
-or `interrupted`. There is no event-log replay; a client that missed events
-re-reads the detail route. The persisted report is written at every component
-boundary, so re-reading the detail after a `progress` event that moved
-`completed_components` yields that component's own facts while the run
-continues. Disconnecting never cancels the session — only
-`POST …/cancel` or the process lifecycle does.
+detail above), then `component` (one component's own entry, exactly as it
+appears in `components[]`, sent as that component's result lands), `progress`
+(counts + current component; never a fabricated percentage) and exactly one
+terminal event: `succeeded`, `failed`, `canceled` or `interrupted`. A component
+result is emitted before a terminal event that follows it, so a client that
+watches a run to its end has seen every component it ran. There is no event-log
+replay: a client that missed events — or attached late, or holds only the first
+page of a large run — re-reads the detail route, and the terminal event's
+calibration read closes any gap left by a result written outside component
+order. Disconnecting never cancels the session — only `POST …/cancel` or the
+process lifecycle does.
 
 **Cancellation.** Canceling a queued session ends it immediately; canceling a
 running session sets a cooperative flag, and the worker stops at the
