@@ -2,11 +2,73 @@ package fileops_test
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
+
+// TestGateSerializesMaintenanceWithEverythingElse pins the exclusion the
+// idle-time maintenance pass depends on: a scan or a queued session refuses it,
+// and while it holds the slot it refuses scans, file management and enqueues -
+// which is why a pass can never run alongside the work it would race.
+func TestGateSerializesMaintenanceWithEverythingElse(t *testing.T) {
+	gate := fileops.NewGate(nil)
+
+	releaseScan, err := gate.BeginScan()
+	if err != nil {
+		t.Fatalf("BeginScan: %v", err)
+	}
+	if _, busyErr := gate.BeginMaintenance(); !fileops.IsBusy(busyErr) {
+		t.Fatalf("maintenance during a scan = %v, want busy", busyErr)
+	}
+	releaseScan()
+
+	releaseMaintenance, err := gate.BeginMaintenance()
+	if err != nil {
+		t.Fatalf("BeginMaintenance: %v", err)
+	}
+	if _, busyErr := gate.BeginMaintenance(); !fileops.IsBusy(busyErr) {
+		t.Fatalf("a second maintenance pass = %v, want busy", busyErr)
+	}
+	if _, busyErr := gate.BeginScan(); !fileops.IsBusy(busyErr) {
+		t.Fatalf("a scan during maintenance = %v, want busy", busyErr)
+	} else if !strings.Contains(busyErr.Error(), "maintenance") {
+		t.Fatalf("a scan refused during maintenance says %q, want it to name maintenance", busyErr)
+	}
+	if _, busyErr := gate.BeginManual(); !fileops.IsBusy(busyErr) {
+		t.Fatalf("file management during maintenance = %v, want busy", busyErr)
+	}
+	if err = gate.Enqueue(func() error { return nil }); !fileops.IsBusy(err) {
+		t.Fatalf("an enqueue during maintenance = %v, want busy", err)
+	}
+	releaseMaintenance()
+
+	releaseScan, err = gate.BeginScan()
+	if err != nil {
+		t.Fatalf("BeginScan after a released maintenance slot: %v", err)
+	}
+	releaseScan()
+}
+
+// TestGateRefusesMaintenanceWhileASessionIsQueued covers the database half of
+// the check for the maintenance slot.
+func TestGateRefusesMaintenanceWhileASessionIsQueued(t *testing.T) {
+	active := false
+	gate := fileops.NewGate(func() (bool, error) { return active, nil })
+
+	release, err := gate.BeginMaintenance()
+	if err != nil {
+		t.Fatalf("BeginMaintenance with no session: %v", err)
+	}
+	release()
+
+	active = true
+	if _, err := gate.BeginMaintenance(); !fileops.IsBusy(err) {
+		t.Fatalf("maintenance during a session = %v, want busy", err)
+	}
+}
 
 // TestGateSerializesFileManagementAndScans pins the two-way exclusion: a scan
 // running refuses file management, and file management in flight refuses a

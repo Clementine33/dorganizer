@@ -26,7 +26,10 @@ const ITEM_CODE_TEXT: Record<string, string> = {
 }
 
 const REQUEST_CODE_TEXT: Record<string, string> = {
-  BUSY: '当前有扫描、生成或执行在进行，稍后再试',
+  // Not only a scan, generation or execution: the backend answers BUSY while
+  // its idle-time database maintenance holds the slot too, so the text names no
+  // particular task.
+  BUSY: '当前有其他任务或后台维护在进行，稍后再试',
   OPERATION_DENIED: '不支持的操作',
   MEMBER_MISSING: '该文件夹已不存在',
   MEMBER_PATH_INVALID: '该路径不是可管理的文件夹',

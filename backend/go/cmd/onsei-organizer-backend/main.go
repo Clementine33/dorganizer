@@ -19,6 +19,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	appconfig "github.com/onsei/organizer/backend/internal/config"
 	"github.com/onsei/organizer/backend/internal/httpapi"
+	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	"github.com/onsei/organizer/backend/internal/services/scanner"
@@ -49,30 +50,32 @@ func parseCORSOrigins(raw string) []string {
 	return out
 }
 
-// retentionCleaner abstracts the repo for startup cleanup so main_test.go can stub it.
-type retentionCleaner interface {
-	RunRetentionCleanupWithCutoffs(cutoff, generationCutoff time.Time) (sqlite.CleanupStats, error)
-}
+// retentionWindows are how long the idle-time maintenance pass keeps finished
+// session records: scans are disposable once their inventory has been merged,
+// while a planning session is the record of a generation key and has to outlive
+// the idempotency-key guarantee the workset service makes (ADR 0004, ADR 0010).
+const (
+	scanRetention       = 7 * 24 * time.Hour
+	generationRetention = 30 * 24 * time.Hour
+)
 
-// runStartupRetentionCleanup performs a one-time retention cleanup at startup.
-// It is non-fatal: the returned error is logged but does not stop the process.
-func runStartupRetentionCleanup(repo retentionCleaner, now time.Time) error {
-	cutoff := now.UTC().Add(-7 * 24 * time.Hour)
-	generationCutoff := now.UTC().Add(-30 * 24 * time.Hour)
-	start := time.Now()
-	stats, err := repo.RunRetentionCleanupWithCutoffs(cutoff, generationCutoff)
+// logAutoVacuumMode says once whether this database can return freed pages to
+// the filesystem at all. A file created before incremental auto-vacuum existed
+// keeps them: the mode is fixed when the file is created, and reclamation
+// cannot turn it on, so the operator has to point ONSEI_DATA_DIR somewhere new.
+func logAutoVacuumMode(ctx context.Context, repo *sqlite.Repository) {
+	mode, err := repo.AutoVacuumMode(ctx)
 	if err != nil {
-		return err
+		log.Printf("auto_vacuum probe failed: %v", err)
+		return
 	}
-	elapsed := time.Since(start)
-	log.Printf(
-		"startup retention cleanup: deleted scan_sessions=%d generations=%d cutoff=%s elapsed_ms=%d",
-		stats.DeletedScanSessions,
-		stats.DeletedGenerations,
-		cutoff.Format(time.RFC3339),
-		elapsed.Milliseconds(),
-	)
-	return nil
+	if mode != sqlite.AutoVacuumIncremental {
+		log.Printf(
+			"auto_vacuum=%d: reclaimed pages cannot be returned to the filesystem; "+
+				"point ONSEI_DATA_DIR at a new directory for a database that can",
+			mode,
+		)
+	}
 }
 
 func main() {
@@ -132,10 +135,10 @@ func main() {
 	// Route std logger to stdout so host-side stdout drain also covers logs.
 	log.SetOutput(os.Stdout)
 
-	// One-time startup retention cleanup (non-fatal)
-	if cleanupErr := runStartupRetentionCleanup(repo, time.Now()); cleanupErr != nil {
-		log.Printf("retention cleanup failed: %v", cleanupErr)
-	}
+	// Whether this database can give freed space back is worth one line at
+	// startup: the answer is fixed when the file is created, and reclamation
+	// cannot change it later (ADR 0010).
+	logAutoVacuumMode(ctx, repo)
 
 	// Build token (use env if provided, else empty)
 	token := os.Getenv("ONSEI_TOKEN")
@@ -199,6 +202,19 @@ func runServer(
 	worksetSvc.DispatcherHandle().Start()
 	defer worksetSvc.DispatcherHandle().Stop()
 
+	// Idle-time maintenance shares the gate with everything that reads or writes
+	// the trees and the database, so a pass and a scan, planning session or
+	// execution never overlap. It runs for this process's lifetime only.
+	maintenanceLoop := maintenance.New(repo, gate.BeginMaintenance, maintenance.Options{
+		ScanRetention:       scanRetention,
+		GenerationRetention: generationRetention,
+	})
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		maintenanceLoop.Run(ctx)
+	}()
+
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
 			Repo:           repo,
@@ -251,6 +267,9 @@ func runServer(
 	log.Printf("onsei-backend listening on http 127.0.0.1:%d (data=%s)", httpPort, dataDir)
 	<-ctx.Done()
 	gracefulStop()
+	// The pass may be mid-statement; let it return before the repository it
+	// reads from is closed by main.
+	<-maintenanceDone
 }
 
 // interruptStaleSessions marks leftover queued/running sessions of a previous

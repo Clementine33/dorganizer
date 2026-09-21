@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -8,21 +9,31 @@ import (
 
 // ==================== Retention Cleanup ====================
 
-// DeleteScanSessionsOlderThanTx deletes terminal scan_sessions rows whose
-// COALESCE(finished_at, started_at) is older than cutoff, within tx.
+// RetentionBatchRows is the batch size used when a caller passes no limit.
+const RetentionBatchRows = 500
+
+// deleteScanSessionsBatchTx deletes at most limit terminal scan_sessions rows
+// whose COALESCE(finished_at, started_at) is older than cutoff.
 //
 // Only terminal rows are eligible. A queued/running/merging row belongs to a
-// scan that is still in flight (or to one whose process died mid-scan); the
-// database is not the authority on which, so deleting it on age alone would
-// pull a session out from under a running scanner. HasActiveScanForRoot reads
-// these rows to refuse planning against a root, so a stale non-terminal row is
-// finalized once at startup (InterruptStaleScanSessions) and becomes eligible
-// from the next pass on.
-func (r *Repository) DeleteScanSessionsOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
-	result, err := tx.Exec(
-		"DELETE FROM scan_sessions WHERE status IN ('completed','failed','canceled','interrupted') AND julianday(COALESCE(finished_at, started_at)) < julianday(?)",
-		cutoff.Format(timeFormat),
-	)
+// scan that is still in flight, or to one whose process died mid-scan, and the
+// database is not the authority on which: deleting on age alone would pull a
+// session out from under a running scanner. A row a dead process left behind is
+// finalized once at startup (InterruptStaleScanSessions) instead, and becomes
+// eligible from the next pass on.
+//
+// The LIMIT sits in a subquery because this build of SQLite was compiled
+// without SQLITE_ENABLE_UPDATE_DELETE_LIMIT: "DELETE ... LIMIT" is a syntax
+// error.
+func deleteScanSessionsBatchTx(ctx context.Context, tx *sql.Tx, cutoff time.Time, limit int) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM scan_sessions WHERE session_id IN (
+			SELECT session_id FROM scan_sessions
+			WHERE status IN ('completed','failed','canceled','interrupted')
+			  AND julianday(COALESCE(finished_at, started_at)) < julianday(?)
+			LIMIT ?
+		)
+	`, cutoff.Format(timeFormat), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete scan_sessions older than %s: %w", cutoff.Format(timeFormat), err)
 	}
@@ -30,15 +41,21 @@ func (r *Repository) DeleteScanSessionsOlderThanTx(tx *sql.Tx, cutoff time.Time)
 	return n, nil
 }
 
-// DeletePlanGenerationsFinishedOlderThanTx purges terminal planning session
-// rows whose finished_at (or created_at for rows finished without a timestamp)
-// is older than cutoff. revision_id is ON DELETE SET NULL, so purging a
-// session never cascades into its revision plan.
-func (r *Repository) DeletePlanGenerationsFinishedOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
-	result, err := tx.Exec(
-		"DELETE FROM plan_generations WHERE finished_at IS NOT NULL AND julianday(COALESCE(finished_at, created_at)) < julianday(?)",
-		cutoff.Format(timeFormat),
-	)
+// deletePlanGenerationsBatchTx purges at most limit planning session rows whose
+// finished_at is older than cutoff. finished_at IS NOT NULL is the terminal
+// test: a queued or running session has none yet.
+//
+// revision_id is ON DELETE SET NULL in the other direction - dropping a plan
+// clears the session's reference to it - so purging a session never reaches the
+// plan it planned.
+func deletePlanGenerationsBatchTx(ctx context.Context, tx *sql.Tx, cutoff time.Time, limit int) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM plan_generations WHERE generation_id IN (
+			SELECT generation_id FROM plan_generations
+			WHERE finished_at IS NOT NULL AND julianday(finished_at) < julianday(?)
+			LIMIT ?
+		)
+	`, cutoff.Format(timeFormat), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete finished plan generations older than %s: %w", cutoff.Format(timeFormat), err)
 	}
@@ -46,50 +63,46 @@ func (r *Repository) DeletePlanGenerationsFinishedOlderThanTx(tx *sql.Tx, cutoff
 	return n, nil
 }
 
-// RunRetentionCleanup deletes old rows in order: scan_sessions (cutoff) ->
-// plan_generations (terminal session ledger, generationCutoff). It opens a
-// transaction, runs all deletes, and commits on success or rolls back on
-// error. The 7-day cutoff and the 30-day generation window are kept separate
-// so the idempotency-key guarantee horizon stays aligned with the
-// terminal-session purge. Workset revisions are durable aggregate history and
-// are never automatically purged.
-func (r *Repository) RunRetentionCleanup(cutoff time.Time) (CleanupStats, error) {
-	return r.RunRetentionCleanupWithCutoffs(cutoff, cutoff)
-}
-
-// RunRetentionCleanupWithCutoffs is RunRetentionCleanup with an explicit
-// generation cutoff (default: cutoff when generationCutoff zero).
-func (r *Repository) RunRetentionCleanupWithCutoffs(cutoff, generationCutoff time.Time) (CleanupStats, error) {
+// RunRetentionCleanupBatch deletes one batch of the rows retention no longer
+// keeps, in one transaction, and reports what it deleted.
+//
+// At most limit rows go per table, so a batch is bounded twice over and each
+// one is a short transaction. Batching is what lets the idle-time maintenance
+// pass hand the admission slot back to real work between batches: a single
+// unbounded delete over a large table would hold the database writer - and
+// anyone who needs it - for as long as it takes. A batch that deletes nothing
+// means both tables are clean.
+//
+// Workset revisions, plans, executions and inventory are never purged here;
+// they are durable aggregate history, not session ledgers.
+func (r *Repository) RunRetentionCleanupBatch(
+	ctx context.Context,
+	cutoff, generationCutoff time.Time,
+	limit int,
+) (CleanupStats, error) {
+	if limit <= 0 {
+		limit = RetentionBatchRows
+	}
 	if generationCutoff.IsZero() {
 		generationCutoff = cutoff
 	}
-	tx, err := r.db.Begin()
+
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CleanupStats{}, fmt.Errorf("begin retention cleanup tx: %w", err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
 
 	var stats CleanupStats
-
-	stats.DeletedScanSessions, err = r.DeleteScanSessionsOlderThanTx(tx, cutoff)
-	if err != nil {
+	if stats.DeletedScanSessions, err = deleteScanSessionsBatchTx(ctx, tx, cutoff, limit); err != nil {
 		return CleanupStats{}, err
 	}
-
-	stats.DeletedGenerations, err = r.DeletePlanGenerationsFinishedOlderThanTx(tx, generationCutoff)
-	if err != nil {
+	if stats.DeletedGenerations, err = deletePlanGenerationsBatchTx(ctx, tx, generationCutoff, limit); err != nil {
 		return CleanupStats{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return CleanupStats{}, fmt.Errorf("commit retention cleanup tx: %w", err)
 	}
-	committed = true
-
 	return stats, nil
 }

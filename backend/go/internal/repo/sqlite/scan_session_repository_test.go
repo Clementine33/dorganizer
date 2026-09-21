@@ -92,7 +92,7 @@ func TestRepository_CreateAndGetScanSession_ScopePathNullableRoundTrip(t *testin
 }
 
 //nolint:funlen // long lifecycle scenario
-func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.T) {
+func TestRepository_RunRetentionCleanupBatch_ScanEligibility(t *testing.T) {
 	repo := newTestRepository(t)
 
 	cutoff := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -176,22 +176,14 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		t.Fatalf("patch coalesce-precedence finished_at: %v", err)
 	}
 
-	// Run delete within a transaction
-	tx, err := repo.db.Begin()
+	// Run one retention batch
+	stats, err := repo.RunRetentionCleanupBatch(t.Context(), cutoff, cutoff, 0)
 	if err != nil {
-		t.Fatalf("begin tx: %v", err)
-	}
-	deleted, err := repo.DeleteScanSessionsOlderThanTx(tx, cutoff)
-	if err != nil {
-		tx.Rollback()
-		t.Fatalf("DeleteScanSessionsOlderThanTx: %v", err)
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		t.Fatalf("commit: %v", commitErr)
+		t.Fatalf("RunRetentionCleanupBatch: %v", err)
 	}
 
-	if deleted != 1 {
-		t.Errorf("deleted count = %d, want 1 (only the terminal row past the cutoff)", deleted)
+	if stats.DeletedScanSessions != 1 {
+		t.Errorf("DeletedScanSessions = %d, want 1 (only the terminal row past the cutoff)", stats.DeletedScanSessions)
 	}
 
 	// Verify the retained scans remain: the newer one, the coalesce-precedence
