@@ -44,6 +44,59 @@ func TestStaleValidationIgnoresNonAudioChanges(t *testing.T) {
 	}
 }
 
+// TestARootOwnsExactlyItsOwnSubtree pins the path rule the inventory collection
+// follows: a member folder is matched at a slash boundary, case-sensitively,
+// with wildcard characters read literally. SQLite's LIKE is ASCII
+// case-insensitive and treats % and _ as patterns, so collecting a root with it
+// would hand /music/Rock the audio of /music/rock and let a folder named
+// "100% hits" absorb a sibling's files — and, for the same reason, would not
+// use the path index.
+func TestARootOwnsExactlyItsOwnSubtree(t *testing.T) {
+	f := newFixture(t)
+	ids := f.standardLibrary("Rock", "rock", "a", "ab", "100% hits", "1000 hits", "under_score")
+	f.insertAudioEntry("/music/rock/01.mp3", "/music/rock", 1024, 1000)
+	f.insertAudioEntry("/music/ab/01.mp3", "/music/ab", 1024, 1000)
+	f.insertAudioEntry("/music/1000 hits/01.mp3", "/music/1000 hits", 1024, 1000)
+	f.insertAudioEntry("/music/under_score/01.mp3", "/music/under_score", 1024, 1000)
+	ws := f.createCurrent("范围精确", ids...)
+
+	gen := f.runGeneration(ws.WorksetID, f.operation(ws.WorksetID).Version)
+	if gen.Status != "completed" {
+		t.Fatalf("generation: %+v", gen)
+	}
+	planID := f.operation(ws.WorksetID).CurrentRevision.PlanID
+
+	for _, root := range []string{
+		"/music/rock",
+		"/music/ab",
+		"/music/1000 hits",
+		"/music/under_score",
+	} {
+		var count int
+		f.queryInt(
+			&count,
+			"SELECT COUNT(*) FROM plan_roots WHERE plan_id = ? AND root_path = ? AND entry_count > 0",
+			planID,
+			root,
+		)
+		if count != 1 {
+			t.Errorf("%s must own its own audio, entry_count>0 matched %d", root, count)
+		}
+	}
+	for _, root := range []string{"/music/Rock", "/music/a", "/music/100% hits"} {
+		var count int
+		f.queryInt(
+			&count,
+			"SELECT COUNT(*) FROM plan_roots WHERE plan_id = ? AND root_path = ? AND entry_count > 0",
+			planID,
+			root,
+		)
+		if count != 0 {
+			t.Errorf("%s absorbed another folder's audio", root)
+		}
+	}
+}
+
 // TestMissingRootIsBlockedButNotStaleUntilAudioAppears covers the missing-root
 // accounting: a member folder absent from the inventory is a blocked fact of
 // the revision, not a stale input, until audio actually appears there.

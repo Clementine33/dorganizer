@@ -615,7 +615,10 @@ const schemaIndexesDDL = `
 CREATE INDEX IF NOT EXISTS idx_entries_root_path ON entries(root_path);
 CREATE INDEX IF NOT EXISTS idx_entries_parent_path ON entries(parent_path);
 CREATE INDEX IF NOT EXISTS idx_entries_path_posix ON entries(path_posix);
-CREATE INDEX IF NOT EXISTS idx_entries_path ON entries(path);
+-- entries.path is the primary key, so its unique index already serves every
+-- equality and range lookup; the duplicate on the same column only added a
+-- second index to maintain on every inventory write.
+DROP INDEX IF EXISTS idx_entries_path;
 CREATE INDEX IF NOT EXISTS idx_entries_root_dir_path ON entries(root_path, is_dir, path);
 
 -- Staging indexes
@@ -629,8 +632,6 @@ CREATE INDEX IF NOT EXISTS idx_scan_sessions_status ON scan_sessions(status);
 -- Plan indexes
 CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
--- idx_plans_library_created is created by migratePlansLibrarySchema after the
--- library_id column exists on both new and legacy schemas.
 CREATE INDEX IF NOT EXISTS idx_conversion_steps_plan ON conversion_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_roots_plan ON plan_roots(plan_id);
 CREATE INDEX IF NOT EXISTS idx_conversion_components_plan ON conversion_components(plan_id);

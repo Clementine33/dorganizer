@@ -34,13 +34,18 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
 func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
 	rootPosix := normalizeScopePath(root)
 	prefix := strings.TrimSuffix(rootPosix, "/")
-	likePrefix := escapeLikePattern(prefix)
+	// The subtree is matched as a binary range rather than with LIKE, for the
+	// two reasons repo_library.go's subtreeFilePredicateSQL gives: SQLite's LIKE
+	// is ASCII case-insensitive, which would conflate case-distinct POSIX
+	// siblings and read a name holding % or _ as a pattern, and it cannot use
+	// the path index. Everything under a directory sorts between prefix+"/" and
+	// prefix+"0" ("0" is the next character after "/").
 	rows, err := repo.DB().Query(`
 		SELECT e.path, COALESCE(e.size, 0), COALESCE(e.mtime, 0), COALESCE(e.bitrate, 0), COALESCE(e.format, ''),
 		       g.codec, g.bitrate_kbps, g.mode, g.size, g.mtime
 		FROM entries e LEFT JOIN generation_records g ON g.path = e.path
-		WHERE e.is_dir = 0 AND (e.path = ? OR e.path LIKE ? ESCAPE '\')
-	`, rootPosix, likePrefix+"/%")
+		WHERE e.is_dir = 0 AND (e.path = ? OR (e.path >= ? AND e.path < ?))
+	`, rootPosix, prefix+"/", prefix+"0")
 	if err != nil {
 		return nil, err
 	}

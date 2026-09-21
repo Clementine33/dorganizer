@@ -199,7 +199,9 @@ func (f *execFixture) writeAudio(member, name string, content []byte) (string, i
 }
 
 // liveFingerprint recomputes a root's inventory fingerprint from the entries
-// table with the planner's own collection rules.
+// table to seed a frozen root. It matches the subtree with LIKE, which agrees
+// with the collection's binary range on the fixtures' lowercase temp paths (and
+// would diverge on case-distinct siblings, which no fixture seeds here).
 func (f *execFixture) liveFingerprint(root string) (string, int) {
 	f.t.Helper()
 	rows, err := f.repo.DB().Query(`
@@ -1019,5 +1021,27 @@ func TestExecutionSubscriptionSnapshotAndTerminalEvent(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("no terminal event; seen %v", names)
 		}
+	}
+}
+
+// TestARootWithATrailingSlashStillOwnsItsSubtree pins the scope-path
+// normalization the collection does before matching paths: a root persisted as
+// ".../albumA/" descends into the same subtree as ".../albumA", so the session
+// does not refuse its own plan as changed input. A collection that matched the
+// spelled path as-is would find nothing under the doubled boundary and fail
+// this session closed.
+func TestARootWithATrailingSlashStillOwnsItsSubtree(t *testing.T) {
+	f, _ := poolFixture(t, 1, poolUnit(0))
+	f.seedRevision("plan-slash", poolComponent("u0", "albumA"))
+	if _, err := f.repo.DB().Exec(
+		"UPDATE plan_roots SET root_path = root_path || '/' WHERE plan_id = ?",
+		"plan-slash",
+	); err != nil {
+		t.Fatalf("seed trailing slash: %v", err)
+	}
+
+	started := f.mustStart("plan-slash", "k-slash")
+	if done := f.waitTerminal(started.ExecutionID); done.Status != "succeeded" {
+		t.Fatalf("status = %s (%s: %s)", done.Status, done.ErrorCode, done.ErrorMessage)
 	}
 }

@@ -143,6 +143,48 @@ func TestNewRepository_CreatesEntriesRootDirPathIndex(t *testing.T) {
 	}
 }
 
+func TestEntriesPathLookupIsIndexedWithoutADuplicateIndex(t *testing.T) {
+	repo := newTestRepository(t)
+
+	var count int
+	if err := repo.db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_entries_path'",
+	).Scan(&count); err != nil {
+		t.Fatalf("query sqlite_master: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("idx_entries_path duplicates the primary key's own index, got %d", count)
+	}
+
+	rows, err := repo.db.Query(
+		"EXPLAIN QUERY PLAN SELECT path FROM entries WHERE path = ? OR (path >= ? AND path < ?)",
+		"/music/a", "/music/a/", "/music/a0",
+	)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if len(plan) == 0 {
+		t.Fatal("no query plan")
+	}
+	// The index that serves this is whichever one SQLite built for the primary
+	// key; what matters is that the lookup searches it instead of scanning.
+	for _, step := range plan {
+		if strings.HasPrefix(step, "SCAN") {
+			t.Fatalf("path lookup scans the table: %v", plan)
+		}
+	}
+}
+
 func TestRepoSchemaInit(t *testing.T) {
 	repo := newTestRepository(t)
 
