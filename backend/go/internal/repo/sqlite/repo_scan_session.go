@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"time"
 )
 
 // ==================== Scan Session Methods ====================
@@ -59,6 +60,26 @@ func (r *Repository) UpdateScanSessionStatus(sessionID, status, errorCode, error
 		UPDATE scan_sessions SET status = ?, error_code = ?, error_message = ?, finished_at = datetime('now') WHERE session_id = ?
 	`, status, errorCode, errorMessage, sessionID)
 	return err
+}
+
+// InterruptStaleScanSessions marks queued/running/merging scan sessions
+// interrupted. Scans run in-process and only ever write those three states
+// while they are running, so a non-terminal row found at startup belongs to a
+// process that died without finalizing it.
+//
+// This is what makes retention's terminal-only rule safe. Without it a crashed
+// row would stay non-terminal forever: never eligible for cleanup, and
+// HasActiveScanForRoot would keep refusing planning and execution against its
+// root.
+func (r *Repository) InterruptStaleScanSessions() (int64, error) {
+	result, err := r.db.Exec(`
+		UPDATE scan_sessions SET status = 'interrupted', error_code = 'INTERRUPTED', finished_at = ?
+		WHERE status IN ('queued','running','merging')
+	`, time.Now().Format(timeFormat))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // ListScanSessionsByRoot returns scan sessions for a root.

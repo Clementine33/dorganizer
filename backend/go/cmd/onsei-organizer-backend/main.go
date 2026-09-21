@@ -254,12 +254,20 @@ func runServer(
 }
 
 // interruptStaleSessions marks leftover queued/running sessions of a previous
-// process as interrupted (releasing generation idempotency keys). Execution
-// sessions keep their partial report; nothing is resumed, re-encoded or
-// re-deleted.
+// process as interrupted (releasing generation idempotency keys). Scan sessions
+// are finalized here as well: their non-terminal states make
+// HasActiveScanForRoot refuse planning and execution against the root, and
+// retention deletes terminal rows only, so a leftover row would otherwise never
+// clear. Execution sessions keep their partial report; nothing is resumed,
+// re-encoded or re-deleted.
 func interruptStaleSessions(repo *sqlite.Repository) {
 	if err := repo.InterruptStaleGenerations(); err != nil {
 		log.Printf("interrupt stale generations failed: %v", err)
+	}
+	if scans, err := repo.InterruptStaleScanSessions(); err != nil {
+		log.Printf("interrupt stale scan sessions failed: %v", err)
+	} else if scans > 0 {
+		log.Printf("interrupted %d stale scan session(s)", scans)
 	}
 	n, err := repo.InterruptStaleExecutions()
 	if err != nil {

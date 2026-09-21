@@ -123,7 +123,10 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		t.Fatalf("patch finished_at: %v", err)
 	}
 
-	// 2) Running scan with old started_at → should be deleted (COALESCE(finished_at, started_at) falls back to started_at)
+	// 2) Running scan with old started_at → must be RETAINED: retention deletes
+	// terminal rows only, so age alone never purges a row a scan may still own.
+	// A row left behind by a dead process is finalized by
+	// InterruptStaleScanSessions at startup, not deleted here.
 	runningOld := &ScanSession{
 		SessionID: "scan-running-old",
 		RootPath:  "/music",
@@ -187,17 +190,18 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		t.Fatalf("commit: %v", commitErr)
 	}
 
-	if deleted != 2 {
-		t.Errorf("deleted count = %d, want 2", deleted)
+	if deleted != 1 {
+		t.Errorf("deleted count = %d, want 1 (only the terminal row past the cutoff)", deleted)
 	}
 
-	// Verify the two retained scans remain
+	// Verify the retained scans remain: the newer one, the coalesce-precedence
+	// one, and the old running one that is not terminal.
 	var count int
 	if countErr := repo.db.QueryRow("SELECT COUNT(*) FROM scan_sessions").Scan(&count); countErr != nil {
 		t.Fatalf("count scan_sessions: %v", countErr)
 	}
-	if count != 2 {
-		t.Fatalf("scan_sessions remaining = %d, want 2", count)
+	if count != 3 {
+		t.Fatalf("scan_sessions remaining = %d, want 3", count)
 	}
 
 	rows, err := repo.db.Query("SELECT session_id FROM scan_sessions ORDER BY session_id")
@@ -218,7 +222,7 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		t.Fatalf("rows iteration: %v", err)
 	}
 
-	wantRetained := map[string]bool{"scan-new": true, "scan-coalesce-precedence": true}
+	wantRetained := map[string]bool{"scan-new": true, "scan-coalesce-precedence": true, "scan-running-old": true}
 	for _, id := range retained {
 		if !wantRetained[id] {
 			t.Errorf("unexpected retained scan %q", id)
@@ -239,5 +243,81 @@ func TestRepository_DeleteScanSessionsOlderThanTx_COALESCEFinishedAt(t *testing.
 		t.Error(
 			"scan-coalesce-precedence row was deleted; COALESCE(finished_at, started_at) should have chosen finished_at (new) over started_at (old)",
 		)
+	}
+}
+
+func TestRepository_InterruptStaleScanSessions(t *testing.T) {
+	repo := newTestRepository(t)
+
+	// A scan only ever writes these three states while it is running, so at
+	// startup they all belong to a process that died without finalizing them.
+	for _, status := range []string{"queued", "running", "merging"} {
+		session := &ScanSession{
+			SessionID: "scan-" + status,
+			RootPath:  "/music",
+			Kind:      "full",
+			Status:    status,
+			StartedAt: time.Now(),
+		}
+		if err := repo.CreateScanSession(session); err != nil {
+			t.Fatalf("create %s scan: %v", status, err)
+		}
+	}
+
+	done := &ScanSession{
+		SessionID: "scan-done",
+		RootPath:  "/music",
+		Kind:      "full",
+		Status:    "running",
+		StartedAt: time.Now(),
+	}
+	if err := repo.CreateScanSession(done); err != nil {
+		t.Fatalf("create completed scan: %v", err)
+	}
+	if err := repo.UpdateScanSessionStatus("scan-done", "completed", "", ""); err != nil {
+		t.Fatalf("complete scan: %v", err)
+	}
+
+	interrupted, err := repo.InterruptStaleScanSessions()
+	if err != nil {
+		t.Fatalf("InterruptStaleScanSessions: %v", err)
+	}
+	if interrupted != 3 {
+		t.Errorf("interrupted = %d, want 3", interrupted)
+	}
+
+	for _, status := range []string{"queued", "running", "merging"} {
+		session, fetchErr := repo.GetScanSession("scan-" + status)
+		if fetchErr != nil {
+			t.Fatalf("get %s scan: %v", status, fetchErr)
+		}
+		if session.Status != "interrupted" {
+			t.Errorf("%s scan status = %q, want interrupted", status, session.Status)
+		}
+		if session.ErrorCode != "INTERRUPTED" {
+			t.Errorf("%s scan error_code = %q, want INTERRUPTED", status, session.ErrorCode)
+		}
+		// finished_at is what retention judges the row by; without it the row
+		// would still be aged by started_at.
+		if session.FinishedAt.IsZero() {
+			t.Errorf("%s scan finished_at not set", status)
+		}
+	}
+
+	completed, err := repo.GetScanSession("scan-done")
+	if err != nil {
+		t.Fatalf("get completed scan: %v", err)
+	}
+	if completed.Status != "completed" {
+		t.Errorf("terminal scan status = %q, want completed (unchanged)", completed.Status)
+	}
+
+	// Idempotent: a later startup finds nothing left to finalize.
+	again, err := repo.InterruptStaleScanSessions()
+	if err != nil {
+		t.Fatalf("second InterruptStaleScanSessions: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("second pass interrupted = %d, want 0", again)
 	}
 }

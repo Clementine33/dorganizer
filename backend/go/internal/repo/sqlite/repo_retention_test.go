@@ -58,3 +58,62 @@ func TestRepository_RunRetentionCleanup_DeletesOnlyOlderThanCutoff(t *testing.T)
 		t.Errorf("retained scan session = %q, want scan-new", retainedSession)
 	}
 }
+
+// The startup interrupt is what makes a crashed scan row reachable: retention
+// deletes terminal rows only, so a row left non-terminal by a dead process
+// would otherwise stay forever. Finalizing it also starts its clock: the row
+// ages from the moment it was interrupted, never from its long-past
+// started_at, so a crash is never deleted the instant it is noticed.
+func TestRepository_RunRetentionCleanup_InterruptedScanBecomesEligible(t *testing.T) {
+	repo := newTestRepository(t)
+
+	cutoff := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	crashed := &ScanSession{
+		SessionID: "scan-crashed",
+		RootPath:  "/music",
+		Kind:      "full",
+		Status:    "running",
+		StartedAt: cutoff.Add(-24 * time.Hour),
+	}
+	if err := repo.CreateScanSession(crashed); err != nil {
+		t.Fatalf("create crashed scan session: %v", err)
+	}
+
+	stats, err := repo.RunRetentionCleanup(cutoff)
+	if err != nil {
+		t.Fatalf("RunRetentionCleanup: %v", err)
+	}
+	if stats.DeletedScanSessions != 0 {
+		t.Errorf("DeletedScanSessions = %d, want 0 while the row is non-terminal", stats.DeletedScanSessions)
+	}
+
+	interrupted, err := repo.InterruptStaleScanSessions()
+	if err != nil {
+		t.Fatalf("InterruptStaleScanSessions: %v", err)
+	}
+	if interrupted != 1 {
+		t.Fatalf("interrupted = %d, want 1", interrupted)
+	}
+
+	stats, err = repo.RunRetentionCleanup(cutoff)
+	if err != nil {
+		t.Fatalf("RunRetentionCleanup after interrupt: %v", err)
+	}
+	if stats.DeletedScanSessions != 0 {
+		t.Errorf(
+			"DeletedScanSessions = %d, want 0: the row ages from the interrupt, not from started_at",
+			stats.DeletedScanSessions,
+		)
+	}
+
+	stats, err = repo.RunRetentionCleanup(time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("RunRetentionCleanup past the interrupt: %v", err)
+	}
+	if stats.DeletedScanSessions != 1 {
+		t.Errorf(
+			"DeletedScanSessions = %d, want 1 once the interrupted row is past the cutoff",
+			stats.DeletedScanSessions,
+		)
+	}
+}

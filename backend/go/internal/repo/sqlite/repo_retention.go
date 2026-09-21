@@ -8,10 +8,19 @@ import (
 
 // ==================== Retention Cleanup ====================
 
-// DeleteScanSessionsOlderThanTx deletes scan_sessions rows where COALESCE(finished_at, started_at) < cutoff within tx.
+// DeleteScanSessionsOlderThanTx deletes terminal scan_sessions rows whose
+// COALESCE(finished_at, started_at) is older than cutoff, within tx.
+//
+// Only terminal rows are eligible. A queued/running/merging row belongs to a
+// scan that is still in flight (or to one whose process died mid-scan); the
+// database is not the authority on which, so deleting it on age alone would
+// pull a session out from under a running scanner. HasActiveScanForRoot reads
+// these rows to refuse planning against a root, so a stale non-terminal row is
+// finalized once at startup (InterruptStaleScanSessions) and becomes eligible
+// from the next pass on.
 func (r *Repository) DeleteScanSessionsOlderThanTx(tx *sql.Tx, cutoff time.Time) (int64, error) {
 	result, err := tx.Exec(
-		"DELETE FROM scan_sessions WHERE julianday(COALESCE(finished_at, started_at)) < julianday(?)",
+		"DELETE FROM scan_sessions WHERE status IN ('completed','failed','canceled','interrupted') AND julianday(COALESCE(finished_at, started_at)) < julianday(?)",
 		cutoff.Format(timeFormat),
 	)
 	if err != nil {
