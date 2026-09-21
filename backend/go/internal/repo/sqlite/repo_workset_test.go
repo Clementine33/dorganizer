@@ -163,6 +163,65 @@ func TestReplaceCurrentWorksetIdempotency(t *testing.T) {
 	}
 }
 
+// TestReplaceCurrentWorksetCascadesToChildren pins the foreign-key cascade the
+// replacement depends on: the replaced record's members, operations, drafts,
+// generations and executions go with the record row. A single-connection test
+// cannot observe the connection-scoped part of that (the pool hands back the
+// connection the pragma ran on); TestConnectionPragmasAreAppliedToEveryConnection
+// covers that half.
+func TestReplaceCurrentWorksetCascadesToChildren(t *testing.T) {
+	repo := newTestRepository(t)
+	insertLibrary(t, repo, "lib-1")
+
+	replaced, members, op, draft := newOperationFixture(t, "lib-1", "cascade")
+	if err := repo.ReplaceCurrentWorkset(replaced, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset: %v", err)
+	}
+	seedGeneration(t, repo, "gen-old", replaced.ID)
+	now := time.Now().Format(timeFormat)
+	// A record with a live session is refused, so the seeded session is terminal.
+	if _, err := repo.db.Exec(
+		"UPDATE plan_generations SET status = 'completed' WHERE generation_id = 'gen-old'",
+	); err != nil {
+		t.Fatalf("complete seeded generation: %v", err)
+	}
+	if _, err := repo.db.Exec(`
+		INSERT INTO plan_executions
+			(execution_id, workset_id, operation_type, plan_id, status, created_at, updated_at)
+		VALUES ('exec-old', ?, 'conversion', 'plan-old', 'succeeded', ?, ?)
+	`, replaced.ID, now, now); err != nil {
+		t.Fatalf("seed execution: %v", err)
+	}
+
+	replacement, members2, op2, draft2 := newOperationFixture(t, "lib-1", "cascade2")
+	if err := repo.ReplaceCurrentWorkset(
+		replacement,
+		members2,
+		[]Operation{op2},
+		[]OperationDraft{draft2},
+		replaced.ID,
+	); err != nil {
+		t.Fatalf("ReplaceCurrentWorkset(replacement): %v", err)
+	}
+
+	for _, table := range []string{
+		"workset_members",
+		"workset_operations",
+		"workset_operation_drafts",
+		"plan_generations",
+		"plan_executions",
+	} {
+		var count int
+		if err := repo.db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE workset_id = ?", replaced.ID).
+			Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Errorf("%s kept %d row(s) of the replaced record", table, count)
+		}
+	}
+}
+
 func TestClearExpiredWorksetIdemKey(t *testing.T) {
 	repo := newTestRepository(t)
 	insertLibrary(t, repo, "lib-1")

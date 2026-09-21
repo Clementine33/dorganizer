@@ -91,25 +91,27 @@ const schemaVersion = "2"
 // ONSEI_DATA_DIR at a new directory.
 var ErrIncompatibleDatabase = errors.New("incompatible database")
 
+// connectionPragmas is appended to the database path to configure every
+// connection the driver opens. See NewRepository for why these are connection
+// parameters and not one-shot PRAGMA statements.
+const connectionPragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+
+// NewRepository opens (creating it when absent) the repository database at
+// dbPath and refuses one that belongs to another schema generation.
+//
+// dbPath is a filesystem path, or ":memory:", and never a DSN: the connection
+// string is assembled here. The driver splits it at the first "?" regardless,
+// so a path containing one was never openable; a caller that ever needs to pass
+// its own query parameters must merge them with connectionPragmas instead of
+// appending a second "?".
 func NewRepository(dbPath string) (*Repository, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// foreign_keys and busy_timeout are connection-scoped: applied with a
+	// one-shot PRAGMA statement they only reached whichever pooled connection
+	// happened to run it, so cascades silently did nothing elsewhere and other
+	// connections gave up on the first lock instead of waiting. The driver
+	// applies DSN _pragma parameters to every connection it opens.
+	db, err := sql.Open("sqlite", dbPath+connectionPragmas)
 	if err != nil {
-		return nil, err
-	}
-
-	// Enable foreign key enforcement
-	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
-		db.Close()
 		return nil, err
 	}
 

@@ -74,6 +74,11 @@ jobs:
           cache_key_prefix: mise-windows
       - name: Build Windows backend binary
         run: task build:go:windows-x64
+      # Compiling for Windows does not prove the DSN opens a database there:
+      # the connection pragmas are built into the path, so this runs for real.
+      - name: Repository connection pragmas (Windows runtime, blocking)
+        working-directory: backend/go
+        run: go test ./internal/repo/sqlite -run TestConnectionPragmasAreAppliedToEveryConnection -count=1
       - name: Install Playwright Chromium
         run: pnpm -C frontend/web exec playwright install chromium
       - name: Playwright e2e smoke (optional, non-blocking)

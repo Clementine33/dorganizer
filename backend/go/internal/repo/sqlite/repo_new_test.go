@@ -1,6 +1,7 @@
 package sqlite //nolint:testpackage // white-box tests exercise unexported internals
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -91,6 +92,40 @@ func TestNewRepository(t *testing.T) {
 			t.Fatalf("expected WAL journal mode, got %q", mode)
 		}
 	})
+}
+
+func TestConnectionPragmasAreAppliedToEveryConnection(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := t.Context()
+
+	// Two connections held at once: the pragmas are connection-scoped, so a
+	// second one is exactly what a one-shot PRAGMA statement fails to configure.
+	first, err := repo.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("hold first connection: %v", err)
+	}
+	defer first.Close()
+	second, err := repo.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("hold second connection: %v", err)
+	}
+	defer second.Close()
+
+	for name, conn := range map[string]*sql.Conn{"first": first, "second": second} {
+		var foreignKeys, busyTimeout int
+		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+			t.Fatalf("%s connection: read foreign_keys: %v", name, err)
+		}
+		if foreignKeys != 1 {
+			t.Errorf("%s connection: foreign_keys = %d, want 1", name, foreignKeys)
+		}
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+			t.Fatalf("%s connection: read busy_timeout: %v", name, err)
+		}
+		if busyTimeout != 5000 {
+			t.Errorf("%s connection: busy_timeout = %d, want 5000", name, busyTimeout)
+		}
+	}
 }
 
 func TestNewRepository_CreatesEntriesRootDirPathIndex(t *testing.T) {
