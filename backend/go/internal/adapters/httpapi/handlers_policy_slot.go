@@ -2,24 +2,19 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
-	"strings"
-	"unicode/utf8"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
-
-// sqlitePolicySlot aliases the repo row type so the mapper stays terse.
-type sqlitePolicySlot = sqlite.PolicySlotRow
 
 // ==================== policy slots ====================
 //
 // The three fixed global policy slots. Slots are reusable templates only:
 // applying one copies its policy into a workset draft as an inline snapshot,
-// so slot edits never change existing drafts or revisions.
+// so slot edits never change existing drafts or revisions. What a slot may
+// contain is the conversion catalog's business; this file is the transport.
 
 type policySlotResponse struct {
 	Slot      int             `json:"slot"`
@@ -38,7 +33,7 @@ type policySlotPutRequest struct {
 }
 
 // toPolicySlotResponse marshals one slot; an empty slot carries policy:null.
-func toPolicySlotResponse(slot *sqlitePolicySlot) policySlotResponse {
+func toPolicySlotResponse(slot *conversion.PolicySlot) policySlotResponse {
 	out := policySlotResponse{Slot: slot.SlotIndex, Name: slot.Name}
 	if slot.PolicyJSON != "" {
 		out.Policy = json.RawMessage(slot.PolicyJSON)
@@ -53,7 +48,7 @@ func toPolicySlotResponse(slot *sqlitePolicySlot) policySlotResponse {
 
 // listPolicySlots handles GET /api/v1/policy-slots.
 func (s *Server) listPolicySlots(w http.ResponseWriter, _ *http.Request) {
-	slots, err := s.deps.Repo.GetPolicySlots()
+	slots, err := s.deps.Catalog.Slots()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load policy slots")
 		return
@@ -65,12 +60,12 @@ func (s *Server) listPolicySlots(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, policySlotListResponse{Slots: out})
 }
 
-// putPolicySlot handles PUT /api/v1/policy-slots/{slot}. The request must
-// carry a non-empty name (1..120 runes) and a fully valid policy; Go
-// classifier resolution is the validation authority.
+// putPolicySlot handles PUT /api/v1/policy-slots/{slot}. The catalog checks the
+// slot, the name and the policy; what it refuses to store is a bad request, and
+// anything else is a storage failure.
 func (s *Server) putPolicySlot(w http.ResponseWriter, r *http.Request) {
 	slotIndex, err := strconv.Atoi(r.PathValue("slot"))
-	if err != nil || slotIndex < 1 || slotIndex > 3 {
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_SLOT", "policy slot must be 1, 2 or 3")
 		return
 	}
@@ -79,45 +74,16 @@ func (s *Server) putPolicySlot(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, decodeErr, "invalid policy slot payload")
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" || utf8.RuneCountInString(name) > 120 {
-		writeError(w, http.StatusBadRequest, "INVALID_SLOT_NAME", "slot name must be 1-120 characters")
-		return
-	}
-	if len(req.Policy) == 0 {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", "policy is required")
-		return
-	}
-	policy, err := parseInlinePolicy(req.Policy)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", err.Error())
-		return
-	}
-	if validateErr := reconcile.ValidatePolicy(policy); validateErr != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", validateErr.Error())
-		return
-	}
-	if _, resolveErr := reconcile.ResolveClassifier(policy.ClassifierTags); resolveErr != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_POLICY", resolveErr.Error())
-		return
-	}
-	if updateErr := s.deps.Repo.UpdatePolicySlot(slotIndex, name, string(req.Policy)); updateErr != nil {
+	slot, putErr := s.deps.Catalog.PutSlot(slotIndex, req.Name, req.Policy)
+	if putErr != nil {
+		// A refusal carries the catalog's own code and message; anything else
+		// came from storage and says nothing the caller can act on.
+		if _, refused := workset.AsError(putErr); refused {
+			writeWorksetError(w, putErr)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update policy slot")
 		return
 	}
-	slot, err := s.deps.Repo.GetPolicySlot(slotIndex)
-	if err != nil || slot == nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load policy slot")
-		return
-	}
 	writeJSON(w, http.StatusOK, toPolicySlotResponse(slot))
-}
-
-// parseInlinePolicy decodes a raw JSON policy into the reconcile shape.
-func parseInlinePolicy(raw json.RawMessage) (reconcile.Policy, error) {
-	var policy reconcile.Policy
-	if err := json.Unmarshal(raw, &policy); err != nil {
-		return policy, errors.New("inline policy is not valid JSON")
-	}
-	return policy, nil
 }

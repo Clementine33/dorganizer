@@ -4,19 +4,13 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/conversion"
 )
 
-// ClassifierTagRow is one user-added classifier tag stored in the global library.
-type ClassifierTagRow struct {
-	ID            int64
-	Tag           string
-	NormalizedTag string
-	CreatedAt     time.Time
-}
-
-// GetClassifierTags returns all custom tags from the global library ordered
+// Tags returns all custom tags from the global library ordered
 // alphabetically by tag (case-insensitive).
-func (r *Repository) GetClassifierTags() ([]ClassifierTagRow, error) {
+func (r *Repository) Tags() ([]conversion.ClassifierTag, error) {
 	rows, err := r.db.Query(`
 		SELECT id, tag, normalized_tag, COALESCE(created_at, '')
 		FROM classifier_tag_library
@@ -27,9 +21,9 @@ func (r *Repository) GetClassifierTags() ([]ClassifierTagRow, error) {
 	}
 	defer rows.Close()
 
-	var out []ClassifierTagRow
+	var out []conversion.ClassifierTag
 	for rows.Next() {
-		var row ClassifierTagRow
+		var row conversion.ClassifierTag
 		var createdAt string
 		if err := rows.Scan(&row.ID, &row.Tag, &row.NormalizedTag, &createdAt); err != nil {
 			return nil, err
@@ -43,9 +37,9 @@ func (r *Repository) GetClassifierTags() ([]ClassifierTagRow, error) {
 	return out, nil
 }
 
-// AddClassifierTag adds a single custom tag to the library idempotently.
+// AddTag adds a single custom tag to the library idempotently.
 // If the tag (case-insensitively trimmed) already exists, it is a no-op.
-func (r *Repository) AddClassifierTag(tag string) (*ClassifierTagRow, error) {
+func (r *Repository) AddTag(tag string) (*conversion.ClassifierTag, error) {
 	trimmed := strings.TrimSpace(tag)
 	if trimmed == "" {
 		return nil, errors.New("tag cannot be empty")
@@ -62,7 +56,7 @@ func (r *Repository) AddClassifierTag(tag string) (*ClassifierTagRow, error) {
 		return nil, err
 	}
 
-	var row ClassifierTagRow
+	var row conversion.ClassifierTag
 	var createdAt string
 	err = r.db.QueryRow(`
 		SELECT id, tag, normalized_tag, COALESCE(created_at, '')
@@ -76,8 +70,8 @@ func (r *Repository) AddClassifierTag(tag string) (*ClassifierTagRow, error) {
 	return &row, nil
 }
 
-// DeleteClassifierTag removes a custom tag by ID from the global library.
-func (r *Repository) DeleteClassifierTag(id int64) error {
+// DeleteTag removes a custom tag by ID from the global library.
+func (r *Repository) DeleteTag(id int64) error {
 	res, err := r.db.Exec(`DELETE FROM classifier_tag_library WHERE id = ?`, id)
 	if err != nil {
 		return err

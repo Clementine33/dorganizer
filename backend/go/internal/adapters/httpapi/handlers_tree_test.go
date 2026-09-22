@@ -130,7 +130,7 @@ func dirIDFor(t *testing.T, engine http.Handler, libID, rel string) string {
 // navigation identity the page addresses it by.
 func TestListLibraryDirs(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, root, "albumA")
@@ -191,7 +191,7 @@ func TestListLibraryDirs(t *testing.T) {
 
 func TestMemberTree(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, root, "albumA")
@@ -292,7 +292,7 @@ func TestMemberTree(t *testing.T) {
 // request before any lookup happens (ADR 0003 §4).
 func TestMemberTreeRefusals(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 
 	libA, rootA := treeLibrary(t, engine, repo, "Music")
 	libB, _ := treeLibrary(t, engine, repo, "Other")
@@ -405,8 +405,8 @@ func (f *fakeScanService) RefreshMember(_ context.Context, folderPath, _ string)
 func TestRefreshMemberTree(t *testing.T) {
 	var repo *sqlite.Repository
 	scan := &fakeScanService{}
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
 		d.Inventory = scan
 	})
 
@@ -456,8 +456,8 @@ func TestRefreshMemberTreeFailureIsReported(t *testing.T) {
 	scan := &fakeScanService{err: inventory.NewError(
 		inventory.ErrKindInternal, "SCAN_FAILED", "scan blew up", nil,
 	)}
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
 		d.Inventory = scan
 	})
 

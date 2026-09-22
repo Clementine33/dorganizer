@@ -3,6 +3,7 @@ package conversion //nolint:testpackage // white-box tests exercise unexported i
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
@@ -52,101 +52,80 @@ func TestSelectScopedProbeCandidates_OnlyScopedMissingMP3AndAAC(t *testing.T) {
 	}
 }
 
-func TestEnrichMissing_OnlyPersistsScopedEntries(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "onsei-test-analyze-bitrate-scope-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	repo, err := sqlite.NewRepository(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("failed to create repo: %v", err)
-	}
-	defer repo.Close()
+// TestEnrichMissing_HandsOnlyScopedEntriesToTheInventory pins what the analyzer
+// persists: exactly the entries it was handed and probed, each with the rate it
+// measured, in one call carrying the batch option through.
+func TestEnrichMissing_HandsOnlyScopedEntriesToTheInventory(t *testing.T) {
+	tmpDir := t.TempDir()
 
 	const scopedTotal = 120
 	scopedEntries := make([]reconcile.AudioEntry, 0, scopedTotal)
-
+	wantPaths := make([]string, 0, scopedTotal)
 	for i := range scopedTotal {
 		p := filepath.Join(tmpDir, fmt.Sprintf("in-scope-%03d.mp3", i))
 		writeTestMP3Frame(t, p)
 		pPosix := filepath.ToSlash(p)
-		_, err = repo.DB().Exec(`
-			INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
-			VALUES (?, ?, 0, 1000, 'audio/mpeg', 1, ?, NULL)
-		`, pPosix, filepath.ToSlash(tmpDir), 1234567890)
-		if err != nil {
-			t.Fatalf("failed to insert scoped entry: %v", err)
-		}
 		scopedEntries = append(scopedEntries, reconcile.AudioEntry{PathPosix: pPosix, Bitrate: 0, Format: "audio/mpeg"})
+		wantPaths = append(wantPaths, pPosix)
 	}
+	// A track this root never collected: it must never be written, whatever its
+	// extension says, because the analyzer only persists what it was handed.
+	outOfScopePath := filepath.ToSlash(filepath.Join(tmpDir, "out-of-scope.mp3"))
+	writeTestMP3Frame(t, filepath.FromSlash(outOfScopePath))
 
-	outOfScopePath := filepath.Join(tmpDir, "out-of-scope.mp3")
-	writeTestMP3Frame(t, outOfScopePath)
-	_, err = repo.DB().Exec(`
-		INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
-		VALUES (?, ?, 0, 1000, 'audio/mpeg', 1, ?, NULL)
-	`, filepath.ToSlash(outOfScopePath), filepath.ToSlash(tmpDir), 1234567890)
-	if err != nil {
-		t.Fatalf("failed to insert out-of-scope entry: %v", err)
-	}
-
-	a := newBitrateAnalyzer(repo, "")
+	inv := &recordingInventory{}
+	a := newBitrateAnalyzer(inv, "")
 	if err := a.enrichMissing(context.Background(), scopedEntries, true); err != nil {
-		t.Fatalf("expected enrich scoped entries bitrate success, got %v", err)
+		t.Fatalf("enrich scoped entries: %v", err)
 	}
 
-	var scopedUpdated int
-	if err := repo.DB().
-		QueryRow("SELECT COUNT(1) FROM entries WHERE path LIKE ? AND COALESCE(bitrate,0) > 0", filepath.ToSlash(filepath.Join(tmpDir, "in-scope-"))+"%").
-		Scan(&scopedUpdated); err != nil {
-		t.Fatalf("failed to count scoped updated bitrates: %v", err)
+	written := inv.written()
+	if len(written) != scopedTotal {
+		t.Fatalf("wrote %d entries, want %d", len(written), scopedTotal)
 	}
-	if scopedUpdated != scopedTotal {
-		t.Fatalf("expected %d scoped bitrates updated, got %d", scopedTotal, scopedUpdated)
+	// Probing runs concurrently, so the writes arrive in completion order:
+	// what is pinned is which paths were written, each exactly once.
+	want := make(map[string]bool, len(wantPaths))
+	for _, path := range wantPaths {
+		want[path] = true
 	}
-
-	var outOfScopeBitrate int64
-	if err := repo.DB().
-		QueryRow("SELECT COALESCE(bitrate, 0) FROM entries WHERE path = ?", filepath.ToSlash(outOfScopePath)).
-		Scan(&outOfScopeBitrate); err != nil {
-		t.Fatalf("failed to read out-of-scope bitrate: %v", err)
+	seen := make(map[string]int, len(written))
+	for _, path := range written {
+		seen[path]++
 	}
-	if outOfScopeBitrate != 0 {
-		t.Fatalf("expected out-of-scope bitrate to remain 0, got %d", outOfScopeBitrate)
+	for path := range want {
+		if seen[path] != 1 {
+			t.Fatalf("path %q written %d times, want once", path, seen[path])
+		}
+	}
+	if seen[outOfScopePath] != 0 {
+		t.Fatalf("wrote %q, which was never handed to the analyzer", outOfScopePath)
+	}
+	for i, entry := range scopedEntries {
+		if entry.Bitrate <= 0 {
+			t.Fatalf("entry %d was handed to the writer without its probed rate", i)
+		}
+	}
+	if len(inv.batch) != 1 || !inv.batch[0] {
+		t.Fatalf("batch option reached the writer as %v, want one call with true", inv.batch)
 	}
 }
 
+// TestEnrichMissing_ReturnsPersistError keeps a failing write visible: the
+// planner must not report a successful pass over facts that were not stored.
 func TestEnrichMissing_ReturnsPersistError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "onsei-test-analyze-bitrate-enrich-error-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	repo, err := sqlite.NewRepository(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("failed to create repo: %v", err)
-	}
-	defer repo.Close()
-
+	tmpDir := t.TempDir()
 	mp3Path := filepath.Join(tmpDir, "track.mp3")
 	writeTestMP3Frame(t, mp3Path)
 
-	if _, dropErr := repo.DB().Exec("DROP TABLE entries"); dropErr != nil {
-		t.Fatalf("failed to drop entries table: %v", dropErr)
-	}
-
-	a := newBitrateAnalyzer(repo, "")
-	err = a.enrichMissing(context.Background(),
+	writeErr := errors.New("write failed")
+	inv := &recordingInventory{writeErr: writeErr}
+	a := newBitrateAnalyzer(inv, "")
+	err := a.enrichMissing(context.Background(),
 		[]reconcile.AudioEntry{{PathPosix: filepath.ToSlash(mp3Path), Bitrate: 0, Format: "audio/mpeg"}}, true,
 	)
-	if err == nil {
-		t.Fatal("expected enrich error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no such table") {
-		t.Fatalf("expected no such table error, got %v", err)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("enrich error = %v, want the writer's failure", err)
 	}
 }
 

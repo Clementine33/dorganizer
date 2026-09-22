@@ -17,7 +17,7 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	defer repo.Close()
 
 	// 1. Initial tag library is empty
-	tags, err := repo.GetClassifierTags()
+	tags, err := repo.Tags()
 	if err != nil {
 		t.Fatalf("get tags: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	}
 
 	// 2. Add tag
-	created, err := repo.AddClassifierTag("  SEなし  ")
+	created, err := repo.AddTag("  SEなし  ")
 	if err != nil {
 		t.Fatalf("add tag: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	}
 
 	// 3. Add duplicate (case-insensitive) -> idempotent
-	dup, err := repo.AddClassifierTag("seなし")
+	dup, err := repo.AddTag("seなし")
 	if err != nil {
 		t.Fatalf("add duplicate: %v", err)
 	}
@@ -44,12 +44,12 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	}
 
 	// 4. Add second tag
-	_, err = repo.AddClassifierTag("反転")
+	_, err = repo.AddTag("反転")
 	if err != nil {
 		t.Fatalf("add second tag: %v", err)
 	}
 
-	list, err := repo.GetClassifierTags()
+	list, err := repo.Tags()
 	if err != nil {
 		t.Fatalf("get list: %v", err)
 	}
@@ -58,10 +58,10 @@ func TestClassifierTagLibraryCRUD(t *testing.T) {
 	}
 
 	// 5. Delete tag
-	if deleteErr := repo.DeleteClassifierTag(created.ID); deleteErr != nil {
+	if deleteErr := repo.DeleteTag(created.ID); deleteErr != nil {
 		t.Fatalf("delete tag: %v", deleteErr)
 	}
-	listAfterDel, err := repo.GetClassifierTags()
+	listAfterDel, err := repo.Tags()
 	if err != nil {
 		t.Fatalf("get list after del: %v", err)
 	}

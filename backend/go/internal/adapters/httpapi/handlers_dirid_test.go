@@ -33,7 +33,6 @@ func serverOnDB(t *testing.T, dbPath string) (http.Handler, *sqlite.Repository) 
 		t.Fatalf("open repository: %v", err)
 	}
 	return NewServer(Dependencies{
-		Repo:        repo,
 		Library:     library.NewService(repo, nil, repo, fileops.ResolveMember),
 		CORSOrigins: []string{},
 		Version:     "dev",
@@ -130,7 +129,7 @@ func TestDirIDSurvivesARescanAndARestart(t *testing.T) {
 // the answer still names the exact stored path, byte for byte.
 func TestDirIDCoversUnicodeAndReservedCharacters(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 	libID, root := treeLibrary(t, engine, repo, "Music")
 
 	names := []string{
@@ -179,7 +178,7 @@ func TestDirIDCoversUnicodeAndReservedCharacters(t *testing.T) {
 // nothing is tracked across that gap.
 func TestDirIDFollowsThePathNotTheFilesystemEntity(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, root, "albumA")
 	original := dirIDFor(t, engine, libID, "albumA")
@@ -207,7 +206,7 @@ func TestDirIDFollowsThePathNotTheFilesystemEntity(t *testing.T) {
 // root is a different directory and the old links are gone.
 func TestDirIDStopsResolvingAfterARootChange(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 	libID, oldRoot := treeLibrary(t, engine, repo, "Music")
 	seedDir(t, repo, oldRoot, "albumA")
 	oldIdentity := dirIDFor(t, engine, libID, "albumA")
@@ -244,7 +243,7 @@ func TestDirIDStopsResolvingAfterARootChange(t *testing.T) {
 // has no identity to name, and its path-derived value is unknown.
 func TestADirectoryOutsideTheInventoryHasNoIdentity(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 	libID, root := treeLibrary(t, engine, repo, "Music")
 	if err := os.MkdirAll(filepath.Join(root, "unscanned"), 0o755); err != nil {
 		t.Fatalf("create an unscanned directory: %v", err)

@@ -6,24 +6,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // ==================== Policy slots ====================
 
-// PolicySlotRow is one of the three fixed global policy slots. PolicyJSON is
-// empty while the slot is unconfigured.
-type PolicySlotRow struct {
-	SlotIndex  int
-	Name       string
-	PolicyJSON string
-	UpdatedAt  time.Time
-}
-
-// GetPolicySlots returns slots 1..3 in order; missing rows materialize as
+// PolicySlots returns slots 1..3 in order; missing rows materialize as
 // empty slots so the fixed cardinality holds even against a hand-truncated
 // table.
-func (r *Repository) GetPolicySlots() ([]*PolicySlotRow, error) {
+func (r *Repository) PolicySlots() ([]*conversion.PolicySlot, error) {
 	rows, err := r.db.Query(`
 		SELECT slot_index, name, COALESCE(policy_json, ''), COALESCE(updated_at, '')
 		FROM policy_slots ORDER BY slot_index
@@ -32,10 +24,10 @@ func (r *Repository) GetPolicySlots() ([]*PolicySlotRow, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	byIndex := map[int]*PolicySlotRow{}
+	byIndex := map[int]*conversion.PolicySlot{}
 	var maxSeen int
 	for rows.Next() {
-		var slot PolicySlotRow
+		var slot conversion.PolicySlot
 		var updatedAt string
 		if err := rows.Scan(&slot.SlotIndex, &slot.Name, &slot.PolicyJSON, &updatedAt); err != nil {
 			return nil, err
@@ -52,23 +44,23 @@ func (r *Repository) GetPolicySlots() ([]*PolicySlotRow, error) {
 	if maxSeen < 3 {
 		maxSeen = 3
 	}
-	out := make([]*PolicySlotRow, 0, maxSeen)
+	out := make([]*conversion.PolicySlot, 0, maxSeen)
 	for i := 1; i <= maxSeen; i++ {
 		if s, ok := byIndex[i]; ok {
 			out = append(out, s)
 		} else {
-			out = append(out, &PolicySlotRow{SlotIndex: i})
+			out = append(out, &conversion.PolicySlot{SlotIndex: i})
 		}
 	}
 	return out, nil
 }
 
-// GetPolicySlot fetches one slot by index; nil when out of range.
-func (r *Repository) GetPolicySlot(slotIndex int) (*PolicySlotRow, error) {
+// PolicySlot fetches one slot by index; nil when out of range.
+func (r *Repository) PolicySlot(slotIndex int) (*conversion.PolicySlot, error) {
 	if slotIndex < 1 || slotIndex > 3 {
 		return nil, nil
 	}
-	var slot PolicySlotRow
+	var slot conversion.PolicySlot
 	var updatedAt string
 	err := r.db.QueryRow(`
 		SELECT slot_index, name, COALESCE(policy_json, ''), COALESCE(updated_at, '')
@@ -76,7 +68,7 @@ func (r *Repository) GetPolicySlot(slotIndex int) (*PolicySlotRow, error) {
 	`, slotIndex).Scan(&slot.SlotIndex, &slot.Name, &slot.PolicyJSON, &updatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &PolicySlotRow{SlotIndex: slotIndex}, nil
+			return &conversion.PolicySlot{SlotIndex: slotIndex}, nil
 		}
 		return nil, err
 	}

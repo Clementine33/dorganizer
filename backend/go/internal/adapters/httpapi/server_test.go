@@ -13,6 +13,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
@@ -22,18 +23,18 @@ import (
 // dependency overrides. As in server.go, no gate is wired unless a test asks
 // for one: the library entry and the scan routes run without admission, which
 // is the state a process without file management is in.
-func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
+func newTestServer(t *testing.T, mutate func(d *Dependencies, fixture *sqlite.Repository)) http.Handler {
 	t.Helper()
-	repo := newHTTPTestRepository(t)
+	fixture := newHTTPTestRepository(t)
 	deps := Dependencies{
-		Repo:        repo,
-		Library:     library.NewService(repo, nil, repo, fileops.ResolveMember),
+		Library:     library.NewService(fixture, nil, fixture, fileops.ResolveMember),
+		Catalog:     conversion.NewCatalog(fixture, fixture),
 		Token:       "",
 		CORSOrigins: []string{},
 		Version:     "dev",
 	}
 	if mutate != nil {
-		mutate(&deps)
+		mutate(&deps, fixture)
 	}
 	return NewServer(deps)
 }
@@ -42,16 +43,16 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 // staging adapter, the filesystem traversal and the library row the outcome is
 // recorded on. gate may be nil, which is the state of a process without file
 // management.
-func wireInventory(d *Dependencies, gate *admission.Gate) {
+func wireInventory(d *Dependencies, fixture *sqlite.Repository, gate *admission.Gate) {
 	d.Inventory = inventory.NewService(
 		inventory.NewPipeline(
-			sqlite.NewScanStaging(d.Repo),
+			sqlite.NewScanStaging(fixture),
 			filesystem.WalkRootEntriesParallel,
 			filesystem.WalkFolderEntries,
 		),
-		d.Repo,
+		fixture,
 		gate,
-		d.Repo.UpdateLibraryScanState,
+		fixture.UpdateLibraryScanState,
 	)
 }
 
@@ -59,10 +60,10 @@ func wireInventory(d *Dependencies, gate *admission.Gate) {
 // service (root change, deletion), the scanning entry and direct file
 // management — so a test that holds the slot really refuses them all. One
 // shared gate is the point: a path holding its own would pass vacuously.
-func testGate(d *Dependencies, gate *admission.Gate) {
-	d.Library = library.NewService(d.Repo, gate, d.Repo, fileops.ResolveMember)
+func testGate(d *Dependencies, fixture *sqlite.Repository, gate *admission.Gate) {
+	d.Library = library.NewService(fixture, gate, fixture, fileops.ResolveMember)
 	if d.Inventory == nil {
-		wireInventory(d, gate)
+		wireInventory(d, fixture, gate)
 	}
 }
 
@@ -167,7 +168,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestAuthMiddleware(t *testing.T) {
 	t.Run("missing header is rejected", func(t *testing.T) {
-		engine := newTestServer(t, func(d *Dependencies) { d.Token = "t1" })
+		engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { d.Token = "t1" })
 
 		w := doRequest(t, engine, http.MethodGet, "/api/v1/libraries", nil, nil)
 		if w.Code != http.StatusUnauthorized {
@@ -180,7 +181,7 @@ func TestAuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("valid bearer token passes", func(t *testing.T) {
-		engine := newTestServer(t, func(d *Dependencies) { d.Token = "t1" })
+		engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { d.Token = "t1" })
 
 		w := doRequest(t, engine, http.MethodGet, "/api/v1/libraries", nil,
 			map[string]string{"Authorization": "Bearer t1"})
@@ -199,7 +200,7 @@ func TestAuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("health needs no auth", func(t *testing.T) {
-		engine := newTestServer(t, func(d *Dependencies) { d.Token = "t1" })
+		engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { d.Token = "t1" })
 
 		w := doRequest(t, engine, http.MethodGet, "/api/v1/health", nil, nil)
 		if w.Code != http.StatusOK {
@@ -209,7 +210,7 @@ func TestAuthMiddleware(t *testing.T) {
 }
 
 func TestCORSMiddleware(t *testing.T) {
-	engine := newTestServer(t, func(d *Dependencies) {
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
 		d.CORSOrigins = []string{"http://localhost:5173"}
 	})
 
@@ -238,7 +239,7 @@ func TestCORSMiddleware(t *testing.T) {
 }
 
 func TestCORSPreflightRunsBeforeAuth(t *testing.T) {
-	engine := newTestServer(t, func(d *Dependencies) {
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
 		d.Token = "secret"
 		d.CORSOrigins = []string{"http://localhost:5173"}
 	})
@@ -299,7 +300,7 @@ func TestRouterRejectsPathsServeMuxWouldCanonicalize(t *testing.T) {
 }
 
 func TestRouterRejectsImplicitHEAD(t *testing.T) {
-	engine := newTestServer(t, func(d *Dependencies) { d.Token = "secret" })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { d.Token = "secret" })
 	for _, testCase := range []struct {
 		path        string
 		allowMethod string
@@ -326,7 +327,7 @@ func TestRouterRejectsImplicitHEAD(t *testing.T) {
 }
 
 func TestRouterRejectsEncodedSlashInPathValues(t *testing.T) {
-	engine := newTestServer(t, func(d *Dependencies) { d.Token = "secret" })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { d.Token = "secret" })
 	for _, requestPath := range []string{
 		"/api/v1/libraries/library%2Fother",
 		"/api/v1/libraries/library/folders/folder%2fother/tree",

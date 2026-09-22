@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
@@ -14,14 +14,15 @@ import (
 )
 
 // Dependencies carries the wiring for the HTTP API. Inventory is used by the
-// scan and refresh routes; WorksetService by the workset routes. Any may be nil until
-// wired, and the handlers guard against that.
+// scan and refresh routes; WorksetService by the workset routes; Catalog by the
+// settings routes that hold the global policy templates and tag library. Any
+// may be nil until wired, and the handlers guard against that.
 type Dependencies struct {
-	Repo *sqlite.Repository
 	// Library is the media-library business entry: creation, edits, root
 	// changes and deletions go through it, so a root change and a deletion
 	// take the admission slot without the HTTP layer knowing about it.
 	Library        *library.Service
+	Catalog        *conversion.Catalog
 	ConfigDir      string
 	Token          string
 	CORSOrigins    []string
@@ -33,6 +34,9 @@ type Dependencies struct {
 	// the HTTP layer never holds the gate.
 	FileOps *fileops.Service
 }
+
+// Dependencies names no storage: every route reaches its business entry, and
+// each of those declares the port it reads and writes through.
 
 type Server struct{ deps Dependencies }
 

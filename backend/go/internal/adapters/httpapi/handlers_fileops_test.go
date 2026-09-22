@@ -71,12 +71,12 @@ func fileOpsServer(t *testing.T) (http.Handler, string, *blockingScan) {
 	scan := newBlockingScan()
 	root := t.TempDir()
 	var gate *admission.Gate
-	handler := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		gate = admission.NewGate(d.Repo.HasActiveSession)
+	handler := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		gate = admission.NewGate(fixture.HasActiveSession)
 		scan.gate = gate
 		d.Inventory = scan
-		testGate(d, gate)
+		testGate(d, fixture, gate)
 		d.FileOps = fileops.NewService(gate, func(context.Context, string, string) error { return nil })
 	})
 	if _, err := repo.CreateLibrary("Music", filepath.ToSlash(root)); err != nil {

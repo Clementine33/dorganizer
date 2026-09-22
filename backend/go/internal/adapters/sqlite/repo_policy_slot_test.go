@@ -12,9 +12,9 @@ func TestPolicySlotsSeedAndRoundTrip(t *testing.T) {
 	repo := newTestRepository(t)
 	defer repo.Close()
 
-	slots, err := repo.GetPolicySlots()
+	slots, err := repo.PolicySlots()
 	if err != nil {
-		t.Fatalf("GetPolicySlots: %v", err)
+		t.Fatalf("PolicySlots: %v", err)
 	}
 	if len(slots) != 3 {
 		t.Fatalf("slots = %d, want 3", len(slots))
@@ -29,7 +29,7 @@ func TestPolicySlotsSeedAndRoundTrip(t *testing.T) {
 	if updateErr := repo.UpdatePolicySlot(2, "compact", `{"schema_version":1}`); updateErr != nil {
 		t.Fatalf("UpdatePolicySlot(2): %v", updateErr)
 	}
-	slots, err = repo.GetPolicySlots()
+	slots, err = repo.PolicySlots()
 	if err != nil {
 		t.Fatalf("GetPolicySlots 2: %v", err)
 	}
@@ -49,14 +49,14 @@ func TestPolicySlotsSeedAndRoundTrip(t *testing.T) {
 	}
 
 	// A single-slot read reflects the same state.
-	slot, err := repo.GetPolicySlot(2)
+	slot, err := repo.PolicySlot(2)
 	if err != nil || slot == nil || slot.Name != "compact" {
 		t.Fatalf("GetPolicySlot(2) = %+v err=%v", slot, err)
 	}
-	if slot, _ := repo.GetPolicySlot(3); slot == nil || slot.PolicyJSON != "" {
+	if slot, _ := repo.PolicySlot(3); slot == nil || slot.PolicyJSON != "" {
 		t.Fatalf("GetPolicySlot(3) = %+v, want empty", slot)
 	}
-	if slot, _ := repo.GetPolicySlot(9); slot == nil || slot.SlotIndex != 9 && slot.PolicyJSON == "" {
+	if slot, _ := repo.PolicySlot(9); slot == nil || slot.SlotIndex != 9 && slot.PolicyJSON == "" {
 		// Out-of-range GET returns a neutral empty view, not an error.
 		t.Logf("slot 9 view: %+v", slot)
 	}

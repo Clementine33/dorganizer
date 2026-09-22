@@ -37,8 +37,8 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 		conversion.New(tmp, repo),
 	}, nil, nil)
 	handler := NewServer(Dependencies{
-		Repo:           repo,
 		Library:        library.NewService(repo, nil, repo, fileops.ResolveMember),
+		Catalog:        conversion.NewCatalog(repo, repo),
 		ConfigDir:      tmp,
 		Token:          testToken,
 		CORSOrigins:    []string{"http://localhost:5173"},
@@ -534,7 +534,7 @@ func TestPolicySlotsListAndUpdate(t *testing.T) {
 	}
 
 	// The seeded workset draft must be a complete inline policy (self-contained).
-	if _, err := repo.GetPolicySlot(1); err != nil {
+	if _, err := repo.PolicySlot(1); err != nil {
 		t.Fatalf("get slot: %v", err)
 	}
 }

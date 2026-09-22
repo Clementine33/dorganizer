@@ -3,10 +3,10 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
-	"strings"
 
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // ==================== Classifier Tag Library ====================
@@ -26,7 +26,7 @@ type classifierTagCreateRequest struct {
 	Tag string `json:"tag"`
 }
 
-func toCustomTagItem(r sqlite.ClassifierTagRow) classifierCustomTagItem {
+func toCustomTagItem(r conversion.ClassifierTag) classifierCustomTagItem {
 	item := classifierCustomTagItem{
 		ID:  r.ID,
 		Tag: r.Tag,
@@ -45,14 +45,14 @@ func (s *Server) listClassifierTags(w http.ResponseWriter, _ *http.Request) {
 		defaults = []string{}
 	}
 
-	customRows, err := s.deps.Repo.GetClassifierTags()
+	customTags, err := s.deps.Catalog.Tags()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load classifier tags")
 		return
 	}
 
-	customItems := make([]classifierCustomTagItem, 0, len(customRows))
-	for _, r := range customRows {
+	customItems := make([]classifierCustomTagItem, 0, len(customTags))
+	for _, r := range customTags {
 		customItems = append(customItems, toCustomTagItem(r))
 	}
 
@@ -70,13 +70,12 @@ func (s *Server) addClassifierTag(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, "invalid tag payload")
 		return
 	}
-	tag := strings.TrimSpace(req.Tag)
-	if tag == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_TAG", "tag cannot be empty")
-		return
-	}
-	created, err := s.deps.Repo.AddClassifierTag(tag)
+	created, err := s.deps.Catalog.AddTag(req.Tag)
 	if err != nil {
+		if _, refused := workset.AsError(err); refused {
+			writeWorksetError(w, err)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to save tag")
 		return
 	}
@@ -92,7 +91,9 @@ func (s *Server) deleteClassifierTag(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_ID", "invalid tag id")
 		return
 	}
-	if err := s.deps.Repo.DeleteClassifierTag(id); err != nil {
+	// A tag that is not in the library is the only outcome the caller can act
+	// on, and it is what a failed removal means to them either way.
+	if err := s.deps.Catalog.DeleteTag(id); err != nil {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "tag not found")
 		return
 	}

@@ -157,6 +157,9 @@ type services struct {
 	scan    inventory.Service
 	fileOps *fileops.Service
 	workset workset.Service
+	// catalog is the global policy catalog: the three policy slots and the
+	// custom classifier tag library the settings pages edit.
+	catalog *conversion.Catalog
 }
 
 // buildServices wires the process. Direct file management and the managed task
@@ -203,6 +206,7 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 		scan:    scanSvc,
 		fileOps: fileops.NewService(gate, scanSvc.RefreshMember),
 		workset: worksetSvc,
+		catalog: conversion.NewCatalog(repo, repo),
 	}
 }
 
@@ -257,8 +261,9 @@ func runServer(
 
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
-			Repo:           repo,
+
 			Library:        services.library,
+			Catalog:        services.catalog,
 			ConfigDir:      configDir,
 			Token:          token,
 			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),

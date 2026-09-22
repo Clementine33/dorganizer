@@ -132,7 +132,7 @@ func TestLibrariesCRUD(t *testing.T) {
 // while a scan is running.
 func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {
 	gate := admission.NewGate(nil)
-	engine := newTestServer(t, func(d *Dependencies) { testGate(d, gate) })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { testGate(d, fixture, gate) })
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
 
 	for _, root := range []string{"/new-music", "/music"} {
@@ -160,7 +160,7 @@ func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {
 
 func TestPatchLibraryRootInvalidatesDerivedFolders(t *testing.T) {
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture })
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
 
 	if _, err := repo.DB().Exec(`

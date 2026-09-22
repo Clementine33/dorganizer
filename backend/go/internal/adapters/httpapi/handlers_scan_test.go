@@ -33,9 +33,9 @@ func TestScanSSEHappyPath(t *testing.T) {
 	root := seedScanTree(t)
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		wireInventory(d, fixture, nil)
 	})
 
 	// Create the library pointing at the temp tree.
@@ -88,9 +88,9 @@ func TestScanSSECancelledByRequestContext(t *testing.T) {
 	root := seedScanTree(t)
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		wireInventory(d, fixture, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
@@ -129,9 +129,9 @@ func TestScanSSETypedFailureEmitsErrorEvent(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		wireInventory(d, fixture, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", missing)
 
@@ -169,7 +169,10 @@ func TestScanSSENilServiceGuard(t *testing.T) {
 	root := seedScanTree(t)
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo }) // the scanning entry left nil
+	engine := newTestServer(
+		t,
+		func(d *Dependencies, fixture *sqlite.Repository) { repo = fixture },
+	) // the scanning entry left nil
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
 	w := doRequest(t, engine, http.MethodPost, "/api/v1/libraries/"+libID+"/scans",
@@ -196,9 +199,9 @@ func TestScanSSERejectsRootOutsideLibrary(t *testing.T) {
 	otherRoot := seedScanTree(t)
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		wireInventory(d, fixture, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
 
@@ -242,9 +245,9 @@ func TestScanSSEUnknownLibrary(t *testing.T) {
 func TestScanAcceptsEmptyBody(t *testing.T) {
 	root := seedScanTree(t)
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) {
-		repo = d.Repo
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		repo = fixture
+		wireInventory(d, fixture, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
@@ -274,8 +277,8 @@ func TestScanAcceptsEmptyBody(t *testing.T) {
 // are rejected while the endpoint stays strict about payloads.
 func TestScanRejectsInvalidPayloads(t *testing.T) {
 	root := seedScanTree(t)
-	engine := newTestServer(t, func(d *Dependencies) {
-		wireInventory(d, nil)
+	engine := newTestServer(t, func(d *Dependencies, fixture *sqlite.Repository) {
+		wireInventory(d, fixture, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 

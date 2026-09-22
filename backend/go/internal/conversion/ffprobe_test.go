@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
@@ -22,32 +21,19 @@ func TestEnrichBitrateProbesAACContainers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generate AAC: %v: %s", err, output)
 			}
-			repo, err := sqlite.NewRepository(filepath.Join(dir, "test.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = repo.Close() })
 			track = filepath.ToSlash(track)
-			_, err = repo.DB().Exec(
-				`INSERT INTO entries (path, root_path, is_dir, size, format, content_rev, mtime, bitrate)
- VALUES (?, ?, 0, 1000, 'aac', 1, 1, 0)`,
-				track, filepath.ToSlash(dir),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
 			entries := []reconcile.AudioEntry{{PathPosix: track}}
-			a := newBitrateAnalyzer(repo, "")
+			inv := &recordingInventory{}
+			a := newBitrateAnalyzer(inv, "")
 			if err := a.enrichMissing(t.Context(), entries, true); err != nil {
 				t.Fatal(err)
 			}
-			var bitrate int64
-			if err := repo.DB().QueryRow("SELECT bitrate FROM entries").Scan(&bitrate); err != nil {
-				t.Fatal(err)
-			}
 			// Native AAC's measured average need not equal the requested 256k.
-			if bitrate <= 0 || entries[0].Bitrate != bitrate {
-				t.Fatalf("AAC bitrate: entry=%d persisted=%d", entries[0].Bitrate, bitrate)
+			if len(inv.updates) != 1 || inv.updates[0].Path != track || inv.updates[0].BitrateKbps <= 0 {
+				t.Fatalf("AAC bitrate: entry=%d writes=%+v", entries[0].Bitrate, inv.updates)
+			}
+			if entries[0].Bitrate != inv.updates[0].BitrateKbps {
+				t.Fatalf("entry=%d announced=%d", entries[0].Bitrate, inv.updates[0].BitrateKbps)
 			}
 			if err := os.Remove(filepath.FromSlash(track)); err != nil {
 				t.Fatal(err)
@@ -55,8 +41,8 @@ func TestEnrichBitrateProbesAACContainers(t *testing.T) {
 			if err := a.enrichMissing(t.Context(), entries, true); err != nil {
 				t.Fatal(err)
 			}
-			if entries[0].Bitrate != bitrate {
-				t.Fatal("cached AAC bitrate changed")
+			if len(inv.updates) != 1 {
+				t.Fatal("cached AAC bitrate was probed and written again")
 			}
 		})
 	}
