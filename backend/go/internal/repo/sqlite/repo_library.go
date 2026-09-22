@@ -225,8 +225,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 // DeleteLibrary removes a library together with every processing record it
 // owns, in one transaction: the records' plans, executions, members, drafts and
 // sessions go with them, so no orphaned record survives its library. Media
-// files and the library-level recovery directory on disk are never touched
-//.
+// files and the library-level recovery directory on disk are never touched.
 //
 // It fails with ErrGenerationInProgress while a record has a queued or running
 // planning session and with ErrExecutionInProgress while one has a queued or

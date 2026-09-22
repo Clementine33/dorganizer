@@ -111,14 +111,26 @@ func New(repo *sqlite.Repository, acquire func() (func(), error), opts Options) 
 	return &Loop{repo: repo, acquire: acquire, opts: opts.withDefaults()}
 }
 
-// Run blocks until ctx is cancelled, running a pass whenever one is due. The
-// first pass runs immediately: at startup nothing else is running, so it is the
-// cheapest moment there is.
+// Pass runs one pass now and reports whether it completed. The application
+// calls it at startup, before it accepts any work, so a fresh process never
+// refuses its first client over housekeeping the client did not ask for; Run
+// takes over from there.
+func (l *Loop) Pass(ctx context.Context) bool {
+	return l.pass(ctx)
+}
+
+// Run blocks until ctx is cancelled, running a pass whenever one is due. Its
+// first pass waits one tick, so it never competes with a client that arrived
+// just after start-up: the startup pass (Pass) has already run by then, and the
+// rhythm belongs to the loop.
 //
 // A completed pass waits out the interval; a pass that did not complete - it was
 // refused, or ran out of budget - waits one tick and tries again, so a busy
 // application is not left unclean for a whole interval.
 func (l *Loop) Run(ctx context.Context) {
+	if !wait(ctx, l.opts.Tick) {
+		return
+	}
 	for {
 		if l.pass(ctx) {
 			if !wait(ctx, l.opts.Interval) {

@@ -22,8 +22,7 @@ const current = computed(() => globalNavOwner(route.name))
 // The shell is mounted for the whole application lifetime, so it stays the
 // long-lived observer of the library list: pages share the same cache entry
 // and a scan's terminal refresh always has a live observer, whichever module
-// is on screen. The list itself renders in LibrariesPage, not here
-//.
+// is on screen. The list itself renders on the workbench entry page, not here.
 useLibraryList()
 
 function isCurrent(id: GlobalNavId): boolean {

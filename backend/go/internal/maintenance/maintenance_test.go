@@ -259,6 +259,22 @@ func TestLoop_ContinuesOnTheNextTickWhenTheBudgetRunsOut(t *testing.T) {
 	waitFor(t, "the last row to go", func() bool { return countScans(t, repo) == 0 })
 }
 
+// TestPassRunsOnePassNow is the start-up contract: the application runs one pass
+// before it serves anything, so the retention work that must not race a client
+// is over by the time a client can be refused.
+func TestPassRunsOnePassNow(t *testing.T) {
+	repo := newLoopRepo(t)
+	seedOldScans(t, repo, 1)
+	loop := New(repo, (&fakeAcquire{}).begin, loopOptions())
+
+	if !loop.Pass(t.Context()) {
+		t.Fatal("a start-up pass with work to do must complete")
+	}
+	if rows := countScans(t, repo); rows != 0 {
+		t.Fatalf("scans = %d, want the start-up pass to have deleted the old row", rows)
+	}
+}
+
 func TestLoop_DoesNotRepeatACompletedPassBeforeTheInterval(t *testing.T) {
 	repo := newLoopRepo(t) // nothing to delete: the first pass completes
 	acquire := &fakeAcquire{}

@@ -209,6 +209,10 @@ func runServer(
 		ScanRetention:       scanRetention,
 		GenerationRetention: generationRetention,
 	})
+	// The startup pass runs to completion here, before the server accepts
+	// anything: nothing else is alive yet, so it is the cheapest pass the
+	// process will ever run, and no client can be refused by it.
+	maintenanceLoop.Pass(ctx)
 	maintenanceDone := make(chan struct{})
 	go func() {
 		defer close(maintenanceDone)
