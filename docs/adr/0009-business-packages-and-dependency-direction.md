@@ -2,7 +2,7 @@
 
 Date: 2026-09-23
 
-Status: Draft
+Status: Accepted
 
 后端原来按「层」组织：`internal/repo/sqlite`、`internal/httpapi`、`internal/usecase`、`internal/tasks`、`internal/services`。分层的名字掩盖了实际形状——HTTP 处理器直接持有 `*sqlite.Repository`，工作集用例在自己身上定义记录类型，转换任务在 `sqlite` 包里读写 `entries` 表；包的边界不是业务的边界，改一条业务规则要在三四个目录之间来回。
 
