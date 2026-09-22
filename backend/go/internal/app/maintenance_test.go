@@ -256,9 +256,13 @@ func TestLoop_ContinuesOnTheNextTickWhenTheBudgetRunsOut(t *testing.T) {
 	defer stop()
 
 	// One pass is one batch: the rows go one per tick, not one per interval.
-	waitFor(t, "the second row to go", func() bool { return countScans(t, repo) == 2 })
-	waitFor(t, "the third row to go", func() bool { return countScans(t, repo) == 1 })
-	waitFor(t, "the last row to go", func() bool { return countScans(t, repo) == 0 })
+	// The count is read at the end rather than watched down through every
+	// intermediate value — the loop runs far faster than a poll does, so an
+	// observer that samples instead of counting can miss a state entirely.
+	waitFor(t, "every seeded row deleted", func() bool { return countScans(t, repo) == 0 })
+	if calls := acquire.callCount(); calls < 3 {
+		t.Errorf("acquired %d times for three one-batch ticks, want one admission per tick", calls)
+	}
 }
 
 // TestPassRunsOnePassNow is the start-up contract: the application runs one pass
