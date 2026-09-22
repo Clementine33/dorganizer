@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // validateRevision computes the revision-level validation state from the

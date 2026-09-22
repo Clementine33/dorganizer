@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // SQLiteRepositoryAdapter adapts sqlite.Repository to scanner.Repository.

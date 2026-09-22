@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // generationSnapshot is the wire shape of the session_snapshot event. It

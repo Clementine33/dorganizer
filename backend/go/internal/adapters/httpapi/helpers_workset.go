@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 

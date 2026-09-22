@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	appconfig "github.com/onsei/organizer/backend/internal/config"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // ==================== Classifier Tag Library ====================

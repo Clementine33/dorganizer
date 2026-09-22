@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // executionProgressEvent is the wire shape of the progress event. It never

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )

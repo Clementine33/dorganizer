@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // newTestServer builds a router with a fresh temp repository and the given

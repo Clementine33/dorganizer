@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // errorResponse is the standard API error envelope: {"code":"...","message":"..."}.

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 

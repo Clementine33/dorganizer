@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"

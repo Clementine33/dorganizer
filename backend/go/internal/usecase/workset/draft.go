@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // GetDraft returns the operation's sparse draft document with the operation

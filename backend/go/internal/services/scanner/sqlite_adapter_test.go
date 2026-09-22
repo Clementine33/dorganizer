@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // SQLiteAdapterTestSuite provides integration tests for SQLiteRepositoryAdapter

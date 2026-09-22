@@ -1,6 +1,6 @@
 package workset
 
-import "github.com/onsei/organizer/backend/internal/repo/sqlite"
+import "github.com/onsei/organizer/backend/internal/adapters/sqlite"
 
 type serviceImpl struct {
 	repo       *sqlite.Repository

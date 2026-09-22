@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // Execution eligibility reasons returned with PLAN_NOT_EXECUTABLE. They are

@@ -8,8 +8,8 @@ import (
 
 	"facette.io/natsort"
 
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )

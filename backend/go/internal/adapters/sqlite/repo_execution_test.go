@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 func newExecutionRepo(t *testing.T) *sqlite.Repository {
@@ -586,7 +586,7 @@ func TestExecutionComponentResultsGoWithTheirSession(t *testing.T) {
 // transaction is one result row plus the counter recomputation, and nothing is
 // rewritten as the run grows. Run it with
 //
-//	go test ./internal/repo/sqlite -run '^$' -bench ExecutionComponentResults
+//	go test ./internal/adapters/sqlite -run '^$' -bench ExecutionComponentResults
 //
 // The reported metrics are per session (b.N sessions) and per component: the
 // point of the redesign is that the result bytes scale with the work that

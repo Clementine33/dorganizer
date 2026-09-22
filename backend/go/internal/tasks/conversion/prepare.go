@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // OperationTypeConversion is the only publicly available operation type of

@@ -3,7 +3,7 @@ package workset
 import (
 	"context"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // FolderScan refreshes one folder subtree's stored inventory from disk. It is

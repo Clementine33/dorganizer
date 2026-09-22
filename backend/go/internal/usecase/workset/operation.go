@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // requireTask returns the registered task for an operation type. Only

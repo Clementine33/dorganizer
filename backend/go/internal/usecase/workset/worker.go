@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // dispatcher is a singleton global FIFO scheduler plus a fixed worker pool. It

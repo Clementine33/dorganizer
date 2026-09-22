@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // defaultEncodeWorkers caps the automatic encode concurrency.

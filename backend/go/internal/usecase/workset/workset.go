@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
 // MaxMembers caps the ordered album folders in one workset.

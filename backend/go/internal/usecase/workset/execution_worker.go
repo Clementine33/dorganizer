@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // Execution component statuses reported per component.

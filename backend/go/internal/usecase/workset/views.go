@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // Limit defaults/caps for the record feed pagination.

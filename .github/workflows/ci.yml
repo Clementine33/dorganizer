@@ -78,7 +78,7 @@ jobs:
       # the connection pragmas are built into the path, so this runs for real.
       - name: Repository connection pragmas (Windows runtime, blocking)
         working-directory: backend/go
-        run: go test ./internal/repo/sqlite -run TestConnectionPragmasAreAppliedToEveryConnection -count=1
+        run: go test ./internal/adapters/sqlite -run TestConnectionPragmasAreAppliedToEveryConnection -count=1
       - name: Install Playwright Chromium
         run: pnpm -C frontend/web exec playwright install chromium
       - name: Playwright e2e smoke (optional, non-blocking)

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	appconfig "github.com/onsei/organizer/backend/internal/config"
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 )
 
 // planConfig holds bitrate enrichment settings and the shared probe tool path.

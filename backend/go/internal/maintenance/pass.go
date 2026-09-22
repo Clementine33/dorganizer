@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // pass runs one maintenance pass and reports whether it ran to completion.

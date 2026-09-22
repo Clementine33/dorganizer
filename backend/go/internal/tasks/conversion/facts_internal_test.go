@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/repo/sqlite"
+	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 )
 
 // TestCollectRootEntriesSpansTheWholeSubtree pins the path boundaries the

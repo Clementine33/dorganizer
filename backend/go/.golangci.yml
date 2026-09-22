@@ -94,7 +94,7 @@ linters:
       check-type-assertions: true
       exclude-functions:
         - (*database/sql.Tx).Rollback
-        - (*github.com/onsei/organizer/backend/internal/repo/sqlite.Repository).UpdateScanSessionStatus
+        - (*github.com/onsei/organizer/backend/internal/adapters/sqlite.Repository).UpdateScanSessionStatus
 
     exhaustive:
       check: [ switch, map ]
