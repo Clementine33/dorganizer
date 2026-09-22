@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
+	"github.com/onsei/organizer/backend/internal/admission"
 )
 
 // Defaults for the Options fields a caller leaves zero.
@@ -105,7 +105,7 @@ type Loop struct {
 }
 
 // New builds a Loop over repo. acquire is the admission gate's maintenance
-// entry point (fileops.Gate.BeginMaintenance) - passing it in rather than
+// entry point (admission.Gate.BeginMaintenance) - passing it in rather than
 // reaching for the gate keeps the loop independent of how admission is decided.
 func New(repo *sqlite.Repository, acquire func() (func(), error), opts Options) *Loop {
 	return &Loop{repo: repo, acquire: acquire, opts: opts.withDefaults()}
@@ -176,7 +176,7 @@ func (s *slot) hold() bool {
 	}
 	release, err := s.acquire()
 	if err != nil {
-		if !fileops.IsBusy(err) {
+		if !admission.IsBusy(err) {
 			log.Printf("maintenance: admission check failed: %v", err)
 		}
 		return false

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
@@ -59,7 +60,7 @@ func (s *Server) applyFileOperation(w http.ResponseWriter, r *http.Request) {
 		Items:       items,
 	})
 	if err != nil {
-		if fileops.IsBusy(err) {
+		if admission.IsBusy(err) {
 			writeBusyError(w, err)
 			return
 		}

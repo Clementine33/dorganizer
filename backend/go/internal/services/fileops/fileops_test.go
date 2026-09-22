@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
@@ -21,7 +22,7 @@ type fixture struct {
 	refreshed []string
 	scanErr   error
 	svc       *fileops.Service
-	gate      *fileops.Gate
+	gate      *admission.Gate
 }
 
 func newFixture(t *testing.T, tasksActive bool) *fixture {
@@ -29,9 +30,9 @@ func newFixture(t *testing.T, tasksActive bool) *fixture {
 	root := t.TempDir()
 	f := &fixture{t: t, root: root}
 	if tasksActive {
-		f.gate = fileops.NewGate(func() (bool, error) { return true, nil })
+		f.gate = admission.NewGate(func() (bool, error) { return true, nil })
 	} else {
-		f.gate = fileops.NewGate(func() (bool, error) { return false, nil })
+		f.gate = admission.NewGate(func() (bool, error) { return false, nil })
 	}
 	f.svc = fileops.NewService(f.gate, func(_ context.Context, folderPath, _ string) error {
 		f.refreshed = append(f.refreshed, folderPath)

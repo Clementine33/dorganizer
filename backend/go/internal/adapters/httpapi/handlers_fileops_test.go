@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
@@ -54,11 +55,11 @@ func fileOpsServer(t *testing.T) (http.Handler, string, *blockingScan) {
 	var repo *sqlite.Repository
 	scan := newBlockingScan()
 	root := t.TempDir()
-	var gate *fileops.Gate
+	var gate *admission.Gate
 	handler := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
 		d.ScanService = scan
-		gate = fileops.NewGate(d.Repo.HasActiveSession)
+		gate = admission.NewGate(d.Repo.HasActiveSession)
 		d.Gate = gate
 		d.FileOps = fileops.NewService(gate, func(context.Context, string, string) error { return nil })
 	})

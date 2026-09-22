@@ -1,3 +1,8 @@
+// Package fileops owns direct file management inside a library member
+// (rename, move, soft delete): the scope and path rules it refuses, the
+// per-item result contract, and the write-then-refresh behaviour. Admission
+// against the other paths that touch the same trees is package admission
+// (ADR 0002 §1, §2).
 package fileops
 
 import (
@@ -8,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
@@ -18,14 +24,14 @@ type MemberScan func(ctx context.Context, folderPath, rootPath string) error
 
 // Service applies direct file-management requests inside a library member.
 type Service struct {
-	gate *Gate
+	gate *admission.Gate
 	scan MemberScan
 }
 
 // NewService creates the file-management service. gate is the process-wide
 // admission control; scan refreshes the affected inventory after a write (nil
 // means the writes are reported without a refresh, which the tests use).
-func NewService(gate *Gate, scan MemberScan) *Service {
+func NewService(gate *admission.Gate, scan MemberScan) *Service {
 	return &Service{gate: gate, scan: scan}
 }
 

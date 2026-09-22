@@ -19,6 +19,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/httpapi"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
@@ -182,7 +183,7 @@ func runServer(
 	// control: a file operation is refused while a scan, planning session or
 	// execution is running, and starting one of those is refused while a file
 	// operation holds the slot (ADR 0002 §2).
-	gate := fileops.NewGate(repo.HasActiveSession)
+	gate := admission.NewGate(repo.HasActiveSession)
 	fileOpsSvc := fileops.NewService(gate, func(scanCtx context.Context, folderPath, rootPath string) error {
 		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
 		return scanErr

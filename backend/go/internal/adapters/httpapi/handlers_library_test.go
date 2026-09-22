@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
+	"github.com/onsei/organizer/backend/internal/admission"
 )
 
 //nolint:gocognit,funlen // CRUD scenario with many branches
@@ -131,7 +131,7 @@ func TestLibrariesCRUD(t *testing.T) {
 // nothing else holds the slot, releases it again, and is refused — not queued —
 // while a scan is running.
 func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {
-	gate := fileops.NewGate(nil)
+	gate := admission.NewGate(nil)
 	engine := newTestServer(t, func(d *Dependencies) { d.Gate = gate })
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
 

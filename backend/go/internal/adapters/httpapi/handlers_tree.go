@@ -9,6 +9,7 @@ import (
 	"facette.io/natsort"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
@@ -256,7 +257,7 @@ func (s *Server) beginManual(w http.ResponseWriter) (func(), bool) {
 
 // busyMessage explains an admission refusal in the user's terms.
 func busyMessage(err error) string {
-	if busy, ok := errors.AsType[*fileops.BusyError](err); ok {
+	if busy, ok := errors.AsType[*admission.BusyError](err); ok {
 		switch busy.Reason {
 		case "a scan is running":
 			return "a scan is running; wait for it to finish"

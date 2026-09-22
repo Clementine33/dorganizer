@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -27,7 +28,7 @@ type Dependencies struct {
 	// admission control it uses, so the scan and library routes take their side
 	// of it. Both may be nil in tests that do not exercise them.
 	FileOps *fileops.Service
-	Gate    *fileops.Gate
+	Gate    *admission.Gate
 }
 
 type Server struct{ deps Dependencies }

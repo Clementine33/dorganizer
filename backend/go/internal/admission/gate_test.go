@@ -1,4 +1,4 @@
-package fileops_test
+package admission_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/fileops"
+	"github.com/onsei/organizer/backend/internal/admission"
 )
 
 // TestGateSerializesMaintenanceWithEverythingElse pins the exclusion the
@@ -14,13 +14,13 @@ import (
 // and while it holds the slot it refuses scans, file management and enqueues -
 // which is why a pass can never run alongside the work it would race.
 func TestGateSerializesMaintenanceWithEverythingElse(t *testing.T) {
-	gate := fileops.NewGate(nil)
+	gate := admission.NewGate(nil)
 
 	releaseScan, err := gate.BeginScan()
 	if err != nil {
 		t.Fatalf("BeginScan: %v", err)
 	}
-	if _, busyErr := gate.BeginMaintenance(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginMaintenance(); !admission.IsBusy(busyErr) {
 		t.Fatalf("maintenance during a scan = %v, want busy", busyErr)
 	}
 	releaseScan()
@@ -29,18 +29,18 @@ func TestGateSerializesMaintenanceWithEverythingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginMaintenance: %v", err)
 	}
-	if _, busyErr := gate.BeginMaintenance(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginMaintenance(); !admission.IsBusy(busyErr) {
 		t.Fatalf("a second maintenance pass = %v, want busy", busyErr)
 	}
-	if _, busyErr := gate.BeginScan(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginScan(); !admission.IsBusy(busyErr) {
 		t.Fatalf("a scan during maintenance = %v, want busy", busyErr)
 	} else if !strings.Contains(busyErr.Error(), "maintenance") {
 		t.Fatalf("a scan refused during maintenance says %q, want it to name maintenance", busyErr)
 	}
-	if _, busyErr := gate.BeginManual(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginManual(); !admission.IsBusy(busyErr) {
 		t.Fatalf("file management during maintenance = %v, want busy", busyErr)
 	}
-	if err = gate.Enqueue(func() error { return nil }); !fileops.IsBusy(err) {
+	if err = gate.Enqueue(func() error { return nil }); !admission.IsBusy(err) {
 		t.Fatalf("an enqueue during maintenance = %v, want busy", err)
 	}
 	releaseMaintenance()
@@ -56,7 +56,7 @@ func TestGateSerializesMaintenanceWithEverythingElse(t *testing.T) {
 // the check for the maintenance slot.
 func TestGateRefusesMaintenanceWhileASessionIsQueued(t *testing.T) {
 	active := false
-	gate := fileops.NewGate(func() (bool, error) { return active, nil })
+	gate := admission.NewGate(func() (bool, error) { return active, nil })
 
 	release, err := gate.BeginMaintenance()
 	if err != nil {
@@ -65,7 +65,7 @@ func TestGateRefusesMaintenanceWhileASessionIsQueued(t *testing.T) {
 	release()
 
 	active = true
-	if _, err := gate.BeginMaintenance(); !fileops.IsBusy(err) {
+	if _, err := gate.BeginMaintenance(); !admission.IsBusy(err) {
 		t.Fatalf("maintenance during a session = %v, want busy", err)
 	}
 }
@@ -74,13 +74,13 @@ func TestGateRefusesMaintenanceWhileASessionIsQueued(t *testing.T) {
 // running refuses file management, and file management in flight refuses a
 // scan. Each side sees a busy answer, never a queue.
 func TestGateSerializesFileManagementAndScans(t *testing.T) {
-	gate := fileops.NewGate(nil)
+	gate := admission.NewGate(nil)
 
 	releaseScan, err := gate.BeginScan()
 	if err != nil {
 		t.Fatalf("BeginScan: %v", err)
 	}
-	if _, busyErr := gate.BeginManual(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginManual(); !admission.IsBusy(busyErr) {
 		t.Fatalf("file management during a scan = %v, want busy", busyErr)
 	}
 	releaseScan()
@@ -89,10 +89,10 @@ func TestGateSerializesFileManagementAndScans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginManual: %v", err)
 	}
-	if _, busyErr := gate.BeginManual(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginManual(); !admission.IsBusy(busyErr) {
 		t.Fatalf("a second file operation = %v, want busy (requests serialize)", busyErr)
 	}
-	if _, busyErr := gate.BeginScan(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginScan(); !admission.IsBusy(busyErr) {
 		t.Fatalf("a scan during file management = %v, want busy", busyErr)
 	}
 	releaseManual()
@@ -109,7 +109,7 @@ func TestGateSerializesFileManagementAndScans(t *testing.T) {
 // request, so file management asks the repository.
 func TestGateRefusesFileManagementWhileASessionIsQueued(t *testing.T) {
 	active := false
-	gate := fileops.NewGate(func() (bool, error) { return active, nil })
+	gate := admission.NewGate(func() (bool, error) { return active, nil })
 
 	release, err := gate.BeginManual()
 	if err != nil {
@@ -118,7 +118,7 @@ func TestGateRefusesFileManagementWhileASessionIsQueued(t *testing.T) {
 	release()
 
 	active = true
-	if _, err := gate.BeginManual(); !fileops.IsBusy(err) {
+	if _, err := gate.BeginManual(); !admission.IsBusy(err) {
 		t.Fatalf("file management during a session = %v, want busy", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestGateRefusesFileManagementWhileASessionIsQueued(t *testing.T) {
 func TestGateEnqueueIsAtomicWithTheManualSlot(t *testing.T) {
 	var mu sync.Mutex
 	queued := false
-	gate := fileops.NewGate(func() (bool, error) {
+	gate := admission.NewGate(func() (bool, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return queued, nil
@@ -144,7 +144,7 @@ func TestGateEnqueueIsAtomicWithTheManualSlot(t *testing.T) {
 	if err := gate.Enqueue(func() error {
 		enqueued = true
 		return nil
-	}); !fileops.IsBusy(err) {
+	}); !admission.IsBusy(err) {
 		t.Fatalf("an enqueue during file management = %v, want busy", err)
 	}
 	if enqueued {
@@ -161,7 +161,7 @@ func TestGateEnqueueIsAtomicWithTheManualSlot(t *testing.T) {
 		t.Fatalf("Enqueue with a free slot: %v", err)
 	}
 	// The session it registered is what refuses the next file operation.
-	if _, err := gate.BeginManual(); !fileops.IsBusy(err) {
+	if _, err := gate.BeginManual(); !admission.IsBusy(err) {
 		t.Fatalf("file management after a queued session = %v, want busy", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestGateEnqueueIsAtomicWithTheManualSlot(t *testing.T) {
 // never leaves the gate stuck, and an extra release cannot open it for a
 // second writer.
 func TestGateScanReleaseIsIdempotentSafe(t *testing.T) {
-	gate := fileops.NewGate(nil)
+	gate := admission.NewGate(nil)
 	release, err := gate.BeginScan()
 	if err != nil {
 		t.Fatalf("BeginScan: %v", err)
@@ -192,10 +192,10 @@ func TestGateScanReleaseIsIdempotentSafe(t *testing.T) {
 // not a busy answer, so it never looks like a retryable conflict.
 func TestGateReportsTheTasksCheckFailure(t *testing.T) {
 	boom := errors.New("database is gone")
-	gate := fileops.NewGate(func() (bool, error) { return false, boom })
+	gate := admission.NewGate(func() (bool, error) { return false, boom })
 	if _, err := gate.BeginManual(); err == nil || errors.Is(err, boom) == false {
 		t.Fatalf("err = %v, want the check failure", err)
-	} else if fileops.IsBusy(err) {
+	} else if admission.IsBusy(err) {
 		t.Fatal("a failed check is not a busy answer")
 	}
 }

@@ -1,8 +1,8 @@
-// Package fileops owns direct file management inside a library member
-// (rename, move, soft delete) and the process-wide admission control that
-// keeps it from interleaving with the scanning, planning and execution paths
-// that also read and write the same trees (ADR 0002 §1, §2).
-package fileops
+// Package admission owns the process-wide admission control: one slot that
+// keeps direct file management, the scanning, planning and execution paths,
+// and the idle-time maintenance pass from interleaving on the same trees
+// (ADR 0002 §2). Direct file management itself lives in package fileops.
+package admission
 
 import (
 	"errors"

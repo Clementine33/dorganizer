@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
+	"github.com/onsei/organizer/backend/internal/admission"
 )
 
 // These tests drive the real loop against a real database. They wait for the
@@ -135,7 +135,7 @@ func (f *fakeAcquire) begin() (func(), error) {
 	case f.err != nil:
 		return nil, f.err
 	case f.busy:
-		return nil, &fileops.BusyError{Reason: "test: busy"}
+		return nil, &admission.BusyError{Reason: "test: busy"}
 	default:
 		return func() {}, nil
 	}
@@ -322,7 +322,7 @@ func TestLoop_ReportsABrokenAdmissionCheck(t *testing.T) {
 func TestPassWithRealGateNeverOverlapsATask(t *testing.T) {
 	repo := newLoopRepo(t)
 	seedOldScans(t, repo, 3)
-	gate := fileops.NewGate(repo.HasActiveSession)
+	gate := admission.NewGate(repo.HasActiveSession)
 	loop := New(repo, gate.BeginMaintenance, loopOptions())
 	ctx := t.Context()
 
@@ -345,10 +345,10 @@ func TestPassWithRealGateNeverOverlapsATask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginMaintenance: %v", err)
 	}
-	if _, busyErr := gate.BeginScan(); !fileops.IsBusy(busyErr) {
+	if _, busyErr := gate.BeginScan(); !admission.IsBusy(busyErr) {
 		t.Errorf("a scan started while maintenance held the slot: %v", busyErr)
 	}
-	if err := gate.Enqueue(func() error { return nil }); !fileops.IsBusy(err) {
+	if err := gate.Enqueue(func() error { return nil }); !admission.IsBusy(err) {
 		t.Errorf("a session was enqueued while maintenance held the slot: %v", err)
 	}
 	releaseMaintenance()
