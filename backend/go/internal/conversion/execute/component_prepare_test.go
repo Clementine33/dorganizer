@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
@@ -41,7 +42,7 @@ func TestPreparedComponent_CommitKeepsFrozenOrderWhenEncodesFinishReversed(t *te
 	second := filepath.Join(root, "b.mp3")
 	spec := mp3Spec()
 
-	encoder := execute.FFmpeg{}
+	encoder := ffmpeg.New(execute.ToolsConfig{})
 	secondDone := make(chan struct{})
 	kit := execute.ComponentRunTestKit{Encode: func(
 		ctx context.Context, src, dst string, outSpec reconcile.AudioOutputSpec,
@@ -186,7 +187,7 @@ func TestPreparedComponent_DiscardAfterCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	encoder := execute.FFmpeg{}
+	encoder := ffmpeg.New(execute.ToolsConfig{})
 	kit := execute.ComponentRunTestKit{Encode: func(
 		encCtx context.Context, src, dst string, outSpec reconcile.AudioOutputSpec,
 	) error {

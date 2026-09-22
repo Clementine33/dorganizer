@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
@@ -95,14 +96,22 @@ func declaredReplacement(target string) []reconcile.VariantDecision {
 	}}
 }
 
-// runRequest is the standard soft-mode request for one component.
+// runRequest is the standard soft-mode request for one component: the media
+// tools are the configured ones, which for a test means PATH. A test that wants
+// a broken or replaced tool overrides the encoder on the returned request.
 func runRequest(
 	root string,
 	component reconcile.ComponentOutcome,
 	specs reconcile.DesiredProfile,
 	mode execute.DeleteMode,
 ) execute.ComponentRunRequest {
-	return execute.ComponentRunRequest{Root: root, Component: component, Specs: specs, DeleteMode: mode}
+	return execute.ComponentRunRequest{
+		Root:       root,
+		Component:  component,
+		Specs:      specs,
+		DeleteMode: mode,
+		Encoder:    ffmpeg.New(execute.ToolsConfig{}),
+	}
 }
 
 // errorCode extracts the stable code of a ComponentError.
@@ -394,10 +403,10 @@ func TestComponentRun_DeleteOnlyNeedsNoEncodeTools(t *testing.T) {
 	writeBytes(t, obsolete, []byte("obsolete"))
 	component := componentFixture([]reconcile.FileTuple{freezeFile(t, obsolete)}, removeOp("cmp-1", obsolete))
 	request := runRequest(root, component, reconcile.DesiredProfile{}, execute.DeleteModeSoft)
-	request.Tools = execute.ToolsConfig{
+	request.Encoder = ffmpeg.New(execute.ToolsConfig{
 		FFmpegPath:  filepath.Join(root, "missing-ffmpeg"),
 		FFprobePath: filepath.Join(root, "missing-ffprobe"),
-	}
+	})
 	result, err := execute.RunComponent(t.Context(), request)
 	if err != nil {
 		t.Fatalf("delete-only run must not need ffmpeg: %v", err)
@@ -410,10 +419,10 @@ func TestComponentRun_DeleteOnlyNeedsNoEncodeTools(t *testing.T) {
 func TestComponentRun_ZeroOperationsSucceeds(t *testing.T) {
 	root := t.TempDir()
 	request := runRequest(root, componentFixture(nil), reconcile.DesiredProfile{}, execute.DeleteModeSoft)
-	request.Tools = execute.ToolsConfig{
+	request.Encoder = ffmpeg.New(execute.ToolsConfig{
 		FFmpegPath:  filepath.Join(root, "missing-ffmpeg"),
 		FFprobePath: filepath.Join(root, "missing-ffprobe"),
-	}
+	})
 	result, err := execute.RunComponent(t.Context(), request)
 	if err != nil {
 		t.Fatalf("zero-operation run must succeed without tools: %v", err)

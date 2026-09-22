@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
@@ -444,10 +445,10 @@ func TestComponentRun_PrecheckRejections(t *testing.T) {
 					mp3Profile,
 					execute.DeleteModeSoft,
 				)
-				request.Tools = execute.ToolsConfig{
+				request.Encoder = ffmpeg.New(execute.ToolsConfig{
 					FFmpegPath:  filepath.Join(root, "missing-ffmpeg"),
 					FFprobePath: filepath.Join(root, "missing-ffprobe"),
-				}
+				})
 				return request
 			},
 		},

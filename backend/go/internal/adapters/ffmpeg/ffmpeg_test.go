@@ -1,4 +1,4 @@
-package execute_test
+package ffmpeg_test
 
 import (
 	"context"
@@ -10,13 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
-func audioFixture(t *testing.T) (execute.FFmpeg, string) {
+func audioFixture(t *testing.T) (execute.Encoder, string) {
 	t.Helper()
-	encoder := execute.FFmpeg{}
+	encoder := ffmpeg.New(execute.ToolsConfig{})
 	if err := encoder.Check(); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +267,7 @@ func TestFFmpegRefusesInvalidAndCanceledConversion(t *testing.T) {
 	if err := encoder.Encode(t.Context(), src, src, spec); err == nil {
 		t.Fatal("source overwrite accepted")
 	}
-	if err := (execute.FFmpeg{Path: filepath.Join(t.TempDir(), "missing")}).Check(); err == nil {
+	if err := ffmpeg.New(execute.ToolsConfig{FFmpegPath: filepath.Join(t.TempDir(), "missing")}).Check(); err == nil {
 		t.Fatal("missing tool accepted")
 	}
 }

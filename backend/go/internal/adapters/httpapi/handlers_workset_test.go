@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
@@ -35,7 +36,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 		t.Fatalf("write config: %v", err)
 	}
 	svc := workset.NewService(repo, 1, 1, []workset.Task{
-		conversion.New(repo, appconfig.NewReader(tmp)),
+		conversion.New(repo, appconfig.NewReader(tmp), ffmpeg.New),
 	}, nil, nil)
 	handler := NewServer(Dependencies{
 		Library:        library.NewService(repo, nil, repo, fileops.ResolveMember),

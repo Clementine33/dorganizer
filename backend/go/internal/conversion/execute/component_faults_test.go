@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
@@ -189,7 +190,7 @@ func TestComponentRun_CancelStopsAtSafeBoundary(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	encoder := execute.FFmpeg{}
+	encoder := ffmpeg.New(execute.ToolsConfig{})
 	kit := execute.ComponentRunTestKit{
 		Encode: func(encCtx context.Context, src, dst string, outSpec reconcile.AudioOutputSpec) error {
 			err := encoder.Encode(encCtx, src, dst, outSpec)

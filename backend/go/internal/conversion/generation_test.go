@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
@@ -129,12 +130,13 @@ func runOneEncodedUnit(
 		Partition: string(outcome.Partition), Operations: len(outcome.Operations),
 		Payload: jsonBytes(t, profile),
 	}
-	prepared, err := conversion.New(repo, appconfig.NewReader(configDir)).PrepareUnit(t.Context(), workset.UnitRunInput{
-		WorksetRoot: filepath.ToSlash(root),
-		Options:     json.RawMessage(`{"delete_mode":"soft"}`),
-		Unit:        unit,
-		Outcome:     jsonBytes(t, outcome),
-	})
+	prepared, err := conversion.New(repo, appconfig.NewReader(configDir), ffmpeg.New).
+		PrepareUnit(t.Context(), workset.UnitRunInput{
+			WorksetRoot: filepath.ToSlash(root),
+			Options:     json.RawMessage(`{"delete_mode":"soft"}`),
+			Unit:        unit,
+			Outcome:     jsonBytes(t, outcome),
+		})
 	if err != nil {
 		t.Fatalf("prepare unit: %v", err)
 	}

@@ -1,4 +1,8 @@
-package execute
+// Package ffmpeg is the media tool adapter behind the execution pipeline: it
+// probes streams with ffprobe and writes outputs with ffmpeg. Everything an
+// invocation is made of — the arguments, the tool paths, the post-encode
+// validation — lives here; the pipeline only names the target specification.
+package ffmpeg
 
 import (
 	"context"
@@ -11,22 +15,26 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
-// FFmpeg encodes the frozen target specification, independently of global
-// encoder preferences. Empty paths use the executables on PATH.
-type FFmpeg struct {
-	Path      string
-	ProbePath string
+// Encoder is one configured pair of tools: it encodes the frozen target
+// specification independently of global encoder preferences. Empty paths use
+// the executables on PATH.
+type Encoder struct {
+	path      string
+	probePath string
 }
 
-func newFFmpeg(cfg ToolsConfig) FFmpeg {
-	return FFmpeg{Path: cfg.FFmpegPath, ProbePath: cfg.FFprobePath}
+// New builds the encoder over one tools configuration. It is the
+// execute.EncoderFactory a process is wired with.
+func New(cfg execute.ToolsConfig) execute.Encoder {
+	return Encoder{path: cfg.FFmpegPath, probePath: cfg.FFprobePath}
 }
 
-func (f FFmpeg) paths() (string, string) {
-	encoder, probe := f.Path, f.ProbePath
+func (f Encoder) paths() (string, string) {
+	encoder, probe := f.path, f.probePath
 	if encoder == "" {
 		encoder = "ffmpeg"
 	}
@@ -37,7 +45,7 @@ func (f FFmpeg) paths() (string, string) {
 }
 
 // Check verifies both tools before any filesystem changes.
-func (f FFmpeg) Check() error {
+func (f Encoder) Check() error {
 	encoder, probe := f.paths()
 	for _, tool := range []string{encoder, probe} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -47,14 +55,14 @@ func (f FFmpeg) Check() error {
 	return nil
 }
 
-// ToolVersion reports the encoder's own version line, the diagnostic a
-// generation credential records beside its facts: it names the binary that
-// wrote a file without claiming it as part of the file's identity — a re-encode
-// with a newer encoder is the same generation, an encode with other settings is
-// not. An unavailable tool reports an empty string rather than failing the
-// generation it describes.
-func ToolVersion(ctx context.Context, cfg ToolsConfig) string {
-	encoder, _ := newFFmpeg(cfg).paths()
+// Version reports the encoder's own version line, the diagnostic a generation
+// credential records beside its facts: it names the binary that wrote a file
+// without claiming it as part of the file's identity — a re-encode with a newer
+// encoder is the same generation, an encode with other settings is not. An
+// unavailable tool reports an empty string rather than failing the generation
+// it describes.
+func (f Encoder) Version(ctx context.Context) string {
+	encoder, _ := f.paths()
 	out, err := exec.CommandContext(ctx, encoder, "-version").Output()
 	if err != nil {
 		return ""
@@ -63,32 +71,36 @@ func ToolVersion(ctx context.Context, cfg ToolsConfig) string {
 	return strings.TrimSpace(line)
 }
 
-type audioStream struct {
-	Codec      string `json:"codec_name"`
-	SampleRate string `json:"sample_rate"`
-	Channels   int    `json:"channels"`
-	Bits       int    `json:"bits_per_sample"`
-	RawBits    string `json:"bits_per_raw_sample"`
-	Duration   string `json:"duration"`
-}
-
-func (f FFmpeg) probe(ctx context.Context, path string) (audioStream, error) {
+// Probe reads the first audio stream of one file.
+func (f Encoder) Probe(ctx context.Context, path string) (execute.AudioStream, error) {
 	_, probe := f.paths()
 	data, err := exec.CommandContext(ctx, probe, "-v", "error", "-select_streams", "a:0", "-show_streams", "-of", "json", path).
 		Output()
 	if err != nil {
-		return audioStream{}, fmt.Errorf("probe %s: %w", path, err)
+		return execute.AudioStream{}, fmt.Errorf("probe %s: %w", path, err)
 	}
 	var result struct {
-		Streams []audioStream `json:"streams"`
+		Streams []execute.AudioStream `json:"streams"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return audioStream{}, err
+		return execute.AudioStream{}, err
 	}
 	if len(result.Streams) != 1 || result.Streams[0].Channels < 1 {
-		return audioStream{}, fmt.Errorf("no audio stream: %s", path)
+		return execute.AudioStream{}, fmt.Errorf("no audio stream: %s", path)
 	}
 	return result.Streams[0], nil
+}
+
+// TargetFacts names the encoder binary and the rate-control mode one encoded
+// target is written with. It is derived from the same table Encode builds its
+// arguments from, so a generation credential can never describe a different
+// invocation than the one that ran.
+func (f Encoder) TargetFacts(spec reconcile.AudioOutputSpec) (encoder, mode string, err error) {
+	target, err := encodedTarget(spec.Codec, spec.Quality)
+	if err != nil {
+		return "", "", err
+	}
+	return target.Encoder, target.Mode, nil
 }
 
 // Encode creates and decodes a staged output before its caller can commit it.
@@ -97,7 +109,7 @@ func (f FFmpeg) probe(ctx context.Context, path string) (audioStream, error) {
 // AAC uses bitrate-controlled CBR (-b:a), never quality/VBR (-q:a).
 // The destination must be a new absolute staging path. Partial output on failure
 // belongs to the caller; this adapter never commits, removes or replaces media.
-func (f FFmpeg) Encode(ctx context.Context, src, dst string, spec reconcile.AudioOutputSpec) error {
+func (f Encoder) Encode(ctx context.Context, src, dst string, spec reconcile.AudioOutputSpec) error {
 	if !filepath.IsAbs(src) || !filepath.IsAbs(dst) || src == dst {
 		return fmt.Errorf("distinct absolute source and destination paths required")
 	}
@@ -106,7 +118,7 @@ func (f FFmpeg) Encode(ctx context.Context, src, dst string, spec reconcile.Audi
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	input, err := f.probe(ctx, src)
+	input, err := f.Probe(ctx, src)
 	if err != nil {
 		return err
 	}
@@ -134,7 +146,7 @@ func (f FFmpeg) Encode(ctx context.Context, src, dst string, spec reconcile.Audi
 	if output, runErr := exec.CommandContext(ctx, encoder, append(args, dst)...).CombinedOutput(); runErr != nil {
 		return fmt.Errorf("encode: %w: %s", runErr, output)
 	}
-	output, err := f.probe(ctx, dst)
+	output, err := f.Probe(ctx, dst)
 	if err != nil {
 		return err
 	}

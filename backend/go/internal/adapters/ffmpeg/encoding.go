@@ -1,9 +1,10 @@
-package execute
+package ffmpeg
 
 import (
 	"fmt"
 	"strconv"
 
+	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
@@ -66,20 +67,9 @@ func encodedTarget(codec reconcile.Codec, quality *reconcile.Quality) (encodedAu
 	return encodedArgs(codec, strconv.Itoa(quality.Bitrate)+"k")
 }
 
-// TargetFacts names the encoder and the rate-control mode one encoded target is
-// written with: what a generation credential records, and what makes a record
-// written under other settings no evidence for this one.
-func TargetFacts(spec reconcile.AudioOutputSpec) (encoder, mode string, err error) {
-	target, err := encodedTarget(spec.Codec, spec.Quality)
-	if err != nil {
-		return "", "", err
-	}
-	return target.Encoder, target.Mode, nil
-}
-
 // audioEncodingArgs preserves PCM precision, sample rate and channel count.
 // Unsupported lossless representations fail before ffmpeg creates output.
-func audioEncodingArgs(input audioStream, spec reconcile.AudioOutputSpec) (encodedAudio, error) {
+func audioEncodingArgs(input execute.AudioStream, spec reconcile.AudioOutputSpec) (encodedAudio, error) {
 	bits, _ := strconv.Atoi(input.RawBits)
 	bits = max(bits, input.Bits)
 	floating := false

@@ -12,7 +12,7 @@ import (
 // order. A caller that will not commit them must Discard it.
 type PreparedComponent struct {
 	tk      *componentToolkit
-	encoder FFmpeg
+	encoder Encoder
 	plan    *plannedComponent
 	soft    bool
 }
@@ -22,7 +22,7 @@ type PreparedComponent struct {
 // dependencies, paths, disk facts and tool availability — split so a session
 // can prepare a component before it decides to encode it.
 func PrepareComponent(ctx context.Context, req ComponentRunRequest) (*PreparedComponent, error) {
-	return prepareComponent(ctx, req, defaultComponentToolkit(req.Tools))
+	return prepareComponent(ctx, req, defaultComponentToolkit(req.Encoder))
 }
 
 func prepareComponent(ctx context.Context, req ComponentRunRequest, tk *componentToolkit) (*PreparedComponent, error) {
@@ -35,7 +35,7 @@ func prepareComponent(ctx context.Context, req ComponentRunRequest, tk *componen
 	}
 	return &PreparedComponent{
 		tk:      tk,
-		encoder: newFFmpeg(req.Tools),
+		encoder: req.Encoder,
 		plan:    plan,
 		soft:    req.DeleteMode == DeleteModeSoft,
 	}, nil

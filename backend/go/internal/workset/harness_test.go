@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
@@ -57,7 +58,7 @@ func newFixtureWithScan(t *testing.T, scan workset.FolderScan) *fixture {
 		t:    t,
 		repo: repo,
 		svc: workset.NewService(repo, 1, 1, []workset.Task{
-			conversion.New(repo, appconfig.NewReader(tmp)),
+			conversion.New(repo, appconfig.NewReader(tmp), ffmpeg.New),
 		}, scan, nil),
 		ctx: context.Background(),
 	}

@@ -85,7 +85,7 @@ func precheckComponentRequest(req ComponentRunRequest) (*plannedComponent, *Comp
 		return nil, cerr
 	}
 	if len(plan.encodes) > 0 {
-		if err := newFFmpeg(req.Tools).Check(); err != nil {
+		if err := req.Encoder.Check(); err != nil {
 			return nil, componentError(ComponentStagePrecheck, ComponentCodeToolsUnavailable, "",
 				"encode tools unavailable", err)
 		}

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
 	"github.com/onsei/organizer/backend/internal/adapters/httpapi"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
@@ -196,7 +197,7 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 		repo,
 		generationConcurrency,
 		0,
-		[]workset.Task{conversion.New(repo, appconfig.NewReader(configDir))},
+		[]workset.Task{conversion.New(repo, appconfig.NewReader(configDir), ffmpeg.New)},
 		scanSvc.RefreshMember,
 		gate.Enqueue,
 	)

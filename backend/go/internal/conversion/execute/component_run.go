@@ -70,7 +70,10 @@ type ComponentRunRequest struct {
 	Component  reconcile.ComponentOutcome
 	Specs      reconcile.DesiredProfile
 	DeleteMode DeleteMode
-	Tools      ToolsConfig
+	// Encoder is the media tool this run probes and writes with. The pipeline
+	// never builds one itself: it is handed the encoder the process is
+	// configured with, so a run can be driven by a test double as well.
+	Encoder Encoder
 	// RecoveryRoot is the root soft removals are made relative to — the
 	// workset's library root, so a recovered file lands under
 	// <RecoveryRoot>/Delete/<path relative to it>, beside the member folder
@@ -130,8 +133,7 @@ type componentToolkit struct {
 }
 
 // defaultComponentToolkit returns the real encoder and filesystem operations.
-func defaultComponentToolkit(tools ToolsConfig) *componentToolkit {
-	encoder := newFFmpeg(tools)
+func defaultComponentToolkit(encoder Encoder) *componentToolkit {
 	return &componentToolkit{
 		encode: encoder.Encode,
 		rename: os.Rename,
@@ -145,7 +147,7 @@ func defaultComponentToolkit(tools ToolsConfig) *componentToolkit {
 // uncommitted. It takes no cross-run lock: callers must serialize runs over
 // the same or overlapping roots (the execution session layer owns that).
 func RunComponent(ctx context.Context, req ComponentRunRequest) (ComponentRunResult, error) {
-	return runComponent(ctx, req, defaultComponentToolkit(req.Tools))
+	return runComponent(ctx, req, defaultComponentToolkit(req.Encoder))
 }
 
 func runComponent(ctx context.Context, req ComponentRunRequest, tk *componentToolkit) (ComponentRunResult, error) {
@@ -213,8 +215,8 @@ func cleanupTemps(tk *componentToolkit, plan *plannedComponent) []string {
 
 // validateStagedOutput re-probes a staged output before any commit: the file
 // must still be a readable audio stream of the frozen codec class.
-func validateStagedOutput(ctx context.Context, encoder FFmpeg, temp string, spec reconcile.AudioOutputSpec) error {
-	stream, err := encoder.probe(ctx, temp)
+func validateStagedOutput(ctx context.Context, encoder Encoder, temp string, spec reconcile.AudioOutputSpec) error {
+	stream, err := encoder.Probe(ctx, temp)
 	if err != nil {
 		return fmt.Errorf("probe staged output: %w", err)
 	}

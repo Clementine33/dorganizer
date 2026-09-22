@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
@@ -26,7 +27,7 @@ func draftJSON(deleteMode string) []byte {
 // accepted values, the soft default (an absent field), and a rejection for
 // anything else.
 func TestDraftDeleteModeValidation(t *testing.T) {
-	task := conversion.New(nil, appconfig.NewReader(t.TempDir()))
+	task := conversion.New(nil, appconfig.NewReader(t.TempDir()), ffmpeg.New)
 
 	for _, accepted := range []string{"", "soft", "hard"} {
 		if err := task.ValidateDraft(draftJSON(accepted), nil); err != nil {
@@ -42,7 +43,7 @@ func TestDraftDeleteModeValidation(t *testing.T) {
 // TestNormalizeDraftKeepsDeleteMode proves the setting survives the sparse
 // round trip, so a saved choice reaches every later revision snapshot.
 func TestNormalizeDraftKeepsDeleteMode(t *testing.T) {
-	task := conversion.New(nil, appconfig.NewReader(t.TempDir()))
+	task := conversion.New(nil, appconfig.NewReader(t.TempDir()), ffmpeg.New)
 
 	canonical, _, _, err := task.NormalizeDraft(draftJSON("hard"), nil)
 	if err != nil {
@@ -74,7 +75,7 @@ func TestSeedDraftReadsTheTagLiterals(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(tc.config), 0o644); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
-			raw, _, _ := conversion.New(nil, appconfig.NewReader(dir)).SeedDraft()
+			raw, _, _ := conversion.New(nil, appconfig.NewReader(dir), ffmpeg.New).SeedDraft()
 			var doc struct {
 				ClassifierTags []string `json:"classifier_tags"`
 			}

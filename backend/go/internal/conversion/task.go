@@ -18,14 +18,22 @@ import (
 
 // Task implements workset.Task for the conversion operation.
 type Task struct {
-	inventory Inventory
-	settings  Settings
+	inventory    Inventory
+	settings     Settings
+	buildEncoder execute.EncoderFactory
 }
 
 // New creates the conversion task: its input facts come from the injected
-// inventory, its configuration from the injected settings.
-func New(inv Inventory, settings Settings) *Task {
-	return &Task{inventory: inv, settings: settings}
+// inventory, its configuration from the injected settings, and the media tool
+// it prepares with from the injected factory — built when a unit is prepared,
+// so the tool paths in force are the ones configured at that moment.
+func New(inv Inventory, settings Settings, buildEncoder execute.EncoderFactory) *Task {
+	return &Task{inventory: inv, settings: settings, buildEncoder: buildEncoder}
+}
+
+// encoder builds the media tool for the tool paths the configuration names now.
+func (t *Task) encoder() execute.Encoder {
+	return t.buildEncoder(t.settings.Tools())
 }
 
 func (*Task) Kind() string { return workset.OperationTypeConversion }

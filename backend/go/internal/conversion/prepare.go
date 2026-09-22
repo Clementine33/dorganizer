@@ -29,7 +29,7 @@ func (t *Task) PrepareUnit(
 	if err != nil {
 		return nil, err
 	}
-	return &preparedUnit{in: in, component: component, profile: profile, tools: t.settings.Tools()}, nil
+	return &preparedUnit{in: in, component: component, profile: profile, encoder: t.encoder()}, nil
 }
 
 // prepareComponent decodes the frozen unit payloads and prechecks the
@@ -61,7 +61,7 @@ func (t *Task) prepareComponent(
 		Component:  outcome,
 		Specs:      profile,
 		DeleteMode: mode,
-		Tools:      t.settings.Tools(),
+		Encoder:    t.encoder(),
 		// Recovery copies land under <workset root>/Delete/..., beside the
 		// member folders, so they never re-enter the member's own inventory.
 		RecoveryRoot: in.WorksetRoot,
@@ -79,7 +79,7 @@ type preparedUnit struct {
 	in        workset.UnitRunInput
 	component *execute.PreparedComponent
 	profile   reconcile.DesiredProfile
-	tools     execute.ToolsConfig
+	encoder   execute.Encoder
 }
 
 // EncodeTasks is how many staged outputs Commit expects.
@@ -153,9 +153,9 @@ func (p *preparedUnit) recordGenerations(ctx context.Context, result *workset.Un
 			continue
 		}
 		if !probed {
-			version, probed = execute.ToolVersion(ctx, p.tools), true
+			version, probed = p.encoder.Version(ctx), true
 		}
-		encoder, mode, factsErr := execute.TargetFacts(spec)
+		encoder, mode, factsErr := p.encoder.TargetFacts(spec)
 		if factsErr != nil {
 			result.InventoryError = fmt.Sprintf("generation facts for %s: %v", path, factsErr)
 			return

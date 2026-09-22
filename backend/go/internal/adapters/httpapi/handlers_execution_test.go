@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/ffmpeg"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
@@ -74,7 +75,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	seedMember(t, repo, "albumA")
 	wsID := createRecord(t, h, libID, "create-exec-http")
 	svc := workset.NewService(repo, 1, 1, []workset.Task{
-		conversion.New(repo, appconfig.NewReader(t.TempDir())),
+		conversion.New(repo, appconfig.NewReader(t.TempDir()), ffmpeg.New),
 	}, nil, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
