@@ -23,7 +23,6 @@ const props = defineProps<{
   filter: 'all' | 'change' | 'warn' | 'blocked' | 'excluded'
   search: string
   conclusionFor: (member: WorksetMember) => MemberConclusion
-  historical: boolean
   /**
    * Drill-down tier: the row keeps only the name, a status icon and the view
    * action, so a narrow container is not spent on text that the member detail
@@ -166,7 +165,6 @@ function conclusionTitle(member: WorksetMember): string {
                 type="checkbox"
                 aria-label="全选当前筛选结果"
                 :checked="allVisibleSelected"
-                :disabled="historical"
                 @change="emit('toggleAll', visibleIds)"
               />
             </th>
@@ -187,7 +185,6 @@ function conclusionTitle(member: WorksetMember): string {
               <input
                 type="checkbox"
                 :checked="selectedIds.has(member.member_id)"
-                :disabled="historical"
                 :aria-label="`选择 ${member.folder_name}`"
                 @change="emit('toggle', member.member_id)"
               />

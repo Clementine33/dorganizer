@@ -30,8 +30,6 @@ export interface EditSession {
   /** Persisted document the session started from; intents apply to this. */
   baseDocument: OperationDraftDocument
   intent: EditIntent
-  /** Set when the session began from a historical (read-only) revision. */
-  readOnly: boolean
   applying: boolean
   error: string | null
 }
@@ -67,7 +65,6 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
       target: EditTarget
       baseVersion: number
       baseDocument: OperationDraftDocument
-      readOnly?: boolean
     }): boolean {
       if (this.session && sessionHasChanges(this.session) && !sameTarget(this.session.target, input.target)) {
         this.conflictNotices++
@@ -80,7 +77,6 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
         baseVersion: input.baseVersion,
         baseDocument: input.baseDocument,
         intent: { ...EMPTY_INTENT, units: {} },
-        readOnly: input.readOnly ?? false,
         applying: false,
         error: null,
       }
