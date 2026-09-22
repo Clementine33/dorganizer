@@ -189,4 +189,21 @@ describe('OverrideEditor', () => {
     const members = useWorksetEditorStore().pendingDocument?.members ?? []
     expect(members).toEqual([{ member_id: 'm-1', excluded: true, overrides: { matched: FLAC } }])
   })
+
+  it('shows participation as a clear binary, with no "keep as is" third state', async () => {
+    const harness = draft([{ member_id: 'm-1', excluded: true, overrides: { matched: FLAC } }])
+    const wrapper = mountEditor(harness, { kind: 'member', memberId: 'm-1' })
+
+    // The stored exclusion lights 排除; there is no ambiguous middle button.
+    expect(wrapper.get('[data-testid="participation-exclude"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="participation-include"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.text()).not.toContain('保持原样')
+
+    await wrapper.get('[data-testid="participation-include"]').trigger('click')
+    await nextTick()
+
+    // Bringing it back keeps its overrides; only the exclusion is dropped.
+    expect(wrapper.get('[data-testid="participation-include"]').attributes('aria-checked')).toBe('true')
+    expect(useWorksetEditorStore().pendingDocument?.members).toEqual([{ member_id: 'm-1', overrides: { matched: FLAC } }])
+  })
 })

@@ -32,6 +32,17 @@ const members = computed(() => {
   return memberIds.value.map((id) => all.find((m) => m.member_id === id)).filter((m) => m !== undefined)
 })
 
+/** Opens the batch session against the draft the page read. */
+function openSession(): boolean {
+  return editor.open({
+    worksetId: worksetId.value as string,
+    operation: 'conversion',
+    target: { kind: 'batch', memberIds: [...memberIds.value] },
+    baseVersion: draft.value!.version,
+    baseDocument: draft.value!.document,
+  })
+}
+
 // A batch route without a frozen list is not an error but a missing session:
 // the user is returned to the list to choose folders first (R04).
 watch(
@@ -44,14 +55,15 @@ watch(
     if (!draft.value) return
     const current = editor.session
     if (current && current.worksetId === worksetId.value && current.target.kind === 'batch') return
-    const opened = editor.open({
-      worksetId: worksetId.value,
-      operation: 'conversion',
-      target: { kind: 'batch', memberIds: [...memberIds.value] },
-      baseVersion: draft.value.version,
-      baseDocument: draft.value.document,
-    })
-    if (!opened) void router.replace(listRoute.value)
+    if (openSession()) return
+    // Another target holds unapplied edits (E04): ask before dropping them;
+    // refusing keeps them and returns to the list, where 继续编辑 resumes them.
+    if (!window.confirm('另一个范围还有未应用的修改，放弃它才能批量修改这些文件夹。放弃吗？')) {
+      void router.replace(listRoute.value)
+      return
+    }
+    editor.close()
+    openSession()
   },
   { immediate: true },
 )

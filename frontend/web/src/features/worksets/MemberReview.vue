@@ -165,7 +165,10 @@ function componentFacts(component: ComponentOutcome): { label: string; tone: 'su
       </ul>
     </section>
 
-    <div v-if="!frozen?.excluded && editable">
+    <!-- An excluded member is still editable: participation is one of the
+         units the editor writes, so hiding the way in would trap it. A
+         historical revision is the only state that stays read-only (E05). -->
+    <div v-if="editable">
       <slot name="actions" :edit="emit">
         <button
           type="button"

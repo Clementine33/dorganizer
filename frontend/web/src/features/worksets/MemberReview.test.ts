@@ -140,4 +140,17 @@ describe('MemberReview', () => {
     expect(wrapper.findAll('[data-testid="component-kept"]')).toHaveLength(0)
     expect(body).toContain('有变化')
   })
+
+  it('offers the editor for an excluded member, so it can be brought back', () => {
+    const excluded: RevisionDetailResponse = {
+      ...revision,
+      members: [{ ...revision.members[0]!, excluded: true }],
+    }
+
+    const editable = mount(MemberReview, { props: { member, revision: excluded, editable: true } })
+    expect(editable.get('[data-testid="member-review-edit"]').text()).toContain('修改此文件夹')
+    // Only a historical revision removes the way in (E05).
+    const historical = mount(MemberReview, { props: { member, revision: excluded, editable: false } })
+    expect(historical.find('[data-testid="member-review-edit"]').exists()).toBe(false)
+  })
 })

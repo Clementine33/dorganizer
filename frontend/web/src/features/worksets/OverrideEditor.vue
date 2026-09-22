@@ -124,6 +124,14 @@ function sourceText(source: 'common' | 'member' | 'mixed'): string {
 
 const participation = computed(() => readParticipation(props.draft, props.target))
 const participationIntent = computed(() => editor.session?.intent.participation ?? 'keep')
+/**
+ * The choice in force: a pending intent wins, otherwise the stored state. It is
+ * deliberately binary — participate or exclude — so the current position is
+ * always one of the two buttons, never an ambiguous "no change".
+ */
+const participationState = computed<'participate' | 'exclude' | 'mixed'>(() =>
+  participationIntent.value === 'keep' ? participation.value : participationIntent.value,
+)
 const targetLabel = computed(() => {
   switch (props.target.kind) {
     case 'common':
@@ -134,11 +142,7 @@ const targetLabel = computed(() => {
       return `${props.target.memberIds.length} 个文件夹`
   }
 })
-const effectivelyExcluded = computed(() => {
-  if (participationIntent.value === 'exclude') return true
-  if (participationIntent.value === 'participate') return false
-  return participation.value === 'exclude'
-})
+const effectivelyExcluded = computed(() => participationState.value === 'exclude')
 </script>
 
 <template>
@@ -205,18 +209,12 @@ const effectivelyExcluded = computed(() => {
       <p class="mb-2 text-[11px] text-[var(--text-muted)]">
         排除只改变本操作的参与状态，不会删除独立值；恢复参与后继续使用原有设置。
       </p>
-      <div class="flex flex-wrap gap-2">
+      <div class="flex flex-wrap gap-2" role="radiogroup" aria-label="本操作参与状态">
         <Button
           size="xs"
-          :variant="participationIntent === 'keep' ? 'secondary' : 'ghost'"
-          :disabled="readOnly"
-          @click="editor.setParticipation('keep')"
-        >
-          保持原样
-        </Button>
-        <Button
-          size="xs"
-          :variant="participationIntent === 'participate' ? 'secondary' : 'ghost'"
+          role="radio"
+          :aria-checked="participationState === 'participate'"
+          :variant="participationState === 'participate' ? 'secondary' : 'outline'"
           :disabled="readOnly"
           data-testid="participation-include"
           @click="editor.setParticipation('participate')"
@@ -225,7 +223,9 @@ const effectivelyExcluded = computed(() => {
         </Button>
         <Button
           size="xs"
-          :variant="participationIntent === 'exclude' ? 'secondary' : 'ghost'"
+          role="radio"
+          :aria-checked="participationState === 'exclude'"
+          :variant="participationState === 'exclude' ? 'secondary' : 'outline'"
           :disabled="readOnly"
           data-testid="participation-exclude"
           @click="editor.setParticipation('exclude')"
