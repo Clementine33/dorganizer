@@ -1,9 +1,11 @@
-package main
+package app_test
 
 import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/app"
 )
 
 func TestStartPprofServer_UsesConfiguredAddress(t *testing.T) {
@@ -12,7 +14,7 @@ func TestStartPprofServer_UsesConfiguredAddress(t *testing.T) {
 		handler http.Handler
 	}, 1)
 
-	startPprofServer("127.0.0.1:6060", func(addr string, handler http.Handler) error {
+	app.StartPprofServer("127.0.0.1:6060", func(addr string, handler http.Handler) error {
 		called <- struct {
 			addr    string
 			handler http.Handler

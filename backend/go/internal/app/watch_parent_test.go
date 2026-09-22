@@ -1,4 +1,5 @@
-package main
+//nolint:testpackage // drives the watcher's unexported seams directly
+package app
 
 import (
 	"context"
@@ -20,7 +21,7 @@ func TestStartParentDeathWatchers_CancelsOnStdinEOF(t *testing.T) {
 		baseCancel()
 	}
 
-	startParentDeathWatchers(ctx, cancel, strings.NewReader(""), 0, nil)
+	StartParentDeathWatchers(ctx, cancel, strings.NewReader(""), 0, nil)
 
 	select {
 	case <-ctx.Done():
@@ -40,7 +41,7 @@ func TestStartParentDeathWatchers_CancelsOnParentExit(t *testing.T) {
 		baseCancel()
 	}
 
-	startParentDeathWatchers(ctx, cancel, r, 123, func(context.Context, int) error {
+	StartParentDeathWatchers(ctx, cancel, r, 123, func(context.Context, int) error {
 		return nil
 	})
 
@@ -58,7 +59,7 @@ func TestStartParentDeathWatchers_DoesNotCancelOnParentWatchError(t *testing.T) 
 	r, _ := io.Pipe()
 	defer r.Close()
 
-	startParentDeathWatchers(ctx, baseCancel, r, 123, func(context.Context, int) error {
+	StartParentDeathWatchers(ctx, baseCancel, r, 123, func(context.Context, int) error {
 		return errors.New("watch failed")
 	})
 
@@ -79,7 +80,7 @@ func TestStartParentDeathWatchers_OnlyCancelsOnce(t *testing.T) {
 		baseCancel()
 	}
 
-	startParentDeathWatchers(ctx, cancel, strings.NewReader(""), 123, func(context.Context, int) error {
+	StartParentDeathWatchers(ctx, cancel, strings.NewReader(""), 123, func(context.Context, int) error {
 		return nil
 	})
 

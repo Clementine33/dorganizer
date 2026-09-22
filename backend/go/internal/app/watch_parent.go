@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-func startParentDeathWatchers(
+func StartParentDeathWatchers(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	stdin io.Reader,

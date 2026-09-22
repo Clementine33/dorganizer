@@ -1,5 +1,5 @@
 //nolint:testpackage // drives the unexported pass directly for the deterministic exclusion test
-package maintenance
+package app
 
 import (
 	"context"
@@ -217,7 +217,7 @@ func TestLoop_DefersWhileTheApplicationIsBusy(t *testing.T) {
 	seedOldScans(t, repo, 3)
 	acquire := &fakeAcquire{busy: true}
 	logs := captureLog(t)
-	stop := startLoop(t, New(repo, acquire.begin, loopOptions()))
+	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, loopOptions()))
 
 	waitFor(t, "several admission attempts", func() bool { return acquire.callCount() >= 3 })
 	stop()
@@ -234,7 +234,7 @@ func TestLoop_HoldsTheSlotOneBatchAtATime(t *testing.T) {
 	repo := newLoopRepo(t)
 	seedOldScans(t, repo, 3)
 	acquire := &fakeAcquire{}
-	stop := startLoop(t, New(repo, acquire.begin, loopOptions()))
+	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, loopOptions()))
 	defer stop()
 
 	waitFor(t, "every seeded row deleted", func() bool { return countScans(t, repo) == 0 })
@@ -252,7 +252,7 @@ func TestLoop_ContinuesOnTheNextTickWhenTheBudgetRunsOut(t *testing.T) {
 	acquire := &fakeAcquire{}
 	options := loopOptions()
 	options.MaxBatches = 1
-	stop := startLoop(t, New(repo, acquire.begin, options))
+	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, options))
 	defer stop()
 
 	// One pass is one batch: the rows go one per tick, not one per interval.
@@ -267,7 +267,7 @@ func TestLoop_ContinuesOnTheNextTickWhenTheBudgetRunsOut(t *testing.T) {
 func TestPassRunsOnePassNow(t *testing.T) {
 	repo := newLoopRepo(t)
 	seedOldScans(t, repo, 1)
-	loop := New(repo, (&fakeAcquire{}).begin, loopOptions())
+	loop := NewMaintenanceLoop(repo, (&fakeAcquire{}).begin, loopOptions())
 
 	if !loop.Pass(t.Context()) {
 		t.Fatal("a start-up pass with work to do must complete")
@@ -280,7 +280,7 @@ func TestPassRunsOnePassNow(t *testing.T) {
 func TestLoop_DoesNotRepeatACompletedPassBeforeTheInterval(t *testing.T) {
 	repo := newLoopRepo(t) // nothing to delete: the first pass completes
 	acquire := &fakeAcquire{}
-	stop := startLoop(t, New(repo, acquire.begin, loopOptions()))
+	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, loopOptions()))
 	defer stop()
 
 	waitFor(t, "the first pass", func() bool { return acquire.callCount() >= 1 })
@@ -305,7 +305,7 @@ func TestLoop_ReportsABrokenAdmissionCheck(t *testing.T) {
 	seedOldScans(t, repo, 1)
 	acquire := &fakeAcquire{err: errors.New("active-session query failed")}
 	logs := captureLog(t)
-	stop := startLoop(t, New(repo, acquire.begin, loopOptions()))
+	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, loopOptions()))
 
 	waitFor(t, "the failed check to be reported", func() bool {
 		return logs.contains("admission check failed")
@@ -325,7 +325,7 @@ func TestPassWithRealGateNeverOverlapsATask(t *testing.T) {
 	repo := newLoopRepo(t)
 	seedOldScans(t, repo, 3)
 	gate := admission.NewGate(repo.HasActiveSession)
-	loop := New(repo, gate.BeginMaintenance, loopOptions())
+	loop := NewMaintenanceLoop(repo, gate.BeginMaintenance, loopOptions())
 	ctx := t.Context()
 
 	// A scan in flight refuses the whole pass.

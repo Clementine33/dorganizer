@@ -1,4 +1,4 @@
-package maintenance
+package app
 
 import (
 	"context"

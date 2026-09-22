@@ -11,7 +11,7 @@
 //
 // It is deliberately not a service with its own state: the application starts
 // it, the application's context stops it, and nothing else observes it.
-package maintenance
+package app
 
 import (
 	"context"
@@ -104,10 +104,10 @@ type Loop struct {
 	opts    Options
 }
 
-// New builds a Loop over repo. acquire is the admission gate's maintenance
+// NewMaintenanceLoop builds a Loop over repo. acquire is the admission gate's maintenance
 // entry point (admission.Gate.BeginMaintenance) - passing it in rather than
 // reaching for the gate keeps the loop independent of how admission is decided.
-func New(repo *sqlite.Repository, acquire func() (func(), error), opts Options) *Loop {
+func NewMaintenanceLoop(repo *sqlite.Repository, acquire func() (func(), error), opts Options) *Loop {
 	return &Loop{repo: repo, acquire: acquire, opts: opts.withDefaults()}
 }
 
