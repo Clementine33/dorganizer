@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // generationViewResponse is the session detail payload.
@@ -25,7 +25,7 @@ type generationViewResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
-func toGenerationViewResponse(g *worksetusecase.GenerationView) generationViewResponse {
+func toGenerationViewResponse(g *workset.GenerationView) generationViewResponse {
 	out := generationViewResponse{
 		GenerationID:   g.GenerationID,
 		WorksetID:      g.WorksetID,
@@ -83,7 +83,7 @@ func (s *Server) startGeneration(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		r.PathValue("id"),
 		r.PathValue("type"),
-		worksetusecase.StartGenerationRequest{
+		workset.StartGenerationRequest{
 			IfMatchVersion: version,
 			IdempotencyKey: idemKey,
 		},

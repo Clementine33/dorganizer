@@ -10,7 +10,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // seedRevision writes a plan snapshot, its revision association and the
@@ -18,11 +18,11 @@ import (
 func seedRevision(
 	t *testing.T,
 	repo *sqlite.Repository,
-	svc worksetusecase.Service,
+	svc workset.Service,
 	libID, worksetID, planID string,
 ) int {
 	t.Helper()
-	draft, err := svc.GetDraft(t.Context(), worksetID, worksetusecase.OperationTypeConversion)
+	draft, err := svc.GetDraft(t.Context(), worksetID, workset.OperationTypeConversion)
 	if err != nil {
 		t.Fatalf("GetDraft: %v", err)
 	}
@@ -57,9 +57,9 @@ func seedRevision(
 	return getOperationVersion(t, svc, worksetID)
 }
 
-func getOperationVersion(t *testing.T, svc worksetusecase.Service, worksetID string) int {
+func getOperationVersion(t *testing.T, svc workset.Service, worksetID string) int {
 	t.Helper()
-	view, err := svc.GetOperation(t.Context(), worksetID, worksetusecase.OperationTypeConversion)
+	view, err := svc.GetOperation(t.Context(), worksetID, workset.OperationTypeConversion)
 	if err != nil {
 		t.Fatalf("GetOperation: %v", err)
 	}
@@ -72,8 +72,8 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	libID := seedLibrary(t, repo)
 	seedMember(t, repo, "albumA")
 	wsID := createRecord(t, h, libID, "create-exec-http")
-	svc := worksetusecase.NewService(repo, 1, 1, []worksetusecase.Task{
-		tasksconversion.New(t.TempDir()),
+	svc := workset.NewService(repo, 1, 1, []workset.Task{
+		tasksconversion.New(t.TempDir(), repo),
 	}, nil, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"
@@ -114,8 +114,8 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 		t.Fatalf("start = %d %s", w.Code, w.Body.String())
 	}
 	var startResp struct {
-		Created   bool                         `json:"created"`
-		Execution worksetusecase.ExecutionView `json:"execution"`
+		Created   bool                  `json:"created"`
+		Execution workset.ExecutionView `json:"execution"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &startResp); err != nil {
 		t.Fatalf("decode start: %v", err)
@@ -147,8 +147,8 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 		t.Fatalf("replay = %d, want 200", w.Code)
 	}
 	var replay struct {
-		Created   bool                         `json:"created"`
-		Execution worksetusecase.ExecutionView `json:"execution"`
+		Created   bool                  `json:"created"`
+		Execution workset.ExecutionView `json:"execution"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil {
 		t.Fatalf("decode replay: %v", err)
@@ -182,8 +182,8 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	// session reference.
 	w = req(t, h, http.MethodGet, opPath, testToken, nil)
 	var opView struct {
-		ActiveExecution *worksetusecase.ExecutionProgress `json:"active_execution"`
-		LatestExecution *worksetusecase.ExecutionRef      `json:"latest_execution"`
+		ActiveExecution *workset.ExecutionProgress `json:"active_execution"`
+		LatestExecution *workset.ExecutionRef      `json:"latest_execution"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &opView); err != nil {
 		t.Fatalf("decode operation: %v", err)
@@ -194,7 +194,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	}
 	w = req(t, h, http.MethodGet, opPath+"/revisions/plan-http", testToken, nil)
 	var revView struct {
-		Execution *worksetusecase.ExecutionRef `json:"execution"`
+		Execution *workset.ExecutionRef `json:"execution"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &revView); err != nil {
 		t.Fatalf("decode revision: %v", err)
@@ -226,7 +226,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("cancel = %d %s", w.Code, w.Body.String())
 	}
-	var canceled worksetusecase.ExecutionView
+	var canceled workset.ExecutionView
 	if err := json.Unmarshal(w.Body.Bytes(), &canceled); err != nil {
 		t.Fatalf("decode cancel: %v", err)
 	}

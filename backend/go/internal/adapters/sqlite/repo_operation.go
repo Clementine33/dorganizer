@@ -5,37 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
-// ==================== Workset operations ====================
-
-// Operation is one independent Workset Operation (ADR 0001 §1) keyed by
-// (workset, type). Version is the operation concurrency counter advanced by
-// draft saves and revision publication; CurrentRevisionID is "" until the
-// first successful generation publishes.
-type Operation struct {
-	WorksetID         string
-	OperationType     string
-	Version           int
-	CurrentRevisionID string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-}
-
-// OperationDraft is the mutable sparse draft of one operation.
-type OperationDraft struct {
-	WorksetID     string
-	OperationType string
-	SchemaVersion int
-	DraftJSON     string
-	DraftHash     string
-	UpdatedAt     time.Time
-}
+// ==================== workset.Workset operations ====================
 
 const operationColumns = `workset_id, operation_type, version, current_revision_id, created_at, updated_at`
 
-func scanOperation(scanner interface{ Scan(...any) error }) (*Operation, error) {
-	var o Operation
+func scanOperation(scanner interface{ Scan(...any) error }) (*workset.Operation, error) {
+	var o workset.Operation
 	var currentRevision sql.NullString
 	var createdAt, updatedAt string
 	if err := scanner.Scan(
@@ -54,10 +33,10 @@ func scanOperation(scanner interface{ Scan(...any) error }) (*Operation, error) 
 	return &o, nil
 }
 
-// GetOperation loads one operation. Returns ErrOperationNotFound when the
+// GetOperation loads one operation. Returns workset.ErrOperationNotFound when the
 // (workset, type) pair has no row, which is also the answer for an unknown
 // workset: callers load the workset first when they need to distinguish.
-func (r *Repository) GetOperation(worksetID, operationType string) (*Operation, error) {
+func (r *Repository) GetOperation(worksetID, operationType string) (*workset.Operation, error) {
 	row := r.db.QueryRow(
 		`SELECT `+operationColumns+` FROM workset_operations WHERE workset_id = ? AND operation_type = ?`,
 		worksetID,
@@ -66,7 +45,7 @@ func (r *Repository) GetOperation(worksetID, operationType string) (*Operation, 
 	o, err := scanOperation(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrOperationNotFound
+			return nil, workset.ErrOperationNotFound
 		}
 		return nil, err
 	}
@@ -74,7 +53,7 @@ func (r *Repository) GetOperation(worksetID, operationType string) (*Operation, 
 }
 
 // ListOperations returns a workset's operations in creation order.
-func (r *Repository) ListOperations(worksetID string) ([]*Operation, error) {
+func (r *Repository) ListOperations(worksetID string) ([]*workset.Operation, error) {
 	rows, err := r.db.Query(
 		`SELECT `+operationColumns+` FROM workset_operations WHERE workset_id = ? ORDER BY created_at, operation_type`,
 		worksetID,
@@ -83,7 +62,7 @@ func (r *Repository) ListOperations(worksetID string) ([]*Operation, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Operation
+	var out []*workset.Operation
 	for rows.Next() {
 		o, scanErr := scanOperation(rows)
 		if scanErr != nil {
@@ -94,7 +73,7 @@ func (r *Repository) ListOperations(worksetID string) ([]*Operation, error) {
 	return out, rows.Err()
 }
 
-func insertOperation(tx *sql.Tx, o Operation) error {
+func insertOperation(tx *sql.Tx, o workset.Operation) error {
 	var currentRevision any
 	if o.CurrentRevisionID != "" {
 		currentRevision = o.CurrentRevisionID
@@ -110,8 +89,8 @@ func insertOperation(tx *sql.Tx, o Operation) error {
 
 // GetOperationDraft loads one operation's draft. Returns nil when the
 // operation has no draft row.
-func (r *Repository) GetOperationDraft(worksetID, operationType string) (*OperationDraft, error) {
-	var d OperationDraft
+func (r *Repository) GetOperationDraft(worksetID, operationType string) (*workset.OperationDraft, error) {
+	var d workset.OperationDraft
 	var updatedAt string
 	err := r.db.QueryRow(`
 		SELECT workset_id, operation_type, schema_version, draft_json, draft_hash, updated_at
@@ -137,7 +116,7 @@ func (r *Repository) GetOperationDraft(worksetID, operationType string) (*Operat
 // SaveOperationDraft replaces the full draft document and bumps the operation
 // version in one transaction. The draft write must never be visible without
 // its version bump, so the guarded update and the upsert share one commit.
-// ErrVersionConflict on a stale If-Match, ErrOperationNotFound when the
+// workset.ErrVersionConflict on a stale If-Match, workset.ErrOperationNotFound when the
 // operation row is gone.
 func (r *Repository) SaveOperationDraft(
 	worksetID, operationType string,
@@ -163,7 +142,7 @@ func (r *Repository) SaveOperationDraft(
 	if affected == 0 {
 		return operationVersionGuardResult(tx, worksetID, operationType)
 	}
-	if err := upsertOperationDraft(tx, OperationDraft{
+	if err := upsertOperationDraft(tx, workset.OperationDraft{
 		WorksetID:     worksetID,
 		OperationType: operationType,
 		SchemaVersion: schemaVersion,
@@ -176,7 +155,7 @@ func (r *Repository) SaveOperationDraft(
 	return tx.Commit()
 }
 
-func upsertOperationDraft(tx *sql.Tx, d OperationDraft) error {
+func upsertOperationDraft(tx *sql.Tx, d workset.OperationDraft) error {
 	if _, err := tx.Exec(`
 		INSERT INTO workset_operation_drafts (workset_id, operation_type, schema_version, draft_json, draft_hash, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -202,35 +181,16 @@ func operationVersionGuardResult(tx *sql.Tx, worksetID, operationType string) er
 		return err
 	}
 	if n == 0 {
-		return ErrOperationNotFound
+		return workset.ErrOperationNotFound
 	}
-	return ErrVersionConflict
+	return workset.ErrVersionConflict
 }
 
-// ==================== Operation revisions ====================
-
-// ErrRevisionNotFound is returned when an operation revision cannot be found.
-var ErrRevisionNotFound = errors.New("revision not found")
-
-// OperationRevision is the immutable revision association row. ExcludedScope
-// (NUL-joined member_ids) and DraftSnapshot (frozen sparse draft JSON) are part
-// of the immutable snapshot (ADR 0001 §2).
-type OperationRevision struct {
-	PlanID           string
-	WorksetID        string
-	OperationType    string
-	RevisionIndex    int
-	DraftHash        string
-	MemberHash       string
-	OperationVersion int
-	ExcludedScope    string
-	DraftSnapshot    string
-	CreatedAt        time.Time
-}
+// ==================== workset.Operation revisions ====================
 
 // GetOperationRevision retrieves one revision association by plan id.
-func (r *Repository) GetOperationRevision(worksetID, operationType, planID string) (*OperationRevision, error) {
-	var rev OperationRevision
+func (r *Repository) GetOperationRevision(worksetID, operationType, planID string) (*workset.OperationRevision, error) {
+	var rev workset.OperationRevision
 	var createdAt string
 	err := r.db.QueryRow(`
 		SELECT plan_id, workset_id, operation_type, revision_index, draft_hash, member_hash,
@@ -250,41 +210,12 @@ func (r *Repository) GetOperationRevision(worksetID, operationType, planID strin
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrRevisionNotFound
+			return nil, workset.ErrRevisionNotFound
 		}
 		return nil, err
 	}
 	rev.CreatedAt = parseTimestamp(createdAt)
 	return &rev, nil
-}
-
-// OperationRevisionPersist bundles the atomic completion payload: the plan
-// plan snapshot inserts, the revision association, the operation's
-// current-revision promotion and the generation completion. DraftHash and
-// MemberHash are the canonical frozen inputs for dedup and needs_planning
-// derivation.
-type OperationRevisionPersist struct {
-	PlanID        string
-	RootPath      string
-	SnapshotToken string
-	LibraryID     string
-	DraftHash     string
-	MemberHash    string
-	// OperationVersion is the operation version observed at enqueue time,
-	// frozen on the revision for audit.
-	OperationVersion int
-	// ExcludedScope is the NUL-joined set of member_ids excluded from planning
-	// for this revision; empty when nothing was excluded.
-	ExcludedScope string
-	// DraftSnapshot is the frozen sparse draft JSON: the review UI resolves the
-	// per-member effective configs and inheritance sources from it.
-	DraftSnapshot string
-	// TaskSchemaVersion is the plan payload's schema version, stored on the
-	// plan row so the review envelope can name it.
-	TaskSchemaVersion int
-	Steps             []PlanStepRecord
-	Roots             []PlanRootRecord
-	Components        []PlanComponentRecord
 }
 
 // PersistOperationRevision atomically writes a completed generation: the plan
@@ -301,7 +232,7 @@ type OperationRevisionPersist struct {
 func (r *Repository) PersistOperationRevision(
 	genID, worksetID, operationType string,
 	now time.Time,
-	p OperationRevisionPersist,
+	p workset.OperationRevisionPersist,
 ) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -363,7 +294,7 @@ func (r *Repository) PersistOperationRevision(
 		return fmt.Errorf("complete generation: %w", err)
 	}
 	if affected, _ := result.RowsAffected(); affected == 0 {
-		return ErrGenerationNotFound
+		return workset.ErrGenerationNotFound
 	}
 	if replacedPlanID.Valid && replacedPlanID.String != "" && replacedPlanID.String != p.PlanID {
 		if cleanupErr := deletePlanDataTx(tx, replacedPlanID.String); cleanupErr != nil {

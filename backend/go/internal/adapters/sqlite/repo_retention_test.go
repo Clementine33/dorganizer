@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/inventory"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // seedRetentionWorkset persists a current record for plan_generations rows to
@@ -13,7 +14,13 @@ func seedRetentionWorkset(t *testing.T, repo *Repository) string {
 	t.Helper()
 	insertLibrary(t, repo, "lib-1")
 	ws, members, op, draft := newOperationFixture(t, "lib-1", "retention")
-	if err := repo.ReplaceCurrentWorkset(ws, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		ws,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("seed workset: %v", err)
 	}
 	return ws.ID

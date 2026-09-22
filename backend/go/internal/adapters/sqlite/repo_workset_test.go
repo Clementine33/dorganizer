@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // newOperationFixture builds one workset with its conversion operation and
@@ -11,10 +13,10 @@ import (
 func newOperationFixture(
 	t *testing.T,
 	libID, title string,
-) (*Workset, []WorksetMember, Operation, OperationDraft) {
+) (*workset.Workset, []workset.WorksetMember, workset.Operation, workset.OperationDraft) {
 	t.Helper()
 	now := time.Now()
-	w := &Workset{
+	w := &workset.Workset{
 		ID:            "ws-test-" + title,
 		Title:         title,
 		LibraryID:     libID,
@@ -25,7 +27,7 @@ func newOperationFixture(
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	members := []WorksetMember{
+	members := []workset.WorksetMember{
 		{
 			WorksetID:   w.ID,
 			MemberID:    "m-test-a-" + title,
@@ -43,14 +45,14 @@ func newOperationFixture(
 			FolderName:  "albumB",
 		},
 	}
-	op := Operation{
+	op := workset.Operation{
 		WorksetID:     w.ID,
 		OperationType: "conversion",
 		Version:       1,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	draft := OperationDraft{
+	draft := workset.OperationDraft{
 		WorksetID:     w.ID,
 		OperationType: "conversion",
 		SchemaVersion: 1,
@@ -81,7 +83,13 @@ func TestWorksetCRUD(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "crud")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 
@@ -121,7 +129,7 @@ func TestWorksetCRUD(t *testing.T) {
 		t.Fatalf("ListOperations: %+v err=%v", ops, err)
 	}
 
-	if _, err := repo.GetOperation(w.ID, "rename"); !errors.Is(err, ErrOperationNotFound) {
+	if _, err := repo.GetOperation(w.ID, "rename"); !errors.Is(err, workset.ErrOperationNotFound) {
 		t.Fatalf("unknown operation type must be not-found, got %v", err)
 	}
 }
@@ -132,7 +140,13 @@ func TestReplaceCurrentWorksetIdempotency(t *testing.T) {
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "idem")
 	w.CreationIdemKey = "key-1"
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	replayed, err := repo.GetWorksetByCreationIdemKey("key-1")
@@ -148,12 +162,12 @@ func TestReplaceCurrentWorksetIdempotency(t *testing.T) {
 	if err := repo.ReplaceCurrentWorkset(
 		w2,
 		members2,
-		[]Operation{op2},
-		[]OperationDraft{draft2},
+		[]workset.Operation{op2},
+		[]workset.OperationDraft{draft2},
 		"",
 	); !errors.Is(
 		err,
-		ErrWorksetIdemConflict,
+		workset.ErrWorksetIdemConflict,
 	) {
 		t.Fatalf("duplicate creation key must conflict, got %v", err)
 	}
@@ -174,7 +188,13 @@ func TestReplaceCurrentWorksetCascadesToChildren(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	replaced, members, op, draft := newOperationFixture(t, "lib-1", "cascade")
-	if err := repo.ReplaceCurrentWorkset(replaced, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		replaced,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	seedGeneration(t, repo, "gen-old", replaced.ID)
@@ -197,8 +217,8 @@ func TestReplaceCurrentWorksetCascadesToChildren(t *testing.T) {
 	if err := repo.ReplaceCurrentWorkset(
 		replacement,
 		members2,
-		[]Operation{op2},
-		[]OperationDraft{draft2},
+		[]workset.Operation{op2},
+		[]workset.OperationDraft{draft2},
 		replaced.ID,
 	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset(replacement): %v", err)
@@ -230,7 +250,13 @@ func TestClearExpiredWorksetIdemKey(t *testing.T) {
 	w.CreationIdemKey = "key-old"
 	w.CreatedAt = time.Now().Add(-60 * 24 * time.Hour)
 	w.UpdatedAt = w.CreatedAt
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.ClearExpiredWorksetIdemKey(w.ID, time.Now().Add(-30*24*time.Hour)); err != nil {
@@ -250,7 +276,13 @@ func TestWorksetVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "guard")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.RenameWorkset(w.ID, "新名字", 1, time.Now()); err != nil {
@@ -260,10 +292,10 @@ func TestWorksetVersionGuard(t *testing.T) {
 	if renamed.Title != "新名字" || renamed.Version != 2 {
 		t.Fatalf("rename result: %+v", renamed)
 	}
-	if err := repo.RenameWorkset(w.ID, "又改名", 1, time.Now()); !errors.Is(err, ErrVersionConflict) {
+	if err := repo.RenameWorkset(w.ID, "又改名", 1, time.Now()); !errors.Is(err, workset.ErrVersionConflict) {
 		t.Fatalf("stale rename must conflict, got %v", err)
 	}
-	if err := repo.RenameWorkset("ws-missing", "x", 1, time.Now()); !errors.Is(err, ErrWorksetNotFound) {
+	if err := repo.RenameWorkset("ws-missing", "x", 1, time.Now()); !errors.Is(err, workset.ErrWorksetNotFound) {
 		t.Fatalf("missing workset must be not-found, got %v", err)
 	}
 	// A rename never advanced the operation version.
@@ -278,7 +310,13 @@ func TestOperationDraftSaveVersionGuard(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "draft")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	if err := repo.SaveOperationDraft(w.ID, "conversion", 1, `{"a":1}`, "hash-2", 1, time.Now()); err != nil {
@@ -302,7 +340,7 @@ func TestOperationDraftSaveVersionGuard(t *testing.T) {
 		time.Now(),
 	); !errors.Is(
 		err,
-		ErrVersionConflict,
+		workset.ErrVersionConflict,
 	) {
 		t.Fatalf("stale draft save must conflict, got %v", err)
 	}
@@ -316,7 +354,7 @@ func TestOperationDraftSaveVersionGuard(t *testing.T) {
 		time.Now(),
 	); !errors.Is(
 		err,
-		ErrOperationNotFound,
+		workset.ErrOperationNotFound,
 	) {
 		t.Fatalf("unknown operation must be not-found, got %v", err)
 	}
@@ -328,12 +366,18 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "rev")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 
 	now := time.Now()
-	g := &PlanGeneration{
+	g := &workset.PlanGeneration{
 		GenerationID:   "gen-1",
 		WorksetID:      w.ID,
 		OperationType:  "conversion",
@@ -346,7 +390,7 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		t.Fatalf("CreateGeneration: %v", err)
 	}
 
-	err := repo.PersistOperationRevision(g.GenerationID, w.ID, "conversion", now, OperationRevisionPersist{
+	err := repo.PersistOperationRevision(g.GenerationID, w.ID, "conversion", now, workset.OperationRevisionPersist{
 		PlanID:           "plan-1",
 		RootPath:         "/music/albumA + /music/albumB",
 		SnapshotToken:    "snap-1",
@@ -356,10 +400,10 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		OperationVersion: 1,
 		ExcludedScope:    "m-test-b-rev",
 		DraftSnapshot:    `{"schema_version":1}`,
-		Steps: []PlanStepRecord{{
+		Steps: []workset.PlanStepRecord{{
 			StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok",
 		}},
-		Roots: []PlanRootRecord{
+		Roots: []workset.PlanRootRecord{
 			{
 				RootIndex:            0,
 				RootPath:             "/music/albumA",
@@ -381,7 +425,7 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 	}
 
 	genGot, _ := repo.GetGeneration("gen-1")
-	if genGot.Status != GenStatusCompleted || genGot.RevisionID != "plan-1" {
+	if genGot.Status != workset.GenStatusCompleted || genGot.RevisionID != "plan-1" {
 		t.Fatalf("generation: %+v", genGot)
 	}
 	// Promotion advances the OPERATION version, never the workset metadata one.
@@ -402,12 +446,19 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		rev.DraftSnapshot != `{"schema_version":1}` || rev.OperationVersion != 1 {
 		t.Fatalf("revision: %+v", rev)
 	}
-	if _, revErr := repo.GetOperationRevision(w.ID, "rename", "plan-1"); !errors.Is(revErr, ErrRevisionNotFound) {
+	if _, revErr := repo.GetOperationRevision(
+		w.ID,
+		"rename",
+		"plan-1",
+	); !errors.Is(
+		revErr,
+		workset.ErrRevisionNotFound,
+	) {
 		t.Fatalf("unknown operation type must not resolve a revision, got %v", err)
 	}
 
 	// A second revision gets index 2.
-	g2 := &PlanGeneration{
+	g2 := &workset.PlanGeneration{
 		GenerationID:  "gen-2",
 		WorksetID:     w.ID,
 		OperationType: "conversion",
@@ -421,7 +472,7 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		w.ID,
 		"conversion",
 		now.Add(time.Second),
-		OperationRevisionPersist{
+		workset.OperationRevisionPersist{
 			PlanID:           "plan-2",
 			RootPath:         "/music/albumA",
 			SnapshotToken:    "snap-2",
@@ -429,8 +480,10 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 			DraftHash:        "hash-2",
 			MemberHash:       "members-1",
 			OperationVersion: 2,
-			Steps:            []PlanStepRecord{{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"}},
-			Roots: []PlanRootRecord{
+			Steps: []workset.PlanStepRecord{
+				{StepIndex: 0, StepType: "reconcile_audio_outputs", Status: "ok"},
+			},
+			Roots: []workset.PlanRootRecord{
 				{
 					RootIndex:            0,
 					RootPath:             "/music/albumA",
@@ -459,11 +512,11 @@ func TestOperationRevisionLifecycle(t *testing.T) {
 		"plan-1",
 	); !errors.Is(
 		replacedErr,
-		ErrRevisionNotFound,
+		workset.ErrRevisionNotFound,
 	) {
 		t.Fatalf("the replaced revision must be gone, got %v", replacedErr)
 	}
-	if _, planErr := repo.GetPlanDetail("plan-1"); !errors.Is(planErr, ErrPlanNotFound) {
+	if _, planErr := repo.GetPlanDetail("plan-1"); !errors.Is(planErr, workset.ErrPlanNotFound) {
 		t.Fatalf("the replaced plan payload must be gone, got %v", planErr)
 	}
 	if len(rev2.PlanID) == 0 {
@@ -478,17 +531,23 @@ func TestPersistOperationRevisionRetiresTheReplacedExecution(t *testing.T) {
 	repo := newTestRepository(t)
 	insertLibrary(t, repo, "lib-1")
 	w, members, op, draft := newOperationFixture(t, "lib-1", "retire-exec")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	now := time.Now()
 	seedGeneration(t, repo, "gen-r1", w.ID)
-	if err := repo.PersistOperationRevision("gen-r1", w.ID, "conversion", now, OperationRevisionPersist{
+	if err := repo.PersistOperationRevision("gen-r1", w.ID, "conversion", now, workset.OperationRevisionPersist{
 		PlanID: "plan-r1", RootPath: "/music", SnapshotToken: "snap-r1", LibraryID: "lib-1",
 	}); err != nil {
 		t.Fatalf("PersistOperationRevision(plan-r1): %v", err)
 	}
-	if err := repo.CreateExecutionGuarded(&PlanExecution{
+	if err := repo.CreateExecutionGuarded(&workset.PlanExecution{
 		ExecutionID:   "exec-r1",
 		WorksetID:     w.ID,
 		OperationType: "conversion",
@@ -496,7 +555,7 @@ func TestPersistOperationRevisionRetiresTheReplacedExecution(t *testing.T) {
 		Status:        "succeeded",
 		RequestJSON:   "{}",
 		CreatedAt:     now,
-	}, ExecutionGuards{
+	}, workset.ExecutionGuards{
 		ExpectedOperationVersion: 2,
 		ExpectedCurrentRevision:  "plan-r1",
 		ExpectedDraftHash:        "hash-1",
@@ -510,13 +569,13 @@ func TestPersistOperationRevisionRetiresTheReplacedExecution(t *testing.T) {
 		w.ID,
 		"conversion",
 		now.Add(time.Second),
-		OperationRevisionPersist{
+		workset.OperationRevisionPersist{
 			PlanID: "plan-r2", RootPath: "/music", SnapshotToken: "snap-r2", LibraryID: "lib-1",
 		},
 	); err != nil {
 		t.Fatalf("PersistOperationRevision(plan-r2): %v", err)
 	}
-	if _, err := repo.GetExecution("exec-r1"); !errors.Is(err, ErrExecutionNotFound) {
+	if _, err := repo.GetExecution("exec-r1"); !errors.Is(err, workset.ErrExecutionNotFound) {
 		t.Fatalf("the replaced plan's execution must be gone, got %v", err)
 	}
 }
@@ -526,11 +585,17 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "gen")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	now := time.Now()
-	gen := &PlanGeneration{
+	gen := &workset.PlanGeneration{
 		GenerationID:   "gen-a",
 		WorksetID:      w.ID,
 		OperationType:  "conversion",
@@ -543,7 +608,7 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 		t.Fatalf("CreateGeneration: %v", err)
 	}
 	// The same key is free for another operation of the same workset.
-	other := &PlanGeneration{
+	other := &workset.PlanGeneration{
 		GenerationID:   "gen-other-op",
 		WorksetID:      w.ID,
 		OperationType:  "rename",
@@ -555,14 +620,14 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 		t.Fatalf("a different operation must be able to reuse the key: %v", err)
 	}
 	// Reusing it inside the same operation conflicts.
-	dup := &PlanGeneration{
+	dup := &workset.PlanGeneration{
 		GenerationID:   "gen-b",
 		WorksetID:      w.ID,
 		OperationType:  "conversion",
 		IdempotencyKey: "same-key",
 		CreatedAt:      now,
 	}
-	if err := repo.CreateGeneration(dup); !errors.Is(err, ErrGenerationIdemConflict) {
+	if err := repo.CreateGeneration(dup); !errors.Is(err, workset.ErrGenerationIdemConflict) {
 		t.Fatalf("duplicate key in one operation must conflict, got %v", err)
 	}
 
@@ -583,7 +648,7 @@ func TestGenerationIdempotencyAndCancel(t *testing.T) {
 		t.Fatalf("CancelGeneration: %v", err)
 	}
 	canceled, _ := repo.GetGeneration("gen-a")
-	if canceled.Status != GenStatusCanceled {
+	if canceled.Status != workset.GenStatusCanceled {
 		t.Fatalf("canceled status: %q", canceled.Status)
 	}
 	if remaining, _ := repo.GetActiveGenerationForOperation(w.ID, "conversion"); remaining != nil {
@@ -604,11 +669,22 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	w, members, op, draft := newOperationFixture(t, "lib-1", "fail")
-	if err := repo.ReplaceCurrentWorkset(w, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		w,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", err)
 	}
 	now := time.Now()
-	gen := &PlanGeneration{GenerationID: "gen-fail", WorksetID: w.ID, OperationType: "conversion", CreatedAt: now}
+	gen := &workset.PlanGeneration{
+		GenerationID:  "gen-fail",
+		WorksetID:     w.ID,
+		OperationType: "conversion",
+		CreatedAt:     now,
+	}
 	if err := repo.CreateGeneration(gen); err != nil {
 		t.Fatalf("CreateGeneration: %v", err)
 	}
@@ -616,7 +692,7 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 		t.Fatalf("MarkGenerationFailed: %v", err)
 	}
 	failed, _ := repo.GetGeneration("gen-fail")
-	if failed.Status != GenStatusFailed || failed.ErrorCode != "GENERATION_FAILED" {
+	if failed.Status != workset.GenStatusFailed || failed.ErrorCode != "GENERATION_FAILED" {
 		t.Fatalf("failed generation: %+v", failed)
 	}
 	// A failed session is not an active one.
@@ -625,7 +701,12 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 	}
 
 	// Startup interruption releases stale queued/running rows only.
-	stale := &PlanGeneration{GenerationID: "gen-stale", WorksetID: w.ID, OperationType: "conversion", CreatedAt: now}
+	stale := &workset.PlanGeneration{
+		GenerationID:  "gen-stale",
+		WorksetID:     w.ID,
+		OperationType: "conversion",
+		CreatedAt:     now,
+	}
 	if err := repo.CreateGeneration(stale); err != nil {
 		t.Fatalf("CreateGeneration stale: %v", err)
 	}
@@ -633,11 +714,11 @@ func TestGenerationFailureAndInterrupt(t *testing.T) {
 		t.Fatalf("InterruptStaleGenerations: %v", err)
 	}
 	interrupted, _ := repo.GetGeneration("gen-stale")
-	if interrupted.Status != GenStatusInterrupted {
+	if interrupted.Status != workset.GenStatusInterrupted {
 		t.Fatalf("stale session status: %q", interrupted.Status)
 	}
 	stillFailed, _ := repo.GetGeneration("gen-fail")
-	if stillFailed.Status != GenStatusFailed {
+	if stillFailed.Status != workset.GenStatusFailed {
 		t.Fatalf("terminal row was touched: %q", stillFailed.Status)
 	}
 }

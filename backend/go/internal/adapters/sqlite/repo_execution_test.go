@@ -12,6 +12,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 func newExecutionRepo(t *testing.T) *sqlite.Repository {
@@ -64,7 +65,7 @@ func seedExecutionWorkset(t *testing.T, repo *sqlite.Repository, worksetID, root
 }
 
 // insertExecutionRow writes one session row directly.
-func insertExecutionRow(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExecution) {
+func insertExecutionRow(t *testing.T, repo *sqlite.Repository, e *workset.PlanExecution) {
 	t.Helper()
 	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := repo.DB().Exec(`
@@ -81,9 +82,9 @@ func insertExecutionRow(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExe
 }
 
 // createExecution inserts a queued session for the seeded revision.
-func createExecution(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExecution, planID string) error {
+func createExecution(t *testing.T, repo *sqlite.Repository, e *workset.PlanExecution, planID string) error {
 	t.Helper()
-	return repo.CreateExecutionGuarded(e, sqlite.ExecutionGuards{
+	return repo.CreateExecutionGuarded(e, workset.ExecutionGuards{
 		ExpectedOperationVersion: 2,
 		ExpectedCurrentRevision:  planID,
 		ExpectedDraftHash:        execDraftHash,
@@ -91,8 +92,8 @@ func createExecution(t *testing.T, repo *sqlite.Repository, e *sqlite.PlanExecut
 }
 
 // newExecution builds a minimal queued session row.
-func newExecution(id, worksetID, planID, key string) *sqlite.PlanExecution {
-	return &sqlite.PlanExecution{
+func newExecution(id, worksetID, planID, key string) *workset.PlanExecution {
+	return &workset.PlanExecution{
 		ExecutionID:     id,
 		WorksetID:       worksetID,
 		OperationType:   "conversion",
@@ -116,7 +117,7 @@ func TestPlanExecutionClaimCancelAndTerminalGuard(t *testing.T) {
 	if err != nil || claimed == nil {
 		t.Fatalf("claim: %v %+v", err, claimed)
 	}
-	if claimed.Status != sqlite.ExecStatusRunning || claimed.StartedAt.IsZero() {
+	if claimed.Status != workset.ExecStatusRunning || claimed.StartedAt.IsZero() {
 		t.Fatalf("claimed row = %+v", claimed)
 	}
 	// The queue is drained: the same claim returns nothing.
@@ -132,22 +133,22 @@ func TestPlanExecutionClaimCancelAndTerminalGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetExecution: %v", err)
 	}
-	if running.Status != sqlite.ExecStatusRunning || !running.CancelRequested {
+	if running.Status != workset.ExecStatusRunning || !running.CancelRequested {
 		t.Fatalf("running row after cancel = %+v", running)
 	}
 
 	// Terminal write, then a late worker write must not downgrade it.
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", ""); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", workset.ExecStatusSucceeded, "", ""); finishErr != nil {
 		t.Fatalf("FinishExecution: %v", finishErr)
 	}
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusFailed, "X", "late"); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", workset.ExecStatusFailed, "X", "late"); finishErr != nil {
 		t.Fatalf("late FinishExecution: %v", finishErr)
 	}
 	done, err := repo.GetExecution("exec-1")
 	if err != nil {
 		t.Fatalf("GetExecution: %v", err)
 	}
-	if done.Status != sqlite.ExecStatusSucceeded || done.FinishedAt.IsZero() {
+	if done.Status != workset.ExecStatusSucceeded || done.FinishedAt.IsZero() {
 		t.Fatalf("terminal row = %+v", done)
 	}
 	if active, err := repo.GetActiveExecutionForOperation("ws-1", "conversion"); err != nil || active != nil {
@@ -156,7 +157,7 @@ func TestPlanExecutionClaimCancelAndTerminalGuard(t *testing.T) {
 }
 
 func TestCreateExecutionGuardedRejections(t *testing.T) {
-	guards := sqlite.ExecutionGuards{
+	guards := workset.ExecutionGuards{
 		ExpectedOperationVersion: 2,
 		ExpectedCurrentRevision:  "plan-1",
 		ExpectedDraftHash:        execDraftHash,
@@ -167,8 +168,8 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 		stale := guards
 		stale.ExpectedOperationVersion = 1
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), stale)
-		if !errors.Is(err, sqlite.ErrVersionConflict) {
-			t.Fatalf("err = %v, want ErrVersionConflict", err)
+		if !errors.Is(err, workset.ErrVersionConflict) {
+			t.Fatalf("err = %v, want workset.ErrVersionConflict", err)
 		}
 	})
 	t.Run("draft_drift", func(t *testing.T) {
@@ -180,7 +181,7 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 			t.Fatalf("drift draft: %v", err)
 		}
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
-		if !errors.Is(err, sqlite.ErrDraftChanged) {
+		if !errors.Is(err, workset.ErrDraftChanged) {
 			t.Fatalf("err = %v, want ErrDraftChanged", err)
 		}
 	})
@@ -193,8 +194,8 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 			t.Fatalf("promote other revision: %v", err)
 		}
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
-		if !errors.Is(err, sqlite.ErrRevisionNotFound) {
-			t.Fatalf("err = %v, want ErrRevisionNotFound", err)
+		if !errors.Is(err, workset.ErrRevisionNotFound) {
+			t.Fatalf("err = %v, want workset.ErrRevisionNotFound", err)
 		}
 	})
 	t.Run("orphaned_workset", func(t *testing.T) {
@@ -204,7 +205,7 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 			t.Fatalf("orphan workset: %v", err)
 		}
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
-		if !errors.Is(err, sqlite.ErrWorksetOrphaned) {
+		if !errors.Is(err, workset.ErrWorksetOrphaned) {
 			t.Fatalf("err = %v, want ErrWorksetOrphaned", err)
 		}
 	})
@@ -237,7 +238,7 @@ func TestPlanExecutionCancelQueuedSkipsTheWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetExecution: %v", err)
 	}
-	if canceled.Status != sqlite.ExecStatusCanceled || canceled.FinishedAt.IsZero() {
+	if canceled.Status != workset.ExecStatusCanceled || canceled.FinishedAt.IsZero() {
 		t.Fatalf("canceled row = %+v", canceled)
 	}
 	if claimed, err := repo.NextQueuedExecution(); err != nil || claimed != nil {
@@ -257,12 +258,12 @@ func TestPlanExecutionInterruptStaleKeepsPartialResults(t *testing.T) {
 	if _, err := repo.NextQueuedExecution(); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := repo.SaveExecutionComponentResult("exec-r", sqlite.ExecutionComponentResult{
+	if err := repo.SaveExecutionComponentResult("exec-r", workset.ExecutionComponentResult{
 		ComponentIndex:      0,
 		Status:              "succeeded",
 		CompletedOperations: 2,
 		ResultJSON:          `{"committed":["/music/a/01.mp3"]}`,
-	}, sqlite.ExecutionProgress{CurrentComponentID: "u1", CurrentComponentIndex: 1}); err != nil {
+	}, workset.ExecutionPosition{CurrentComponentID: "u1", CurrentComponentIndex: 1}); err != nil {
 		t.Fatalf("save component result: %v", err)
 	}
 
@@ -278,7 +279,7 @@ func TestPlanExecutionInterruptStaleKeepsPartialResults(t *testing.T) {
 		if loadErr != nil {
 			t.Fatalf("GetExecution %s: %v", id, loadErr)
 		}
-		if row.Status != sqlite.ExecStatusInterrupted {
+		if row.Status != workset.ExecStatusInterrupted {
 			t.Fatalf("%s status = %s, want interrupted", id, row.Status)
 		}
 	}
@@ -307,7 +308,7 @@ func TestPlanExecutionIdempotencyKeyIsHeldForTheSessionLife(t *testing.T) {
 	// Same key, same operation: replayed row.
 	last := newExecution("exec-2", "ws-1", "plan-1", "key-1")
 	last.RequestHash = "hash-key-1"
-	if err := createExecution(t, repo, last, "plan-1"); !errors.Is(err, sqlite.ErrExecutionIdemConflict) {
+	if err := createExecution(t, repo, last, "plan-1"); !errors.Is(err, workset.ErrExecutionIdemConflict) {
 		t.Fatalf("duplicate key err = %v, want ErrExecutionIdemConflict", err)
 	}
 	existing, err := repo.GetExecutionByOperationKey("ws-1", "conversion", "key-1")
@@ -328,7 +329,7 @@ func TestPlanExecutionOneRowPerRevision(t *testing.T) {
 	// A second session for the same revision is a storage-level conflict, not a
 	// check the callers must remember.
 	second := newExecution("exec-2", "ws-1", "plan-1", "key-2")
-	if err := createExecution(t, repo, second, "plan-1"); !errors.Is(err, sqlite.ErrExecutionIdemConflict) {
+	if err := createExecution(t, repo, second, "plan-1"); !errors.Is(err, workset.ErrExecutionIdemConflict) {
 		t.Fatalf("second session err = %v, want ErrExecutionIdemConflict", err)
 	}
 	if existing, err := repo.GetExecutionForRevision(
@@ -355,7 +356,7 @@ func TestPlanExecutionActiveForRootGuard(t *testing.T) {
 	if other, guardErr := repo.HasActiveExecutionForRoot("/elsewhere"); guardErr != nil || other {
 		t.Fatalf("unrelated root guard = %v %v, want false", other, guardErr)
 	}
-	if finishErr := repo.FinishExecution("exec-1", sqlite.ExecStatusSucceeded, "", ""); finishErr != nil {
+	if finishErr := repo.FinishExecution("exec-1", workset.ExecStatusSucceeded, "", ""); finishErr != nil {
 		t.Fatalf("FinishExecution: %v", finishErr)
 	}
 	active, err = repo.HasActiveExecutionForRoot("/music")
@@ -498,13 +499,13 @@ func TestSaveExecutionComponentResultIsReplaySafe(t *testing.T) {
 		t.Fatalf("CreateExecution: %v", err)
 	}
 
-	first := sqlite.ExecutionComponentResult{
+	first := workset.ExecutionComponentResult{
 		ComponentIndex:      0,
 		Status:              "succeeded",
 		CompletedOperations: 3,
 		ResultJSON:          `{"committed":["/music/a/01.mp3"]}`,
 	}
-	progress := sqlite.ExecutionProgress{CurrentComponentIndex: 1}
+	progress := workset.ExecutionPosition{CurrentComponentIndex: 1}
 	if err := repo.SaveExecutionComponentResult("exec-1", first, progress); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
@@ -529,11 +530,11 @@ func TestSaveExecutionComponentResultIsReplaySafe(t *testing.T) {
 	}
 
 	// A component that is still pending neither counts nor hides its facts.
-	if pendingErr := repo.SaveExecutionComponentResult("exec-1", sqlite.ExecutionComponentResult{
+	if pendingErr := repo.SaveExecutionComponentResult("exec-1", workset.ExecutionComponentResult{
 		ComponentIndex: 1,
 		Status:         "pending",
 		ResultJSON:     `{"remaining":["/music/b/01.mp3"]}`,
-	}, sqlite.ExecutionProgress{}); pendingErr != nil {
+	}, workset.ExecutionPosition{}); pendingErr != nil {
 		t.Fatalf("pending save: %v", pendingErr)
 	}
 	row, err = repo.GetExecution("exec-1")
@@ -564,11 +565,11 @@ func TestExecutionComponentResultsGoWithTheirSession(t *testing.T) {
 	if err := createExecution(t, repo, newExecution("exec-1", "ws-1", "plan-1", "key-1"), "plan-1"); err != nil {
 		t.Fatalf("CreateExecution: %v", err)
 	}
-	if err := repo.SaveExecutionComponentResult("exec-1", sqlite.ExecutionComponentResult{
+	if err := repo.SaveExecutionComponentResult("exec-1", workset.ExecutionComponentResult{
 		ComponentIndex: 0,
 		Status:         "succeeded",
 		ResultJSON:     `{}`,
-	}, sqlite.ExecutionProgress{}); err != nil {
+	}, workset.ExecutionPosition{}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if _, err := repo.DB().Exec("DELETE FROM plan_executions WHERE plan_id = 'plan-1'"); err != nil {
@@ -610,7 +611,7 @@ func BenchmarkExecutionComponentResults(b *testing.B) {
 		b.Fatalf("disable autocheckpoint: %v", err)
 	}
 
-	result := sqlite.ExecutionComponentResult{
+	result := workset.ExecutionComponentResult{
 		Status:              "succeeded",
 		CompletedOperations: 2,
 		ResultJSON: `{"committed":["/music/albumA/01.mp3","/music/albumA/02.mp3"],` +
@@ -633,16 +634,16 @@ func BenchmarkExecutionComponentResults(b *testing.B) {
 		}
 		before := fileSize(b, dbPath+"-wal")
 		for c := range components {
-			if err := repo.SaveExecutionComponentResult(executionID, sqlite.ExecutionComponentResult{
+			if err := repo.SaveExecutionComponentResult(executionID, workset.ExecutionComponentResult{
 				ComponentIndex:      c,
 				Status:              result.Status,
 				CompletedOperations: result.CompletedOperations,
 				ResultJSON:          result.ResultJSON,
-			}, sqlite.ExecutionProgress{CurrentComponentIndex: c + 1}); err != nil {
+			}, workset.ExecutionPosition{CurrentComponentIndex: c + 1}); err != nil {
 				b.Fatalf("save component %d: %v", c, err)
 			}
 		}
-		if err := repo.FinishExecution(executionID, sqlite.ExecStatusSucceeded, "", ""); err != nil {
+		if err := repo.FinishExecution(executionID, workset.ExecStatusSucceeded, "", ""); err != nil {
 			b.Fatalf("finish: %v", err)
 		}
 		walBytes += fileSize(b, dbPath+"-wal") - before

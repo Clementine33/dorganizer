@@ -14,23 +14,24 @@ import (
 	"strings"
 
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
-// Task implements worksetusecase.Task for the conversion operation.
+// Task implements workset.Task for the conversion operation.
 type Task struct {
 	configDir string
+	inventory Inventory
 }
 
-// New creates the conversion task rooted at one config directory.
-func New(configDir string) *Task {
-	return &Task{configDir: configDir}
+// New creates the conversion task rooted at one config directory, reading and
+// writing its input facts through the injected inventory.
+func New(configDir string, inv Inventory) *Task {
+	return &Task{configDir: configDir, inventory: inv}
 }
 
-func (*Task) Kind() string { return worksetusecase.OperationTypeConversion }
+func (*Task) Kind() string { return workset.OperationTypeConversion }
 
 // SeedDraft builds the initial sparse draft of a new conversion operation: no
 // member records at all (everyone participates and inherits the common
@@ -55,28 +56,28 @@ func (t *Task) SeedDraft() ([]byte, string, int) {
 	return []byte(raw), hash, DraftSchemaVersion
 }
 
-func (*Task) ValidateDraft(raw []byte, members []*sqlite.WorksetMember) error {
+func (*Task) ValidateDraft(raw []byte, members []*workset.WorksetMember) error {
 	doc, err := ParseDraft(string(raw))
 	if err != nil {
-		return worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is not valid", err,
+		return workset.NewError(
+			workset.ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is not valid", err,
 		)
 	}
 	return validateDraftDoc(doc, members)
 }
 
-func (*Task) NormalizeDraft(raw []byte, members []*sqlite.WorksetMember) ([]byte, string, int, error) {
+func (*Task) NormalizeDraft(raw []byte, members []*workset.WorksetMember) ([]byte, string, int, error) {
 	doc, err := ParseDraft(string(raw))
 	if err != nil {
-		return nil, "", 0, worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is not valid", err,
+		return nil, "", 0, workset.NewError(
+			workset.ErrKindInvalidArgument, "INVALID_DRAFT", "draft document is not valid", err,
 		)
 	}
 	normalized := normalizeDraft(doc, members)
 	out, hash, err := MarshalDraft(normalized)
 	if err != nil {
-		return nil, "", 0, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "failed to encode draft", err,
+		return nil, "", 0, workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "failed to encode draft", err,
 		)
 	}
 	return []byte(out), hash, DraftSchemaVersion, nil
@@ -85,11 +86,11 @@ func (*Task) NormalizeDraft(raw []byte, members []*sqlite.WorksetMember) ([]byte
 // ValidateSessionInput is the executable business validation at the generation
 // boundary: the frozen draft must resolve into a complete, participating
 // policy set.
-func (*Task) ValidateSessionInput(rawDraft []byte, members []*sqlite.WorksetMember) error {
+func (*Task) ValidateSessionInput(rawDraft []byte, members []*workset.WorksetMember) error {
 	doc, err := ParseDraft(string(rawDraft))
 	if err != nil {
-		return worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "stored draft is invalid", err,
+		return workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "stored draft is invalid", err,
 		)
 	}
 	if _, err := ResolveExecutable(doc, members); err != nil {
@@ -103,13 +104,12 @@ func (*Task) ValidateSessionInput(rawDraft []byte, members []*sqlite.WorksetMemb
 // plan snapshot.
 func (t *Task) PlanSession(
 	ctx context.Context,
-	repo *sqlite.Repository,
-	in worksetusecase.PlanSessionInput,
-) (*worksetusecase.PlanSnapshot, error) {
+	in workset.PlanSessionInput,
+) (*workset.PlanSnapshot, error) {
 	doc, err := ParseDraft(string(in.RawDraft))
 	if err != nil {
-		return nil, worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument, "DRAFT_LOAD_FAILED", "failed to load the frozen draft", err,
+		return nil, workset.NewError(
+			workset.ErrKindInvalidArgument, "DRAFT_LOAD_FAILED", "failed to load the frozen draft", err,
 		)
 	}
 	effective, err := ResolveExecutable(doc, in.Members)
@@ -126,10 +126,10 @@ func (t *Task) PlanSession(
 	var progress func(Progress)
 	if in.Progress != nil {
 		progress = func(p Progress) {
-			in.Progress(worksetusecase.PlanProgress(p))
+			in.Progress(workset.PlanProgress(p))
 		}
 	}
-	snap, err := Plan(ctx, repo, t.configDir, Input{
+	snap, err := Plan(ctx, t.inventory, t.configDir, Input{
 		Policy:           CommonPolicy(doc),
 		Roots:            roots,
 		MarkMissingRoots: true,
@@ -143,8 +143,8 @@ func (t *Task) PlanSession(
 
 // planSnapshotOf maps the planner's snapshot onto the seam's plan snapshot:
 // every fact the generic side persists, with the conversion payloads opaque.
-func planSnapshotOf(snap *Snapshot, effective []MemberEffective) *worksetusecase.PlanSnapshot {
-	out := &worksetusecase.PlanSnapshot{
+func planSnapshotOf(snap *Snapshot, effective []MemberEffective) *workset.PlanSnapshot {
+	out := &workset.PlanSnapshot{
 		RootPath:             snap.RootPath,
 		Payload:              json.RawMessage(snap.PolicyJSON),
 		PayloadHash:          snap.PolicyHash,
@@ -156,7 +156,7 @@ func planSnapshotOf(snap *Snapshot, effective []MemberEffective) *worksetusecase
 		ExcludedScope:        strings.Join(ExcludedMemberIDs(effective), "\x00"),
 	}
 	for _, r := range snap.Roots {
-		out.Roots = append(out.Roots, worksetusecase.PlanRootFacts{
+		out.Roots = append(out.Roots, workset.PlanRootFacts{
 			Index:                r.Index,
 			Path:                 r.Path,
 			Identity:             r.Identity,
@@ -168,7 +168,7 @@ func planSnapshotOf(snap *Snapshot, effective []MemberEffective) *worksetusecase
 		})
 	}
 	for _, c := range snap.Components {
-		out.Units = append(out.Units, worksetusecase.PlannedUnit{
+		out.Units = append(out.Units, workset.PlannedUnit{
 			Index:      c.Index,
 			RootIndex:  c.RootIndex,
 			ID:         c.Outcome.ComponentID,
@@ -183,16 +183,15 @@ func planSnapshotOf(snap *Snapshot, effective []MemberEffective) *worksetusecase
 
 // EvaluateRevision reports whether the live input facts still match the frozen
 // ones and whether any stored unit is blocked.
-func (*Task) EvaluateRevision(
-	repo *sqlite.Repository,
-	in worksetusecase.RevisionFacts,
-) (worksetusecase.RevisionHealth, error) {
+func (t *Task) EvaluateRevision(
+	in workset.RevisionFacts,
+) (workset.RevisionHealth, error) {
 	if in.Detail == nil {
-		return worksetusecase.RevisionHealth{}, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "revision facts are missing", nil,
+		return workset.RevisionHealth{}, workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "revision facts are missing", nil,
 		)
 	}
-	out := worksetusecase.RevisionHealth{}
+	out := workset.RevisionHealth{}
 	for _, c := range in.Detail.Components {
 		if c.Status == "blocked" {
 			out.UnitsBlocked = true
@@ -200,7 +199,7 @@ func (*Task) EvaluateRevision(
 		}
 	}
 	for _, r := range in.Detail.Roots {
-		stale := rootIsStale(repo, r)
+		stale := rootIsStale(t.inventory, r)
 		if stale {
 			out.StaleRoots = append(out.StaleRoots, r.RootIndex)
 		}
@@ -218,20 +217,19 @@ func (*Task) EvaluateRevision(
 // partition resolves to in the revision's own draft snapshot. The session
 // options — the obsolete-audio handling the draft declared — are frozen here
 // too, so a run always uses what the plan was made with.
-func (t *Task) FreezeExecution(
-	repo *sqlite.Repository,
-	in worksetusecase.RevisionFacts,
-) (worksetusecase.FrozenExecution, []string, error) {
-	frozen := worksetusecase.FrozenExecution{}
+func (*Task) FreezeExecution(
+	in workset.RevisionFacts,
+) (workset.FrozenExecution, []string, error) {
+	frozen := workset.FrozenExecution{}
 	if in.Detail == nil {
-		return frozen, nil, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "revision facts are missing", nil,
+		return frozen, nil, workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "revision facts are missing", nil,
 		)
 	}
 	doc, err := ParseDraft(string(in.DraftSnapshot))
 	if err != nil {
-		return frozen, nil, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "stored revision snapshot is invalid", err,
+		return frozen, nil, workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "stored revision snapshot is invalid", err,
 		)
 	}
 	options, optionsErr := executionOptionsOf(doc)
@@ -241,8 +239,8 @@ func (t *Task) FreezeExecution(
 	frozen.Options = options
 	effective, err := ResolveEffective(doc, in.Members)
 	if err != nil {
-		return frozen, nil, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "INTERNAL", "stored revision snapshot does not resolve", err,
+		return frozen, nil, workset.NewError(
+			workset.ErrKindInternal, "INTERNAL", "stored revision snapshot does not resolve", err,
 		)
 	}
 	policyByRoot := map[string]reconcile.Policy{}
@@ -251,22 +249,22 @@ func (t *Task) FreezeExecution(
 			policyByRoot[e.FolderPath] = e.Policy
 		}
 	}
-	rootByIndex := map[int]sqlite.PlanRootRecord{}
+	rootByIndex := map[int]workset.PlanRootRecord{}
 	for _, r := range in.Detail.Roots {
 		rootByIndex[r.RootIndex] = r
 	}
 	for _, c := range in.Detail.Components {
 		root, ok := rootByIndex[c.RootIndex]
 		if !ok {
-			return frozen, []string{worksetusecase.ExecBlockedInput}, nil
+			return frozen, []string{workset.ExecBlockedInput}, nil
 		}
 		policy, ok := policyByRoot[root.RootPath]
 		if !ok {
-			return frozen, []string{worksetusecase.ExecBlockedInput}, nil
+			return frozen, []string{workset.ExecBlockedInput}, nil
 		}
 		profile := reconcile.ProfileFor(policy, reconcile.Partition(c.Partition))
 		operations := componentOperationCount(c.OutcomeJSON)
-		frozen.Units = append(frozen.Units, worksetusecase.ExecutionUnit{
+		frozen.Units = append(frozen.Units, workset.ExecutionUnit{
 			Index:      c.ComponentIndex,
 			RootIndex:  c.RootIndex,
 			ID:         c.ComponentID,
@@ -283,7 +281,7 @@ func (t *Task) FreezeExecution(
 // RevisionMembers resolves the frozen draft snapshot into per-member effective
 // configs with inheritance sources. An unreadable snapshot yields no members
 // rather than failing the whole historical revision read.
-func (*Task) RevisionMembers(in worksetusecase.RevisionFacts) ([]worksetusecase.RevisionMemberFacts, error) {
+func (*Task) RevisionMembers(in workset.RevisionFacts) ([]workset.RevisionMemberFacts, error) {
 	if len(in.DraftSnapshot) == 0 {
 		return nil, nil
 	}
@@ -295,9 +293,9 @@ func (*Task) RevisionMembers(in worksetusecase.RevisionFacts) ([]worksetusecase.
 	if err != nil {
 		return nil, nil
 	}
-	out := make([]worksetusecase.RevisionMemberFacts, 0, len(effective))
+	out := make([]workset.RevisionMemberFacts, 0, len(effective))
 	for _, e := range effective {
-		out = append(out, worksetusecase.RevisionMemberFacts{
+		out = append(out, workset.RevisionMemberFacts{
 			MemberID:   e.MemberID,
 			FolderPath: e.FolderPath,
 			Excluded:   e.Excluded,
@@ -311,8 +309,8 @@ func (*Task) RevisionMembers(in worksetusecase.RevisionFacts) ([]worksetusecase.
 // ReviewRevision rebuilds the reviewable payload of one persisted revision
 // from its stored rows: the plan payload, the tag snapshot and the re-encoded
 // unit outcomes.
-func (*Task) ReviewRevision(in worksetusecase.RevisionFacts) (worksetusecase.PlanReview, error) {
-	out := worksetusecase.PlanReview{}
+func (*Task) ReviewRevision(in workset.RevisionFacts) (workset.PlanReview, error) {
+	out := workset.PlanReview{}
 	if in.Detail == nil {
 		return out, nil
 	}
@@ -330,7 +328,7 @@ func (*Task) ReviewRevision(in worksetusecase.RevisionFacts) (worksetusecase.Pla
 		if err := json.Unmarshal([]byte(c.OutcomeJSON), &comp); err != nil {
 			return out, nil
 		}
-		out.Units = append(out.Units, worksetusecase.UnitReview{
+		out.Units = append(out.Units, workset.UnitReview{
 			Payload:    json.RawMessage(mustJSON(comp)),
 			Operations: len(comp.Operations),
 		})
@@ -378,8 +376,8 @@ func deleteModeOf(declared string) (execute.DeleteMode, error) {
 	case string(execute.DeleteModeHard):
 		return execute.DeleteModeHard, nil
 	}
-	return "", worksetusecase.NewError(
-		worksetusecase.ErrKindInvalidArgument,
+	return "", workset.NewError(
+		workset.ErrKindInvalidArgument,
 		"INVALID_DELETE_MODE",
 		"delete_mode must be soft or hard",
 		nil,
@@ -405,8 +403,8 @@ func deleteModeFromOptions(options json.RawMessage) (execute.DeleteMode, error) 
 	}
 	if len(options) > 0 {
 		if err := json.Unmarshal(options, &opts); err != nil {
-			return "", worksetusecase.NewError(
-				worksetusecase.ErrKindInternal,
+			return "", workset.NewError(
+				workset.ErrKindInternal,
 				"REQUEST_LOAD_FAILED",
 				"frozen session options are unreadable",
 				err,

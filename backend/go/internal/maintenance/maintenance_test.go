@@ -15,6 +15,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/inventory"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // These tests drive the real loop against a real database. They wait for the
@@ -84,11 +85,11 @@ func seedQueuedGeneration(t *testing.T, repo *sqlite.Repository) {
 	`, now, now); err != nil {
 		t.Fatalf("seed workset: %v", err)
 	}
-	if err := repo.CreateGeneration(&sqlite.PlanGeneration{
+	if err := repo.CreateGeneration(&workset.PlanGeneration{
 		GenerationID:  "gen-queued",
 		WorksetID:     "ws-1",
 		OperationType: "conversion",
-		Status:        sqlite.GenStatusQueued,
+		Status:        workset.GenStatusQueued,
 		CreatedAt:     time.Now(),
 	}); err != nil {
 		t.Fatalf("seed generation: %v", err)

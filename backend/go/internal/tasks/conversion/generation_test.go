@@ -11,7 +11,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	"github.com/onsei/organizer/backend/internal/tasks/conversion"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // TestGenerationRecordClosesTheLoop runs the whole mechanism the way a session
@@ -121,14 +121,14 @@ func runOneEncodedUnit(
 	configDir, root string,
 	profile reconcile.DesiredProfile,
 	outcome reconcile.ComponentOutcome,
-) worksetusecase.UnitResult {
+) workset.UnitResult {
 	t.Helper()
-	unit := worksetusecase.ExecutionUnit{
+	unit := workset.ExecutionUnit{
 		Index: 0, ID: outcome.ComponentID, RootPath: filepath.ToSlash(root),
 		Partition: string(outcome.Partition), Operations: len(outcome.Operations),
 		Payload: jsonBytes(t, profile),
 	}
-	prepared, err := conversion.New(configDir).PrepareUnit(t.Context(), repo, worksetusecase.UnitRunInput{
+	prepared, err := conversion.New(configDir, repo).PrepareUnit(t.Context(), workset.UnitRunInput{
 		WorksetRoot: filepath.ToSlash(root),
 		Options:     json.RawMessage(`{"delete_mode":"soft"}`),
 		Unit:        unit,

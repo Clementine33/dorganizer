@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // ==================== Policy slots ====================
@@ -107,59 +109,6 @@ func (r *Repository) UpdatePolicySlot(slotIndex int, name, policyJSON string) er
 
 // ==================== plan persistence ====================
 
-// PlanStepRecord is one persisted payload row of a plan (task-owned content:
-// the conversion task stores its resolved policy/classifier snapshots here).
-type PlanStepRecord struct {
-	StepIndex           int
-	StepType            string
-	Status              string
-	PolicySchemaVersion int
-	PolicyJSON          string
-	PolicyHash          string
-	ClassifierTags      string // canonical normalized tags snapshot, "\x00"-joined
-	ClassifierHash      string
-	StepSummaryJSON     string
-}
-
-// PlanRootRecord is a persisted planning root with its inventory
-// fingerprint. RootStatus is "ok" for planned roots and "missing" for member
-// folders whose subtree no longer exists; RootErrorCode/Message carry the
-// stable machine outcome for missing roots (SOURCE_MISSING).
-type PlanRootRecord struct {
-	RootIndex            int
-	RootPath             string
-	RootIdentity         string
-	InventoryFingerprint string
-	EntryCount           int
-	RootStatus           string
-	RootErrorCode        string
-	RootErrorMessage     string
-}
-
-// PlanComponentRecord is one persisted unit outcome of a plan (task-owned
-// content: the conversion task stores its component outcomes here).
-type PlanComponentRecord struct {
-	StepIndex      int
-	ComponentIndex int
-	ComponentID    string
-	RootIndex      int
-	Partition      string
-	Status         string
-	ReasonCode     string
-	OutcomeJSON    string
-}
-
-// ErrPlanNotFound is returned when a plan cannot be found.
-var ErrPlanNotFound = errors.New("plan not found")
-
-// PlanDetail is the full persisted review payload of one plan.
-type PlanDetail struct {
-	Plan       Plan
-	Steps      []PlanStepRecord
-	Roots      []PlanRootRecord
-	Components []PlanComponentRecord
-}
-
 const planColumns = `plan_id, root_path, scan_root_path, library_id, snapshot_token, status, task_kind, task_schema_version, created_at`
 
 // CreatePlanTx persists one plan and all of its payload, root and unit
@@ -176,9 +125,9 @@ func CreatePlanTx(
 	snapshotToken string,
 	libraryID string,
 	worksetID string,
-	steps []PlanStepRecord,
-	roots []PlanRootRecord,
-	components []PlanComponentRecord,
+	steps []workset.PlanStepRecord,
+	roots []workset.PlanRootRecord,
+	components []workset.PlanComponentRecord,
 ) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -221,9 +170,9 @@ func InsertPlanTx(
 	snapshotToken string,
 	libraryID string,
 	worksetID string,
-	steps []PlanStepRecord,
-	roots []PlanRootRecord,
-	components []PlanComponentRecord,
+	steps []workset.PlanStepRecord,
+	roots []workset.PlanRootRecord,
+	components []workset.PlanComponentRecord,
 ) error {
 	var libID any
 	if libraryID != "" {
@@ -288,7 +237,7 @@ func InsertPlanTx(
 
 // scanPlanRow scans one plan row (planColumns order).
 func scanPlanRow(
-	p *Plan,
+	p *workset.Plan,
 	createdAtStr string,
 	libraryID sql.NullString,
 	taskKind string,
@@ -304,8 +253,8 @@ func scanPlanRow(
 
 // GetPlanDetail reconstructs a plan's persisted review payload without
 // consulting live task state.
-func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
-	var p Plan
+func (r *Repository) GetPlanDetail(planID string) (*workset.PlanDetail, error) {
+	var p workset.Plan
 	var createdAt string
 	var libraryID sql.NullString
 	var taskKind string
@@ -316,13 +265,13 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	`, planID).Scan(&p.PlanID, &p.RootPath, &p.ScanRootPath, &libraryID, &p.SnapshotToken, &p.Status, &taskKind, &taskSchemaVersion, &createdAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrPlanNotFound
+			return nil, workset.ErrPlanNotFound
 		}
 		return nil, err
 	}
 	scanPlanRow(&p, createdAt, libraryID, taskKind, taskSchemaVersion)
 
-	detail := &PlanDetail{Plan: p}
+	detail := &workset.PlanDetail{Plan: p}
 
 	steps, err := loadPlanSteps(r.db, planID)
 	if err != nil {
@@ -345,7 +294,7 @@ func (r *Repository) GetPlanDetail(planID string) (*PlanDetail, error) {
 	return detail, nil
 }
 
-func loadPlanSteps(db *sql.DB, planID string) ([]PlanStepRecord, error) {
+func loadPlanSteps(db *sql.DB, planID string) ([]workset.PlanStepRecord, error) {
 	stepRows, err := db.Query(`
 		SELECT step_index, step_type, status,
 		       policy_schema_version, policy_json, policy_hash, classifier_pattern, classifier_hash, step_summary_json
@@ -355,9 +304,9 @@ func loadPlanSteps(db *sql.DB, planID string) ([]PlanStepRecord, error) {
 		return nil, err
 	}
 	defer stepRows.Close()
-	var steps []PlanStepRecord
+	var steps []workset.PlanStepRecord
 	for stepRows.Next() {
-		var s PlanStepRecord
+		var s workset.PlanStepRecord
 		if scanErr := stepRows.Scan(
 			&s.StepIndex,
 			&s.StepType,
@@ -376,7 +325,7 @@ func loadPlanSteps(db *sql.DB, planID string) ([]PlanStepRecord, error) {
 	return steps, stepRows.Err()
 }
 
-func loadPlanRoots(db *sql.DB, planID string) ([]PlanRootRecord, error) {
+func loadPlanRoots(db *sql.DB, planID string) ([]workset.PlanRootRecord, error) {
 	rootRows, err := db.Query(`
 		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message
 		FROM plan_roots WHERE plan_id = ? ORDER BY root_index
@@ -385,9 +334,9 @@ func loadPlanRoots(db *sql.DB, planID string) ([]PlanRootRecord, error) {
 		return nil, err
 	}
 	defer rootRows.Close()
-	var roots []PlanRootRecord
+	var roots []workset.PlanRootRecord
 	for rootRows.Next() {
-		var rec PlanRootRecord
+		var rec workset.PlanRootRecord
 		if scanErr := rootRows.Scan(
 			&rec.RootIndex,
 			&rec.RootPath,
@@ -405,7 +354,7 @@ func loadPlanRoots(db *sql.DB, planID string) ([]PlanRootRecord, error) {
 	return roots, rootRows.Err()
 }
 
-func loadPlanComponents(db *sql.DB, planID string) ([]PlanComponentRecord, error) {
+func loadPlanComponents(db *sql.DB, planID string) ([]workset.PlanComponentRecord, error) {
 	compRows, err := db.Query(`
 		SELECT step_index, component_index, component_id, root_index, partition, status, reason_code, outcome_json
 		FROM conversion_components WHERE plan_id = ? ORDER BY component_index
@@ -414,9 +363,9 @@ func loadPlanComponents(db *sql.DB, planID string) ([]PlanComponentRecord, error
 		return nil, err
 	}
 	defer compRows.Close()
-	var comps []PlanComponentRecord
+	var comps []workset.PlanComponentRecord
 	for compRows.Next() {
-		var c PlanComponentRecord
+		var c workset.PlanComponentRecord
 		if err := compRows.Scan(
 			&c.StepIndex,
 			&c.ComponentIndex,
@@ -436,7 +385,7 @@ func loadPlanComponents(db *sql.DB, planID string) ([]PlanComponentRecord, error
 
 // GetPlanRoots returns the persisted planning roots of a plan
 // plan in root_index order.
-func (r *Repository) GetPlanRoots(planID string) ([]PlanRootRecord, error) {
+func (r *Repository) GetPlanRoots(planID string) ([]workset.PlanRootRecord, error) {
 	rows, err := r.db.Query(`
 		SELECT root_index, root_path, root_identity, inventory_fingerprint, entry_count, root_status, root_error_code, root_error_message
 		FROM plan_roots WHERE plan_id = ? ORDER BY root_index
@@ -446,9 +395,9 @@ func (r *Repository) GetPlanRoots(planID string) ([]PlanRootRecord, error) {
 	}
 	defer rows.Close()
 
-	var out []PlanRootRecord
+	var out []workset.PlanRootRecord
 	for rows.Next() {
-		var rec PlanRootRecord
+		var rec workset.PlanRootRecord
 		if err := rows.Scan(
 			&rec.RootIndex,
 			&rec.RootPath,

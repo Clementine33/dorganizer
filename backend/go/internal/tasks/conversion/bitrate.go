@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
@@ -21,15 +20,15 @@ import (
 // target is skipped however it was made — so the facts it reads must be as
 // exact as the inventory can make them.
 type bitrateAnalyzer struct {
-	repo        *sqlite.Repository
+	inventory   Inventory
 	ffprobePath string
 }
 
-func newBitrateAnalyzer(repo *sqlite.Repository, ffprobePath string) *bitrateAnalyzer {
+func newBitrateAnalyzer(inv Inventory, ffprobePath string) *bitrateAnalyzer {
 	if ffprobePath == "" {
 		ffprobePath = "ffprobe"
 	}
-	return &bitrateAnalyzer{repo: repo, ffprobePath: ffprobePath}
+	return &bitrateAnalyzer{inventory: inv, ffprobePath: ffprobePath}
 }
 
 // enrichMissing probes the entries whose bitrate is unknown and persists the
@@ -79,9 +78,15 @@ func (a *bitrateAnalyzer) enrichMissing(ctx context.Context, entries []reconcile
 		return err
 	}
 
+	// Nothing probed means nothing to write: a root whose files all still fail
+	// to probe leaves its stored rates as they were.
+	if len(updates) == 0 {
+		return nil
+	}
+
 	// The write shape (per row, or chunked in one transaction) and its retry
 	// on a locked database belong to the adapter that owns the table.
-	return a.repo.UpdateEntryBitrates(updates, batchUpdate)
+	return a.inventory.UpdateEntryBitrates(updates, batchUpdate)
 }
 
 func (a *bitrateAnalyzer) probeBitrate(ctx context.Context, pathPosix string) (int64, error) {

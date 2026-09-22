@@ -3,7 +3,7 @@ package httpapi
 import (
 	"net/http"
 
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // recordCreateRequest is the PUT
@@ -85,7 +85,7 @@ func (s *Server) putCurrentRecord(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, decodeErr, "invalid record payload")
 		return
 	}
-	result, err := svc.CreateCurrentWorkset(r.Context(), worksetusecase.CreateCurrentRequest{
+	result, err := svc.CreateCurrentWorkset(r.Context(), workset.CreateCurrentRequest{
 		LibraryID:         r.PathValue("id"),
 		OperationType:     r.PathValue("type"),
 		Title:             req.Title,

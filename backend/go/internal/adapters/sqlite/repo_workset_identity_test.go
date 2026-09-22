@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // TestMemberIdentityIsStableAcrossReopens pins the identity contract member
@@ -24,8 +26,8 @@ func TestMemberIdentityIsStableAcrossReopens(t *testing.T) {
 	if createErr := repo.ReplaceCurrentWorkset(
 		w,
 		members,
-		[]Operation{op},
-		[]OperationDraft{draft},
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
 		"",
 	); createErr != nil {
 		t.Fatalf("ReplaceCurrentWorkset: %v", createErr)
@@ -80,15 +82,21 @@ func TestReplaceCurrentWorksetIsTheOnlyRecordForAPair(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	first, members, op, draft := newOperationFixture(t, "lib-1", "first")
-	if err := repo.ReplaceCurrentWorkset(first, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		first,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	second, members2, op2, draft2 := newOperationFixture(t, "lib-1", "second")
 	if err := repo.ReplaceCurrentWorkset(
 		second,
 		members2,
-		[]Operation{op2},
-		[]OperationDraft{draft2},
+		[]workset.Operation{op2},
+		[]workset.OperationDraft{draft2},
 		first.ID,
 	); err != nil {
 		t.Fatalf("replacement: %v", err)
@@ -123,12 +131,18 @@ func TestReplaceCurrentWorksetRefusesAStaleExpectedRecord(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	first, members, op, draft := newOperationFixture(t, "lib-1", "first")
-	if err := repo.ReplaceCurrentWorkset(first, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		first,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	second, members2, op2, draft2 := newOperationFixture(t, "lib-1", "second")
 	// The caller still believes the library has no record: refuse.
-	err := repo.ReplaceCurrentWorkset(second, members2, []Operation{op2}, []OperationDraft{draft2}, "")
+	err := repo.ReplaceCurrentWorkset(second, members2, []workset.Operation{op2}, []workset.OperationDraft{draft2}, "")
 	if err == nil {
 		t.Fatal("a stale expected record must refuse the write")
 	}
@@ -146,7 +160,13 @@ func TestReplaceCurrentWorksetRefusesABusyRecord(t *testing.T) {
 	insertLibrary(t, repo, "lib-1")
 
 	first, members, op, draft := newOperationFixture(t, "lib-1", "busy")
-	if err := repo.ReplaceCurrentWorkset(first, members, []Operation{op}, []OperationDraft{draft}, ""); err != nil {
+	if err := repo.ReplaceCurrentWorkset(
+		first,
+		members,
+		[]workset.Operation{op},
+		[]workset.OperationDraft{draft},
+		"",
+	); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	seedGeneration(t, repo, "gen-busy", first.ID)
@@ -155,7 +175,13 @@ func TestReplaceCurrentWorksetRefusesABusyRecord(t *testing.T) {
 	}
 
 	second, members2, op2, draft2 := newOperationFixture(t, "lib-1", "busy2")
-	err := repo.ReplaceCurrentWorkset(second, members2, []Operation{op2}, []OperationDraft{draft2}, first.ID)
+	err := repo.ReplaceCurrentWorkset(
+		second,
+		members2,
+		[]workset.Operation{op2},
+		[]workset.OperationDraft{draft2},
+		first.ID,
+	)
 	if err == nil {
 		t.Fatal("a record with a queued session must refuse the replacement")
 	}
@@ -168,11 +194,11 @@ func TestReplaceCurrentWorksetRefusesABusyRecord(t *testing.T) {
 func seedGeneration(t *testing.T, repo *Repository, genID, worksetID string) {
 	t.Helper()
 	now := time.Now()
-	if err := repo.CreateGeneration(&PlanGeneration{
+	if err := repo.CreateGeneration(&workset.PlanGeneration{
 		GenerationID:  genID,
 		WorksetID:     worksetID,
 		OperationType: "conversion",
-		Status:        GenStatusQueued,
+		Status:        workset.GenStatusQueued,
 		CreatedAt:     now,
 	}); err != nil {
 		t.Fatalf("CreateGeneration: %v", err)

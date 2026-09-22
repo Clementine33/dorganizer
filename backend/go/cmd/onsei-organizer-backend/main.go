@@ -27,7 +27,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 var version = "dev"
@@ -156,7 +156,7 @@ type services struct {
 	library *library.Service
 	scan    inventory.Service
 	fileOps *fileops.Service
-	workset worksetusecase.Service
+	workset workset.Service
 }
 
 // buildServices wires the process. Direct file management and the managed task
@@ -189,11 +189,11 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 	// Sessions refresh their member folders before planning and before writing:
 	// the stored inventory is the only input fact a plan reads, and it is only
 	// as current as the last scan.
-	worksetSvc := worksetusecase.NewService(
+	worksetSvc := workset.NewService(
 		repo,
 		generationConcurrency,
 		0,
-		[]worksetusecase.Task{tasksconversion.New(configDir)},
+		[]workset.Task{tasksconversion.New(configDir, repo)},
 		scanSvc.RefreshMember,
 		gate.Enqueue,
 	)

@@ -8,7 +8,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	"github.com/onsei/organizer/backend/internal/tasks/conversion"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // seedRootEntries writes an RJ-like tree into the entries table: two content
@@ -155,7 +155,7 @@ func TestPlanInvalidPolicy(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported policy schema version")
 	}
-	planErr, ok := worksetusecase.AsError(err)
+	planErr, ok := workset.AsError(err)
 	if !ok || planErr.Code != "INVALID_POLICY" {
 		t.Fatalf("error = %v, want INVALID_POLICY", err)
 	}

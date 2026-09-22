@@ -5,52 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
-// ErrGenerationNotFound is returned when a planning session cannot be found.
-var ErrGenerationNotFound = errors.New("generation not found")
-
-// ErrGenerationIdemConflict is returned when a generation start collides with
-// an active/terminal idempotency key.
-var ErrGenerationIdemConflict = errors.New("generation idempotency key conflict")
-
-// Planning session statuses.
-const (
-	GenStatusQueued      = "queued"
-	GenStatusRunning     = "running"
-	GenStatusCompleted   = "completed"
-	GenStatusFailed      = "failed"
-	GenStatusCanceled    = "canceled"
-	GenStatusInterrupted = "interrupted"
-)
-
-// PlanGeneration is one persisted planning session, owned by exactly one
-// operation of one workset.
-type PlanGeneration struct {
-	GenerationID         string
-	WorksetID            string
-	OperationType        string
-	Status               string
-	IdempotencyKey       string
-	RequestHash          string
-	ExpectedDraftVersion int
-	RequestJSON          string
-	TotalRoots           int
-	CompletedRoots       int
-	CurrentRoot          string
-	ErrorCount           int
-	CancelRequested      bool
-	RevisionID           string // "" until completed
-	ErrorCode            string
-	ErrorMessage         string
-	StartedAt            time.Time
-	FinishedAt           time.Time
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-}
-
-func scanGeneration(scanner interface{ Scan(...any) error }) (*PlanGeneration, error) {
-	var g PlanGeneration
+func scanGeneration(scanner interface{ Scan(...any) error }) (*workset.PlanGeneration, error) {
+	var g workset.PlanGeneration
 	var startedAt, finishedAt, revisionID sql.NullString
 	var cancelRequested int
 	var createdAt, updatedAt string
@@ -96,8 +56,8 @@ const generationColumns = `generation_id, workset_id, operation_type, status, id
 	started_at, finished_at, created_at, updated_at`
 
 // CreateGeneration inserts a queued planning session. A unique conflict on the
-// operation+key partial index returns ErrGenerationIdemConflict.
-func (r *Repository) CreateGeneration(g *PlanGeneration) error {
+// operation+key partial index returns workset.ErrGenerationIdemConflict.
+func (r *Repository) CreateGeneration(g *workset.PlanGeneration) error {
 	_, err := r.db.Exec(`
 		INSERT INTO plan_generations (generation_id, workset_id, operation_type, status, idempotency_key, request_hash, expected_draft_version, request_json,
 			total_roots, completed_roots, current_root, error_count, cancel_requested, created_at, updated_at)
@@ -105,7 +65,7 @@ func (r *Repository) CreateGeneration(g *PlanGeneration) error {
 	`, g.GenerationID, g.WorksetID, g.OperationType, g.IdempotencyKey, g.RequestHash, g.ExpectedDraftVersion, g.RequestJSON, g.TotalRoots, g.CreatedAt.Format(timeFormat), g.CreatedAt.Format(timeFormat))
 	if err != nil {
 		if isUniqueConstraintError(err) {
-			return ErrGenerationIdemConflict
+			return workset.ErrGenerationIdemConflict
 		}
 		return fmt.Errorf("insert generation: %w", err)
 	}
@@ -114,7 +74,9 @@ func (r *Repository) CreateGeneration(g *PlanGeneration) error {
 
 // GetGenerationByOperationKey returns the generation owned by an operation and
 // an idempotency key. Returns nil when no row matches.
-func (r *Repository) GetGenerationByOperationKey(worksetID, operationType, key string) (*PlanGeneration, error) {
+func (r *Repository) GetGenerationByOperationKey(
+	worksetID, operationType, key string,
+) (*workset.PlanGeneration, error) {
 	row := r.db.QueryRow(
 		`SELECT `+generationColumns+` FROM plan_generations
 		 WHERE workset_id = ? AND operation_type = ? AND idempotency_key = ?`,
@@ -133,12 +95,12 @@ func (r *Repository) GetGenerationByOperationKey(worksetID, operationType, key s
 }
 
 // GetGeneration retrieves a planning session by id.
-func (r *Repository) GetGeneration(generationID string) (*PlanGeneration, error) {
+func (r *Repository) GetGeneration(generationID string) (*workset.PlanGeneration, error) {
 	row := r.db.QueryRow(`SELECT `+generationColumns+` FROM plan_generations WHERE generation_id = ?`, generationID)
 	g, err := scanGeneration(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrGenerationNotFound
+			return nil, workset.ErrGenerationNotFound
 		}
 		return nil, err
 	}
@@ -147,7 +109,7 @@ func (r *Repository) GetGeneration(generationID string) (*PlanGeneration, error)
 
 // GetActiveGenerationForOperation returns the queued/running session of one
 // operation, newest first. Returns nil when none is active.
-func (r *Repository) GetActiveGenerationForOperation(worksetID, operationType string) (*PlanGeneration, error) {
+func (r *Repository) GetActiveGenerationForOperation(worksetID, operationType string) (*workset.PlanGeneration, error) {
 	row := r.db.QueryRow(`
 		SELECT `+generationColumns+` FROM plan_generations
 		WHERE workset_id = ? AND operation_type = ? AND status IN ('queued','running')
@@ -165,7 +127,7 @@ func (r *Repository) GetActiveGenerationForOperation(worksetID, operationType st
 
 // LatestGenerationForOperation returns the most recently created session of
 // one operation (any status), or nil.
-func (r *Repository) LatestGenerationForOperation(worksetID, operationType string) (*PlanGeneration, error) {
+func (r *Repository) LatestGenerationForOperation(worksetID, operationType string) (*workset.PlanGeneration, error) {
 	row := r.db.QueryRow(`
 		SELECT `+generationColumns+` FROM plan_generations
 		WHERE workset_id = ? AND operation_type = ?
@@ -185,7 +147,7 @@ func (r *Repository) LatestGenerationForOperation(worksetID, operationType strin
 // created_at, generation_id). Claiming is a conditional update: when the row
 // was canceled between select and update, zero rows are affected and the
 // dispatcher skips it (canceled-queued sessions never run).
-func (r *Repository) NextQueuedGeneration() (*PlanGeneration, error) {
+func (r *Repository) NextQueuedGeneration() (*workset.PlanGeneration, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return nil, err
@@ -200,7 +162,7 @@ func (r *Repository) NextQueuedGeneration() (*PlanGeneration, error) {
 	if err != nil {
 		return nil, err
 	}
-	var g *PlanGeneration
+	var g *workset.PlanGeneration
 	if rows.Next() {
 		g, err = scanGeneration(rows)
 		if err != nil {
@@ -230,7 +192,7 @@ func (r *Repository) NextQueuedGeneration() (*PlanGeneration, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	g.Status = GenStatusRunning
+	g.Status = workset.GenStatusRunning
 	return g, nil
 }
 

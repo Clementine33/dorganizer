@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // ==================== DTOs ====================
@@ -67,7 +67,7 @@ type revisionMemberResponse struct {
 	Sources    map[string]string `json:"sources"`
 }
 
-func toDraftResponse(d *worksetusecase.Draft) draftResponse {
+func toDraftResponse(d *workset.Draft) draftResponse {
 	return draftResponse{
 		WorksetID:     d.WorksetID,
 		OperationType: d.OperationType,
@@ -145,7 +145,7 @@ func (s *Server) putOperationDraft(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	view, err := svc.SaveDraft(r.Context(), r.PathValue("id"), r.PathValue("type"), worksetusecase.SaveDraftRequest{
+	view, err := svc.SaveDraft(r.Context(), r.PathValue("id"), r.PathValue("type"), workset.SaveDraftRequest{
 		Document:       toDraftPayload(req),
 		IfMatchVersion: version,
 	})
@@ -173,7 +173,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 	// frontend contract is always an array.
 	componentRoots := rv.ComponentRoots
 	if componentRoots == nil {
-		componentRoots = []worksetusecase.ComponentRootRef{}
+		componentRoots = []workset.ComponentRootRef{}
 	}
 	members := make([]revisionMemberResponse, 0, len(rv.Members))
 	for _, m := range rv.Members {
@@ -187,19 +187,19 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, struct {
-		PlanID         string                            `json:"plan_id"`
-		RevisionIndex  int                               `json:"revision_index"`
-		CreatedAt      string                            `json:"created_at"`
-		RootPath       string                            `json:"root_path"`
-		SnapshotToken  string                            `json:"snapshot_token"`
-		Status         string                            `json:"status"`
-		Summary        planSummaryResponse               `json:"summary"`
-		Task           taskEnvelopeResponse              `json:"task"`
-		Counts         revisionCountsResponse            `json:"counts"`
-		Members        []revisionMemberResponse          `json:"members"`
-		Roots          []rootValidationResponse          `json:"roots"`
-		ComponentRoots []worksetusecase.ComponentRootRef `json:"component_roots"`
-		Execution      *worksetusecase.ExecutionRef      `json:"execution"`
+		PlanID         string                     `json:"plan_id"`
+		RevisionIndex  int                        `json:"revision_index"`
+		CreatedAt      string                     `json:"created_at"`
+		RootPath       string                     `json:"root_path"`
+		SnapshotToken  string                     `json:"snapshot_token"`
+		Status         string                     `json:"status"`
+		Summary        planSummaryResponse        `json:"summary"`
+		Task           taskEnvelopeResponse       `json:"task"`
+		Counts         revisionCountsResponse     `json:"counts"`
+		Members        []revisionMemberResponse   `json:"members"`
+		Roots          []rootValidationResponse   `json:"roots"`
+		ComponentRoots []workset.ComponentRootRef `json:"component_roots"`
+		Execution      *workset.ExecutionRef      `json:"execution"`
 	}{
 		PlanID:        rv.PlanID,
 		RevisionIndex: rv.RevisionIndex,

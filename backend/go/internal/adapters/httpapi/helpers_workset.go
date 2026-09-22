@@ -7,8 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // timeFormatJSON is the RFC3339 format used for all JSON timestamps.
@@ -52,7 +51,7 @@ type rootValidationResponse struct {
 	EntryCount           int    `json:"entry_count"`
 }
 
-func toRoots(roots []worksetusecase.RootValidation) []rootValidationResponse {
+func toRoots(roots []workset.RootValidation) []rootValidationResponse {
 	out := make([]rootValidationResponse, 0, len(roots))
 	for _, r := range roots {
 		out = append(out, rootValidationResponse{
@@ -71,16 +70,16 @@ func toRoots(roots []worksetusecase.RootValidation) []rootValidationResponse {
 
 // writeWorksetError maps workset usecase errors to the standard envelope.
 func writeWorksetError(w http.ResponseWriter, err error) {
-	if werr, ok := worksetusecase.AsError(err); ok {
+	if werr, ok := workset.AsError(err); ok {
 		status := http.StatusInternalServerError
 		switch werr.Kind {
-		case worksetusecase.ErrKindInvalidArgument:
+		case workset.ErrKindInvalidArgument:
 			status = http.StatusBadRequest
-		case worksetusecase.ErrKindNotFound:
+		case workset.ErrKindNotFound:
 			status = http.StatusNotFound
-		case worksetusecase.ErrKindConflict:
+		case workset.ErrKindConflict:
 			status = http.StatusConflict
-		case worksetusecase.ErrKindPrecondition:
+		case workset.ErrKindPrecondition:
 			status = http.StatusPreconditionFailed
 		}
 		if len(werr.Details) > 0 {
@@ -92,7 +91,7 @@ func writeWorksetError(w http.ResponseWriter, err error) {
 		writeError(w, status, werr.Code, werr.Message)
 		return
 	}
-	if errors.Is(err, sqlite.ErrWorksetNotFound) {
+	if errors.Is(err, workset.ErrWorksetNotFound) {
 		writeError(w, http.StatusNotFound, "WORKSET_NOT_FOUND", "workset not found")
 		return
 	}
@@ -129,7 +128,7 @@ type taskEnvelopeResponse struct {
 // toTaskEnvelope maps one revision's plan to the task envelope, keeping unit
 // outcomes as raw JSON snapshots so the payload agrees byte-for-byte with the
 // persisted outcome.
-func toTaskEnvelope(plan worksetusecase.RevisionPlan) taskEnvelopeResponse {
+func toTaskEnvelope(plan workset.RevisionPlan) taskEnvelopeResponse {
 	components := make([]json.RawMessage, 0, len(plan.Units))
 	components = append(components, plan.Units...)
 	return taskEnvelopeResponse{

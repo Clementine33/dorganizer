@@ -12,11 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // PrepareUnit prechecks one frozen unit through the Component pipeline and
@@ -24,9 +23,8 @@ import (
 // are decoded, and nothing is written yet.
 func (t *Task) PrepareUnit(
 	ctx context.Context,
-	_ *sqlite.Repository,
-	in worksetusecase.UnitRunInput,
-) (worksetusecase.PreparedUnit, error) {
+	in workset.UnitRunInput,
+) (workset.PreparedUnit, error) {
 	component, profile, err := t.prepareComponent(ctx, in)
 	if err != nil {
 		return nil, err
@@ -40,18 +38,18 @@ func (t *Task) PrepareUnit(
 // it: it is what the credentials of the committed outputs are written from.
 func (t *Task) prepareComponent(
 	ctx context.Context,
-	in worksetusecase.UnitRunInput,
+	in workset.UnitRunInput,
 ) (*execute.PreparedComponent, reconcile.DesiredProfile, error) {
 	var outcome reconcile.ComponentOutcome
 	if err := json.Unmarshal(in.Outcome, &outcome); err != nil {
-		return nil, reconcile.DesiredProfile{}, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "REVISION_LOAD_FAILED", "frozen component is unreadable", err,
+		return nil, reconcile.DesiredProfile{}, workset.NewError(
+			workset.ErrKindInternal, "REVISION_LOAD_FAILED", "frozen component is unreadable", err,
 		)
 	}
 	var profile reconcile.DesiredProfile
 	if err := json.Unmarshal(in.Unit.Payload, &profile); err != nil {
-		return nil, reconcile.DesiredProfile{}, worksetusecase.NewError(
-			worksetusecase.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
+		return nil, reconcile.DesiredProfile{}, workset.NewError(
+			workset.ErrKindInternal, "REQUEST_LOAD_FAILED", "frozen unit is unreadable", err,
 		)
 	}
 	mode, modeErr := deleteModeFromOptions(in.Options)
@@ -78,7 +76,7 @@ func (t *Task) prepareComponent(
 // its outputs are written for, and the component whose staged outputs the
 // session encodes and commits.
 type preparedUnit struct {
-	in        worksetusecase.UnitRunInput
+	in        workset.UnitRunInput
 	component *execute.PreparedComponent
 	profile   reconcile.DesiredProfile
 	tools     execute.ToolsConfig
@@ -97,7 +95,7 @@ func (p *preparedUnit) EncodeTask(ctx context.Context, index int) error {
 
 // Commit lands the encoded outputs in frozen order and reports the unit's
 // observed facts plus the inventory refresh the generic side applies.
-func (p *preparedUnit) Commit(ctx context.Context) (worksetusecase.UnitResult, error) {
+func (p *preparedUnit) Commit(ctx context.Context) (workset.UnitResult, error) {
 	res, err := p.component.Commit(ctx)
 	result := p.resultOf(res, err)
 	p.recordGenerations(ctx, &result)
@@ -105,14 +103,14 @@ func (p *preparedUnit) Commit(ctx context.Context) (worksetusecase.UnitResult, e
 }
 
 // Discard cleans the staged outputs of a unit that will not commit.
-func (p *preparedUnit) Discard(cause error) worksetusecase.UnitResult {
+func (p *preparedUnit) Discard(cause error) workset.UnitResult {
 	return p.resultOf(p.component.Discard(cause), cause)
 }
 
 // resultOf maps one component outcome onto the seam facts. The observing run's
 // cause carries the stage and code of a failed or canceled unit.
-func (p *preparedUnit) resultOf(res execute.ComponentRunResult, cause error) worksetusecase.UnitResult {
-	result := worksetusecase.UnitResult{
+func (p *preparedUnit) resultOf(res execute.ComponentRunResult, cause error) workset.UnitResult {
+	result := workset.UnitResult{
 		Committed: nonNil(res.Committed),
 		Removed:   nonNil(res.Removed),
 		Remaining: nonNil(res.Remaining),
@@ -134,7 +132,7 @@ func (p *preparedUnit) resultOf(res execute.ComponentRunResult, cause error) wor
 // and code cross the seam so its own report entry carries them.
 func unitFailureOf(err error) error {
 	stage, code, message := componentErrorOf(err)
-	return worksetusecase.NewError(worksetusecase.ErrKindInternal, code, message, err).WithStage(stage)
+	return workset.NewError(workset.ErrKindInternal, code, message, err).WithStage(stage)
 }
 
 // recordGenerations gathers the generation credential of every encoded output
@@ -147,7 +145,7 @@ func unitFailureOf(err error) error {
 // A failure here discloses itself on the unit and drops the whole batch with
 // the inventory refresh: a generation is then committed but unrecorded, which
 // costs one redundant rebuild and never a wrong acceptance.
-func (p *preparedUnit) recordGenerations(ctx context.Context, result *worksetusecase.UnitResult) {
+func (p *preparedUnit) recordGenerations(ctx context.Context, result *workset.UnitResult) {
 	version, probed := "", false
 	for _, path := range result.Committed {
 		spec, ok := p.encodedSpecFor(path)
@@ -222,7 +220,7 @@ func fileSHA256(path string) (string, error) {
 // sources plus the committed outputs and soft-delete destinations that are
 // real media in their scanned place. A stat failure is disclosed instead of
 // being reported as "unchanged".
-func fillInventoryFacts(result *worksetusecase.UnitResult, in worksetusecase.UnitRunInput) {
+func fillInventoryFacts(result *workset.UnitResult, in workset.UnitRunInput) {
 	paths := make([]string, 0, len(result.Committed)+len(result.Recovery))
 	paths = append(paths, result.Committed...)
 	for _, p := range result.Recovery {

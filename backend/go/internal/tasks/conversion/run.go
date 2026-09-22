@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // Plan runs one conversion planning pass over the frozen input: every root is
@@ -21,10 +20,10 @@ import (
 // types; callers persist it through their own adapter.
 //
 //nolint:gocognit,funlen // per-root outcome branches; split when more steps appear
-func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Input) (*Snapshot, error) {
+func Plan(ctx context.Context, inv Inventory, configDir string, in Input) (*Snapshot, error) {
 	if len(in.Roots) == 0 {
-		return nil, worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument,
+		return nil, workset.NewError(
+			workset.ErrKindInvalidArgument,
 			"SCOPE_REQUIRED",
 			"planning requires at least one root",
 			nil,
@@ -43,18 +42,18 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 	// classifier here: per-root policies were validated in full when the
 	// session input was frozen.
 	if err := reconcile.ValidatePolicy(in.Policy); err != nil {
-		return nil, worksetusecase.NewError(worksetusecase.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
+		return nil, workset.NewError(workset.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
 	}
 	classifier, err := reconcile.ResolveClassifier(in.Policy.ClassifierTags)
 	if err != nil {
-		return nil, worksetusecase.NewError(worksetusecase.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
+		return nil, workset.NewError(workset.ErrKindInvalidArgument, "INVALID_POLICY", err.Error(), err)
 	}
 	rootClassifiers := make([]reconcile.Classifier, len(in.Roots))
 	for i, r := range in.Roots {
 		rootClassifier, resolveErr := reconcile.ResolveClassifier(r.Policy.ClassifierTags)
 		if resolveErr != nil {
-			return nil, worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return nil, workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"INVALID_POLICY",
 				resolveErr.Error(),
 				resolveErr,
@@ -83,12 +82,12 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 				outcomes <- planOutcome{index: i, root: root.Path, err: ctx.Err()}
 				return
 			}
-			entries, collectErr := collectRootEntries(repo, root.Path)
+			entries, collectErr := collectRootEntries(inv, root.Path)
 			if collectErr != nil {
 				outcomes <- planOutcome{index: i, root: root.Path, err: collectErr}
 				return
 			}
-			enriched, enrichErr := enrichBitrate(ctx, repo, entries, planCfg)
+			enriched, enrichErr := enrichBitrate(ctx, inv, entries, planCfg)
 			if enrichErr != nil {
 				outcomes <- planOutcome{index: i, root: root.Path, err: enrichErr}
 				return
@@ -105,7 +104,7 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 			}
 			missing := false
 			if in.MarkMissingRoots && len(enriched) == 0 {
-				exists, existsErr := rootExistsInInventory(repo, root.Path)
+				exists, existsErr := rootExistsInInventory(inv, root.Path)
 				if existsErr != nil {
 					outcomes <- planOutcome{index: i, root: root.Path, err: existsErr}
 					return
@@ -135,8 +134,8 @@ func Plan(ctx context.Context, repo *sqlite.Repository, configDir string, in Inp
 			return nil, ctx.Err()
 		}
 		if o.err != nil {
-			return nil, worksetusecase.NewError(
-				worksetusecase.ErrKindInternal,
+			return nil, workset.NewError(
+				workset.ErrKindInternal,
 				"COLLECT_FAILED",
 				fmt.Sprintf("analyze planning root %s: %v", o.root, o.err),
 				o.err,
@@ -206,8 +205,8 @@ func classifierTagSnapshot(tags []string) string {
 // rootExistsInInventory reports whether the planning root itself is present in
 // the scanned entries. A folder that was never scanned, or whose scan removed
 // it, is treated as absent.
-func rootExistsInInventory(repo *sqlite.Repository, root string) (bool, error) {
-	return repo.RootExistsInInventory(normalizeScopePath(root))
+func rootExistsInInventory(inv Inventory, root string) (bool, error) {
+	return inv.RootExistsInInventory(normalizeScopePath(root))
 }
 
 // planStatus maps an aggregated summary onto the plan's persisted status.
@@ -242,11 +241,11 @@ func aggregateSummaryReason(s reconcile.StepSummary) string {
 // persists them, returning the entries with the probed values applied.
 func enrichBitrate(
 	ctx context.Context,
-	repo *sqlite.Repository,
+	inv Inventory,
 	entries []reconcile.AudioEntry,
 	cfg planConfig,
 ) ([]reconcile.AudioEntry, error) {
-	analyzer := newBitrateAnalyzer(repo, cfg.FFprobePath)
+	analyzer := newBitrateAnalyzer(inv, cfg.FFprobePath)
 	if err := analyzer.enrichMissing(ctx, entries, cfg.Bitrate.BatchUpdate); err != nil {
 		return nil, err
 	}

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // rootIsStale compares one persisted root fingerprint against the current
@@ -13,11 +13,11 @@ import (
 // filtering used at planning time). A missing root whose inventory remains
 // empty is not stale (it is represented by root_status/SOURCE_MISSING).
 // A collection failure is never "valid": fail closed toward stale.
-func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
+func rootIsStale(inv Inventory, r workset.PlanRootRecord) bool {
 	if r.RootPath == "" {
 		return false
 	}
-	entries, err := collectRootEntries(repo, r.RootPath)
+	entries, err := collectRootEntries(inv, r.RootPath)
 	if err != nil {
 		return true
 	}
@@ -34,8 +34,8 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
 // planning fact set. The reads and their null handling belong to the inventory
 // adapter; the mapping onto a planning fact — including which paths count once
 // and the order they are planned in — belongs here.
-func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
-	observed, err := repo.ObservedAudioEntries(normalizeScopePath(root))
+func collectRootEntries(inv Inventory, root string) ([]reconcile.AudioEntry, error) {
+	observed, err := inv.ObservedAudioEntries(normalizeScopePath(root))
 	if err != nil {
 		return nil, err
 	}

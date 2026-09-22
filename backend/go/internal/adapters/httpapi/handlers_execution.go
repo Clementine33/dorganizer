@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // startExecution handles POST
@@ -48,7 +48,7 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 		r.PathValue("id"),
 		r.PathValue("type"),
 		r.PathValue("planId"),
-		worksetusecase.StartExecutionRequest{
+		workset.StartExecutionRequest{
 			IfMatchVersion: version,
 			IdempotencyKey: idemKey,
 			FolderPaths:    body.FolderPaths,
@@ -63,8 +63,8 @@ func (s *Server) startExecution(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, struct {
-		Created   bool                         `json:"created"`
-		Execution worksetusecase.ExecutionView `json:"execution"`
+		Created   bool                  `json:"created"`
+		Execution workset.ExecutionView `json:"execution"`
 	}{Created: res.Created, Execution: *res.Execution})
 }
 
@@ -100,8 +100,8 @@ func (s *Server) getExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 // executionPageOf reads the optional paging parameters of a detail request.
-func executionPageOf(r *http.Request) (worksetusecase.ExecutionPage, error) {
-	var page worksetusecase.ExecutionPage
+func executionPageOf(r *http.Request) (workset.ExecutionPage, error) {
+	var page workset.ExecutionPage
 	for name, target := range map[string]*int{
 		"components_from":  &page.FromIndex,
 		"components_limit": &page.Limit,
@@ -112,7 +112,7 @@ func executionPageOf(r *http.Request) (worksetusecase.ExecutionPage, error) {
 		}
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 0 {
-			return worksetusecase.ExecutionPage{}, fmt.Errorf("%s must be a non-negative integer", name)
+			return workset.ExecutionPage{}, fmt.Errorf("%s must be a non-negative integer", name)
 		}
 		*target = value
 	}

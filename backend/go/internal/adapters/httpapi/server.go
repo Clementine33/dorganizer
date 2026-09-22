@@ -10,7 +10,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // Dependencies carries the wiring for the HTTP API. Inventory is used by the
@@ -27,7 +27,7 @@ type Dependencies struct {
 	CORSOrigins    []string
 	Version        string
 	Inventory      inventory.Service
-	WorksetService worksetusecase.Service
+	WorksetService workset.Service
 	// FileOps applies direct file management inside a member. It and every
 	// other path that takes an admission slot own that decision themselves, so
 	// the HTTP layer never holds the gate.

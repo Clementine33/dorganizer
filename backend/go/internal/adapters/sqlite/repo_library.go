@@ -102,7 +102,7 @@ func (r *Repository) GetLibrary(id string) (*library.Library, error) {
 }
 
 // ErrLibraryHasWorksets is returned when a root-path change is attempted on a
-// library that still owns worksets. Workset membership identity is a
+// library that still owns worksets. workset.Workset membership identity is a
 // normalized library-relative path, so silently rebinding the root would
 // reattach fixed worksets to unrelated content.
 

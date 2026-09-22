@@ -3,9 +3,8 @@ package conversion
 import (
 	"fmt"
 
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
@@ -45,7 +44,7 @@ func CommonPolicy(doc *DraftDoc) reconcile.Policy {
 // draft. Excluded members are resolved too — exclusion changes participation,
 // never the stored overrides — so restoring participation returns the member to
 // its previous inheritance relationships (ADR 0006 §1).
-func ResolveEffective(doc *DraftDoc, members []*sqlite.WorksetMember) ([]MemberEffective, error) {
+func ResolveEffective(doc *DraftDoc, members []*workset.WorksetMember) ([]MemberEffective, error) {
 	if err := validateDraftDoc(doc, members); err != nil {
 		return nil, err
 	}
@@ -134,7 +133,7 @@ func ExcludedMemberIDs(effective []MemberEffective) []string {
 // is the generation boundary check; draft save deliberately does not apply it.
 func ResolveExecutable(
 	doc *DraftDoc,
-	members []*sqlite.WorksetMember,
+	members []*workset.WorksetMember,
 ) ([]MemberEffective, error) {
 	effective, err := ResolveEffective(doc, members)
 	if err != nil {
@@ -147,8 +146,8 @@ func ResolveExecutable(
 		}
 		participating++
 		if err := reconcile.ValidatePolicy(e.Policy); err != nil {
-			return nil, worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return nil, workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"INVALID_POLICY",
 				fmt.Sprintf("effective settings for member %s: %s", e.MemberID, err.Error()),
 				nil,
@@ -156,8 +155,8 @@ func ResolveExecutable(
 		}
 	}
 	if participating == 0 {
-		return nil, worksetusecase.NewError(
-			worksetusecase.ErrKindConflict,
+		return nil, workset.NewError(
+			workset.ErrKindConflict,
 			"NO_ACTIVE_MEMBERS",
 			"every member is excluded; restore at least one member to generate",
 			nil,

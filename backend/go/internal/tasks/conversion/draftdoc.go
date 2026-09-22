@@ -4,9 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
@@ -105,7 +104,7 @@ func MarshalDraft(doc *DraftDoc) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	return string(raw), sqlite.CanonicalJSONHash(raw), nil
+	return string(raw), workset.CanonicalJSONHash(raw), nil
 }
 
 // ParseDraft strictly decodes a stored draft document.
@@ -124,7 +123,7 @@ func ParseDraft(raw string) (*DraftDoc, error) {
 // override dropped (absence and "participates, inherits everything" are the
 // same fact), and a nil common tag list materialized as the empty list so an
 // explicitly empty tag set survives the round trip.
-func normalizeDraft(doc *DraftDoc, members []*sqlite.WorksetMember) *DraftDoc {
+func normalizeDraft(doc *DraftDoc, members []*workset.WorksetMember) *DraftDoc {
 	out := &DraftDoc{
 		SchemaVersion: doc.SchemaVersion,
 		Mode:          doc.Mode,
@@ -156,10 +155,10 @@ func normalizeDraft(doc *DraftDoc, members []*sqlite.WorksetMember) *DraftDoc {
 // positive bitrates — is deliberately not checked here: a structurally valid
 // but incomplete draft is a normal, saveable editing state (ADR 0006 §1) and
 // is rejected only when it must produce a plan.
-func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
+func validateDraftDoc(doc *DraftDoc, members []*workset.WorksetMember) error {
 	if doc.SchemaVersion != DraftSchemaVersion {
-		return worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument,
+		return workset.NewError(
+			workset.ErrKindInvalidArgument,
 			"INVALID_DRAFT_SCHEMA",
 			"unsupported operation draft schema version",
 			nil,
@@ -184,16 +183,16 @@ func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 	seen := map[string]bool{}
 	for _, m := range doc.Members {
 		if m.MemberID == "" {
-			return worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"INVALID_DRAFT_SCHEMA",
 				"member records require a member_id",
 				nil,
 			)
 		}
 		if seen[m.MemberID] {
-			return worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"DUPLICATE_MEMBER",
 				"duplicate member_id "+m.MemberID,
 				nil,
@@ -201,8 +200,8 @@ func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 		}
 		seen[m.MemberID] = true
 		if !known[m.MemberID] {
-			return worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"UNKNOWN_MEMBER",
 				"unknown member_id "+m.MemberID,
 				nil,
@@ -220,8 +219,8 @@ func validateMode(mode string) error {
 	case "", reconcile.ModeStrict, reconcile.ModeAvailableSources:
 		return nil
 	}
-	return worksetusecase.NewError(
-		worksetusecase.ErrKindInvalidArgument,
+	return workset.NewError(
+		workset.ErrKindInvalidArgument,
 		"INVALID_DRAFT",
 		"unsupported conversion mode "+mode,
 		nil,
@@ -235,8 +234,8 @@ func validateDeleteMode(mode string) error {
 	case "", string(execute.DeleteModeSoft), string(execute.DeleteModeHard):
 		return nil
 	}
-	return worksetusecase.NewError(
-		worksetusecase.ErrKindInvalidArgument,
+	return workset.NewError(
+		workset.ErrKindInvalidArgument,
 		"INVALID_DRAFT",
 		"unsupported delete mode "+mode,
 		nil,
@@ -279,8 +278,8 @@ func validateOutput(name string, spec *reconcile.AudioOutputSpec) error {
 	switch spec.Codec {
 	case reconcile.CodecWav, reconcile.CodecFlac, reconcile.CodecMp3, reconcile.CodecAac, reconcile.CodecOpus:
 	default:
-		return worksetusecase.NewError(
-			worksetusecase.ErrKindInvalidArgument,
+		return workset.NewError(
+			workset.ErrKindInvalidArgument,
 			"INVALID_DRAFT",
 			name+": unsupported output codec "+string(spec.Codec),
 			nil,
@@ -288,8 +287,8 @@ func validateOutput(name string, spec *reconcile.AudioOutputSpec) error {
 	}
 	if spec.Quality != nil {
 		if spec.Quality.Kind != "" && spec.Quality.Kind != reconcile.QualityBitrate {
-			return worksetusecase.NewError(
-				worksetusecase.ErrKindInvalidArgument,
+			return workset.NewError(
+				workset.ErrKindInvalidArgument,
 				"INVALID_DRAFT",
 				name+": unsupported quality kind "+string(spec.Quality.Kind),
 				nil,

@@ -73,7 +73,7 @@ func deletePlanGenerationsBatchTx(ctx context.Context, tx *sql.Tx, cutoff time.T
 // anyone who needs it - for as long as it takes. A batch that deletes nothing
 // means both tables are clean.
 //
-// Workset revisions, plans, executions and inventory are never purged here;
+// workset.Workset revisions, plans, executions and inventory are never purged here;
 // they are durable aggregate history, not session ledgers.
 func (r *Repository) RunRetentionCleanupBatch(
 	ctx context.Context,

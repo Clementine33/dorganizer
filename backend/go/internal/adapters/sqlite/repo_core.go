@@ -1,11 +1,7 @@
 package sqlite
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -36,19 +32,6 @@ func parseTimestamp(s string) time.Time {
 		return t
 	}
 	return time.Time{}
-}
-
-// Plan represents a persisted plan.
-type Plan struct {
-	PlanID            string
-	RootPath          string
-	ScanRootPath      string
-	LibraryID         string // nullable: owning library when known
-	SnapshotToken     string
-	Status            string // ready, executed, stale, canceled, failed
-	TaskKind          string // the Task that owns the payload
-	TaskSchemaVersion int    // >0 once the payload schema is known
-	CreatedAt         time.Time
 }
 
 // CleanupStats holds counts of rows deleted by each cleanup operation.
@@ -196,47 +179,6 @@ func userTables(db *sql.DB) (map[string]struct{}, error) {
 		out[name] = struct{}{}
 	}
 	return out, rows.Err()
-}
-
-// CanonicalJSONHash hashes JSON canonically: objects are recursively
-// key-sorted, so key order and whitespace never change the hash; array order
-// is preserved because step/member order is semantic. Unparseable input
-// falls back to a raw-byte hash. Draft hashing and the draft-hash migration
-// must use this same function so backfilled and freshly saved hashes agree.
-func CanonicalJSONHash(b []byte) string {
-	var v any
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	if err := dec.Decode(&v); err != nil {
-		sum := sha256.Sum256(b)
-		return hex.EncodeToString(sum[:])
-	}
-	canonical, err := json.Marshal(canonicalizeValue(v))
-	if err != nil {
-		sum := sha256.Sum256(b)
-		return hex.EncodeToString(sum[:])
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:])
-}
-
-// canonicalizeValue recursively normalizes for canonical hashing. Map
-// iteration + encoding/json map marshaling yields sorted keys.
-func canonicalizeValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			t[k] = canonicalizeValue(val)
-		}
-		return t
-	case []any:
-		for i := range t {
-			t[i] = canonicalizeValue(t[i])
-		}
-		return t
-	default:
-		return v
-	}
 }
 
 // schemaTablesDDL is the full CREATE-TABLE schema (V1+). Kept out of
@@ -469,7 +411,7 @@ CREATE TABLE IF NOT EXISTS workset_members (
     UNIQUE (workset_id, rel_path)
 );
 
--- Independent Workset Operations (ADR 0001 §1), keyed by (workset, type).
+-- Independent workset.Workset Operations (ADR 0001 §1), keyed by (workset, type).
 -- version is the operation concurrency counter: draft saves and revision
 -- publication advance it, and If-Match on draft/generation
 -- writes is bound to it. current_revision_id is never mutated by a failed,
@@ -558,7 +500,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_op_status
 CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
     ON plan_generations(status, created_at, generation_id);
 
--- Workset execution sessions: the durable record of one revision
+-- workset.Workset execution sessions: the durable record of one revision
 -- being executed (ADR 0001 §2). status: queued|running|succeeded|failed|
 -- canceled|interrupted. A revision is executed at most once: the unique
 -- idempotency index holds the key for the session's whole life, and the
@@ -655,7 +597,7 @@ CREATE INDEX IF NOT EXISTS idx_entries_staging_status ON entries_staging(status)
 CREATE INDEX IF NOT EXISTS idx_scan_sessions_root ON scan_sessions(root_path);
 CREATE INDEX IF NOT EXISTS idx_scan_sessions_status ON scan_sessions(status);
 
--- Plan indexes
+-- workset.Plan indexes
 CREATE INDEX IF NOT EXISTS idx_plans_root ON plans(root_path);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 CREATE INDEX IF NOT EXISTS idx_conversion_steps_plan ON conversion_steps(plan_id);

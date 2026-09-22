@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/tasks/conversion"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // draftJSON builds a minimal structurally valid draft with the given
@@ -22,7 +22,7 @@ func draftJSON(deleteMode string) []byte {
 // accepted values, the soft default (an absent field), and a rejection for
 // anything else.
 func TestDraftDeleteModeValidation(t *testing.T) {
-	task := conversion.New(t.TempDir())
+	task := conversion.New(t.TempDir(), nil)
 
 	for _, accepted := range []string{"", "soft", "hard"} {
 		if err := task.ValidateDraft(draftJSON(accepted), nil); err != nil {
@@ -30,7 +30,7 @@ func TestDraftDeleteModeValidation(t *testing.T) {
 		}
 	}
 	err := task.ValidateDraft(draftJSON("medium"), nil)
-	if werr, ok := worksetusecase.AsError(err); !ok || werr.Code != "INVALID_DRAFT" {
+	if werr, ok := workset.AsError(err); !ok || werr.Code != "INVALID_DRAFT" {
 		t.Fatalf("err = %v, want INVALID_DRAFT", err)
 	}
 }
@@ -38,7 +38,7 @@ func TestDraftDeleteModeValidation(t *testing.T) {
 // TestNormalizeDraftKeepsDeleteMode proves the setting survives the sparse
 // round trip, so a saved choice reaches every later revision snapshot.
 func TestNormalizeDraftKeepsDeleteMode(t *testing.T) {
-	task := conversion.New(t.TempDir())
+	task := conversion.New(t.TempDir(), nil)
 
 	canonical, _, _, err := task.NormalizeDraft(draftJSON("hard"), nil)
 	if err != nil {

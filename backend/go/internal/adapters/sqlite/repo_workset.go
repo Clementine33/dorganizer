@@ -8,65 +8,17 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/library"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
-// ==================== Workset aggregates ====================
+// ==================== workset.Workset aggregates ====================
 
-// ErrWorksetNotFound is returned when a workset cannot be found.
-var ErrWorksetNotFound = errors.New("workset not found")
-
-// ErrWorksetIdemConflict is returned when a workset create collides with an
-// existing creation idempotency key.
-var ErrWorksetIdemConflict = errors.New("workset idempotency key conflict")
-
-// ErrVersionConflict is returned when an If-Match version precondition fails
-// on a workset or operation mutation.
-var ErrVersionConflict = errors.New("version conflict")
-
-// ErrOperationNotFound is returned when a workset operation row is absent.
-var ErrOperationNotFound = errors.New("operation not found")
-
-// Workset is the persisted current processing record of one
-// (library, operation) pair. Version is the metadata concurrency counter: only
-// renames advance it. Draft and generation state live on the operation
-// (workset_operations).
-type Workset struct {
-	ID            string
-	Title         string
-	LibraryID     string // "" when orphaned (library row vanished outside the delete path)
-	OperationType string
-	RootPath      string // snapshot: library root at creation
-	RootPathKey   string // snapshot: canonical root identity at creation
-	Version       int
-	// CreationIdemKey is the key that created this record; "" when not set.
-	CreationIdemKey string
-	// CreationRequestHash is the canonical hash of the creation request that
-	// owns the key: a replay with a different request is a conflict.
-	CreationRequestHash string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-}
-
-// WorksetMember is one ordered member directory. MemberID is the stable
-// identity (assigned at creation, never regenerated); RelPath is the durable
-// normalized library-relative path the member is addressed by — a rescan
-// cannot change it; MemberIndex is ordering only. FolderPath and FolderName
-// are display snapshots of the same directory.
-type WorksetMember struct {
-	WorksetID   string
-	MemberID    string
-	MemberIndex int
-	RelPath     string
-	FolderPath  string
-	FolderName  string
-}
-
-// ==================== Workset CRUD ====================
+// ==================== workset.Workset CRUD ====================
 
 const worksetColumns = `id, title, library_id, operation_type, root_path, root_path_key, version, creation_idem_key, creation_request_hash, created_at, updated_at`
 
-func scanWorkset(scanner interface{ Scan(...any) error }) (*Workset, error) {
-	var w Workset
+func scanWorkset(scanner interface{ Scan(...any) error }) (*workset.Workset, error) {
+	var w workset.Workset
 	var libraryID, creationKey sql.NullString
 	var createdAt, updatedAt string
 	if err := scanner.Scan(
@@ -93,7 +45,7 @@ func scanWorkset(scanner interface{ Scan(...any) error }) (*Workset, error) {
 
 // GetCurrentWorkset returns the current processing record of one
 // (library, operation) pair, or nil when the pair has none.
-func (r *Repository) GetCurrentWorkset(libraryID, operationType string) (*Workset, error) {
+func (r *Repository) GetCurrentWorkset(libraryID, operationType string) (*workset.Workset, error) {
 	row := r.db.QueryRow(
 		`SELECT `+worksetColumns+` FROM worksets WHERE library_id = ? AND operation_type = ?`,
 		libraryID,
@@ -110,12 +62,12 @@ func (r *Repository) GetCurrentWorkset(libraryID, operationType string) (*Workse
 }
 
 // GetWorkset retrieves a workset by id.
-func (r *Repository) GetWorkset(id string) (*Workset, error) {
+func (r *Repository) GetWorkset(id string) (*workset.Workset, error) {
 	row := r.db.QueryRow(`SELECT `+worksetColumns+` FROM worksets WHERE id = ?`, id)
 	w, err := scanWorkset(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrWorksetNotFound
+			return nil, workset.ErrWorksetNotFound
 		}
 		return nil, err
 	}
@@ -124,7 +76,7 @@ func (r *Repository) GetWorkset(id string) (*Workset, error) {
 
 // GetWorksetByCreationIdemKey retrieves the workset owned by a creation
 // idempotency key. Returns nil when no key match exists.
-func (r *Repository) GetWorksetByCreationIdemKey(key string) (*Workset, error) {
+func (r *Repository) GetWorksetByCreationIdemKey(key string) (*workset.Workset, error) {
 	row := r.db.QueryRow(`SELECT `+worksetColumns+` FROM worksets WHERE creation_idem_key = ?`, key)
 	w, err := scanWorkset(row)
 	if err != nil {
@@ -167,30 +119,21 @@ func (r *Repository) HasActiveSession() (bool, error) {
 	return false, nil
 }
 
-// ErrCurrentRecordChanged is returned when a replace finds a current record
-// other than the one the caller expected: another client already replaced it
-// (or created one), and the newer record is never overwritten.
-var ErrCurrentRecordChanged = errors.New("current record changed")
-
-// ErrRecordBusy is returned when the record that would be replaced still has a
-// queued or running planning session or execution.
-var ErrRecordBusy = errors.New("record has a queued or running session")
-
 // ReplaceCurrentWorkset creates the new current record of one (library,
 // operation) pair and removes the record it replaces, all in one transaction:
 // members, operations, drafts, plan snapshots, revisions and sessions of the
 // old record are gone exactly when the new record becomes visible.
 //
 // expectedCurrentID is the record the caller saw as current ("" when it saw
-// none). A mismatch is ErrCurrentRecordChanged. A replaced record holding a
-// queued or running session is ErrRecordBusy. A second row for the same
+// none). A mismatch is workset.ErrCurrentRecordChanged. A replaced record holding a
+// queued or running session is workset.ErrRecordBusy. A second row for the same
 // (library, operation) is refused by the unique index; a repeated creation key
-// is ErrWorksetIdemConflict.
+// is workset.ErrWorksetIdemConflict.
 func (r *Repository) ReplaceCurrentWorkset(
-	w *Workset,
-	members []WorksetMember,
-	operations []Operation,
-	drafts []OperationDraft,
+	w *workset.Workset,
+	members []workset.WorksetMember,
+	operations []workset.Operation,
+	drafts []workset.OperationDraft,
 	expectedCurrentID string,
 ) error {
 	tx, err := r.db.Begin()
@@ -208,7 +151,7 @@ func (r *Repository) ReplaceCurrentWorkset(
 		currentID = current.ID
 	}
 	if currentID != expectedCurrentID {
-		return ErrCurrentRecordChanged
+		return workset.ErrCurrentRecordChanged
 	}
 	if current != nil {
 		busy, err := recordHasActiveSessionTx(tx, current.ID)
@@ -216,7 +159,7 @@ func (r *Repository) ReplaceCurrentWorkset(
 			return err
 		}
 		if busy {
-			return ErrRecordBusy
+			return workset.ErrRecordBusy
 		}
 		if err := deleteWorksetDataTx(tx, current.ID); err != nil {
 			return err
@@ -241,7 +184,7 @@ func (r *Repository) ReplaceCurrentWorkset(
 
 // currentWorksetTx reads the current record of a (library, operation) pair
 // inside a transaction; nil when there is none.
-func currentWorksetTx(tx *sql.Tx, libraryID, operationType string) (*Workset, error) {
+func currentWorksetTx(tx *sql.Tx, libraryID, operationType string) (*workset.Workset, error) {
 	w, err := scanWorkset(tx.QueryRow(
 		`SELECT `+worksetColumns+` FROM worksets WHERE library_id = ? AND operation_type = ?`,
 		libraryID,
@@ -289,18 +232,18 @@ func deleteWorksetDataTx(tx *sql.Tx, worksetID string) error {
 		return fmt.Errorf("delete record: %w", err)
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
-		return ErrWorksetNotFound
+		return workset.ErrWorksetNotFound
 	}
 	return nil
 }
 
 // InsertWorksetTx is the transaction-scoped form of the workset insert
 // (members included); callers add their own operation rows.
-func InsertWorksetTx(tx *sql.Tx, w *Workset, members []WorksetMember) error {
+func InsertWorksetTx(tx *sql.Tx, w *workset.Workset, members []workset.WorksetMember) error {
 	return insertWorkset(tx, w, members)
 }
 
-func insertWorkset(tx *sql.Tx, w *Workset, members []WorksetMember) error {
+func insertWorkset(tx *sql.Tx, w *workset.Workset, members []workset.WorksetMember) error {
 	var libID, idemKey any
 	if w.LibraryID != "" {
 		libID = w.LibraryID
@@ -313,7 +256,7 @@ func insertWorkset(tx *sql.Tx, w *Workset, members []WorksetMember) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, w.ID, w.Title, libID, w.OperationType, w.RootPath, w.RootPathKey, w.Version, idemKey, w.CreationRequestHash, w.CreatedAt.Format(timeFormat), w.UpdatedAt.Format(timeFormat)); err != nil {
 		if isUniqueConstraintError(err) {
-			return ErrWorksetIdemConflict
+			return workset.ErrWorksetIdemConflict
 		}
 		return fmt.Errorf("insert workset: %w", err)
 	}
@@ -339,7 +282,7 @@ func (r *Repository) ListWorksets(
 	limit int,
 	libraryID string,
 	includeOrphaned bool,
-) ([]*Workset, error) {
+) ([]*workset.Workset, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -371,7 +314,7 @@ func (r *Repository) ListWorksets(
 	}
 	defer rows.Close()
 
-	var out []*Workset
+	var out []*workset.Workset
 	for rows.Next() {
 		w, err := scanWorkset(rows)
 		if err != nil {
@@ -393,7 +336,7 @@ func joinConds(conds []string) string {
 }
 
 // ListWorksetMembers returns the ordered members of a workset.
-func (r *Repository) ListWorksetMembers(worksetID string) ([]*WorksetMember, error) {
+func (r *Repository) ListWorksetMembers(worksetID string) ([]*workset.WorksetMember, error) {
 	rows, err := r.db.Query(`
 		SELECT workset_id, member_id, member_index, rel_path, folder_path, folder_name
 		FROM workset_members WHERE workset_id = ? ORDER BY member_index
@@ -403,9 +346,9 @@ func (r *Repository) ListWorksetMembers(worksetID string) ([]*WorksetMember, err
 	}
 	defer rows.Close()
 
-	var out []*WorksetMember
+	var out []*workset.WorksetMember
 	for rows.Next() {
-		var m WorksetMember
+		var m workset.WorksetMember
 		if err := rows.Scan(
 			&m.WorksetID,
 			&m.MemberID,
@@ -422,7 +365,7 @@ func (r *Repository) ListWorksetMembers(worksetID string) ([]*WorksetMember, err
 }
 
 // RenameWorkset updates the title with the metadata version guard. Returns
-// ErrWorksetNotFound when the row is absent and ErrVersionConflict when the
+// workset.ErrWorksetNotFound when the row is absent and workset.ErrVersionConflict when the
 // If-Match version is stale.
 func (r *Repository) RenameWorkset(id, title string, expectedVersion int, now time.Time) error {
 	result, err := r.db.Exec(`
@@ -447,9 +390,9 @@ func (r *Repository) worksetVersionGuardResult(id string) error {
 		return err
 	}
 	if n == 0 {
-		return ErrWorksetNotFound
+		return workset.ErrWorksetNotFound
 	}
-	return ErrVersionConflict
+	return workset.ErrVersionConflict
 }
 
 // ==================== Library coordination ====================

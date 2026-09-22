@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/onsei/organizer/backend/internal/library"
-	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
 
 // ==================== DTOs ====================
@@ -80,15 +80,15 @@ type generationSummaryResponse struct {
 // operationResponse is the operation-scoped aggregate. This is the only shape
 // that carries planning state: a workset itself is never planned.
 type operationResponse struct {
-	WorksetID        string                            `json:"workset_id"`
-	OperationType    string                            `json:"operation_type"`
-	Version          int                               `json:"version"`
-	PlanningState    string                            `json:"planning_state"`
-	CurrentRevision  *currentRevisionResponse          `json:"current_revision"`
-	ActiveGeneration *generationProgressResponse       `json:"active_generation"`
-	LatestGeneration *generationSummaryResponse        `json:"latest_generation"`
-	ActiveExecution  *worksetusecase.ExecutionProgress `json:"active_execution"`
-	LatestExecution  *worksetusecase.ExecutionRef      `json:"latest_execution"`
+	WorksetID        string                      `json:"workset_id"`
+	OperationType    string                      `json:"operation_type"`
+	Version          int                         `json:"version"`
+	PlanningState    string                      `json:"planning_state"`
+	CurrentRevision  *currentRevisionResponse    `json:"current_revision"`
+	ActiveGeneration *generationProgressResponse `json:"active_generation"`
+	LatestGeneration *generationSummaryResponse  `json:"latest_generation"`
+	ActiveExecution  *workset.ExecutionProgress  `json:"active_execution"`
+	LatestExecution  *workset.ExecutionRef       `json:"latest_execution"`
 }
 
 // worksetResponse is the workset metadata view.
@@ -109,7 +109,7 @@ type worksetListResponse struct {
 	NextCursor string            `json:"next_cursor,omitempty"`
 }
 
-func toOperationResponse(v *worksetusecase.OperationView) operationResponse {
+func toOperationResponse(v *workset.OperationView) operationResponse {
 	out := operationResponse{
 		WorksetID:     v.WorksetID,
 		OperationType: v.OperationType,
@@ -143,7 +143,7 @@ func toOperationResponse(v *worksetusecase.OperationView) operationResponse {
 	return out
 }
 
-func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
+func toWorksetResponse(v *workset.WorksetView) worksetResponse {
 	out := worksetResponse{
 		WorksetID:  v.WorksetID,
 		Title:      v.Title,
@@ -179,7 +179,7 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 	return out
 }
 
-func toCurrentRevisionResponse(r *worksetusecase.RevisionSummary) *currentRevisionResponse {
+func toCurrentRevisionResponse(r *workset.RevisionSummary) *currentRevisionResponse {
 	return &currentRevisionResponse{
 		PlanID:        r.PlanID,
 		RevisionIndex: r.RevisionIndex,
@@ -201,7 +201,7 @@ func toCurrentRevisionResponse(r *worksetusecase.RevisionSummary) *currentRevisi
 // ==================== Handlers ====================
 
 // worksetService guards a nil service in Dependencies.
-func (s *Server) worksetService() (worksetusecase.Service, error) {
+func (s *Server) worksetService() (workset.Service, error) {
 	if s.deps.WorksetService == nil {
 		return nil, errors.New("workset service not configured")
 	}
@@ -231,7 +231,7 @@ func streamSessionEvents(
 		return sw.Send(event, data)
 	}
 	if err := subscribe(r.Context(), emit); err != nil {
-		if werr, ok := worksetusecase.AsError(err); ok && werr.Code == notFoundCode {
+		if werr, ok := workset.AsError(err); ok && werr.Code == notFoundCode {
 			_ = sw.Send("error", map[string]string{"code": notFoundCode, "message": werr.Message})
 			return
 		}
@@ -248,7 +248,7 @@ func (s *Server) listWorksets(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := min(queryInt(r, "limit", 50), 200)
 	includeOrphaned := r.URL.Query().Get("status") != "active"
-	views, next, err := svc.ListWorksets(r.Context(), worksetusecase.ListQuery{
+	views, next, err := svc.ListWorksets(r.Context(), workset.ListQuery{
 		Cursor:          r.URL.Query().Get("cursor"),
 		Limit:           limit,
 		LibraryID:       r.URL.Query().Get("library_id"),
@@ -299,7 +299,7 @@ func (s *Server) patchWorkset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "VERSION_REQUIRED", "If-Match header with the workset version is required")
 		return
 	}
-	view, err := svc.RenameWorkset(r.Context(), r.PathValue("id"), worksetusecase.RenameRequest{
+	view, err := svc.RenameWorkset(r.Context(), r.PathValue("id"), workset.RenameRequest{
 		Title: req.Title, IfMatchVersion: version,
 	})
 	if err != nil {

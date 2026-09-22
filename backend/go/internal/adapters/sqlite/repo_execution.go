@@ -9,60 +9,11 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
+	"github.com/onsei/organizer/backend/internal/workset"
 )
-
-// ErrExecutionNotFound is returned when an execution session cannot be found.
-var ErrExecutionNotFound = errors.New("execution not found")
-
-// ErrExecutionIdemConflict is returned when an execution start collides with an
-// existing idempotency key of the same operation.
-var ErrExecutionIdemConflict = errors.New("execution idempotency key conflict")
 
 // ErrExecutionInProgress is returned when an operation that must wait for an
 // active execution (library deletion) is attempted.
-
-// Execution session statuses. Terminal statuses never regress.
-const (
-	ExecStatusQueued      = "queued"
-	ExecStatusRunning     = "running"
-	ExecStatusSucceeded   = "succeeded"
-	ExecStatusFailed      = "failed"
-	ExecStatusCanceled    = "canceled"
-	ExecStatusInterrupted = "interrupted"
-)
-
-// PlanExecution is one persisted execution session: the durable record of one
-// revision being executed against the disk. RequestJSON freezes the ordered
-// execution units (generic identity plus the task's opaque payload) and the
-// frozen session options at creation time. The per-component facts live in
-// execution_component_results, one row per component: this row carries the
-// session state, the counters derived from those rows, and where the run is.
-type PlanExecution struct {
-	ExecutionID              string
-	WorksetID                string
-	OperationType            string
-	PlanID                   string
-	Status                   string
-	IdempotencyKey           string
-	RequestHash              string
-	ExpectedOperationVersion int
-	RequestJSON              string
-	TotalComponents          int
-	CompletedComponents      int
-	TotalOperations          int
-	CompletedOperations      int
-	CurrentRoot              string
-	CurrentComponentID       string
-	CurrentComponentIndex    int
-	CurrentPhase             string
-	CancelRequested          bool
-	ErrorCode                string
-	ErrorMessage             string
-	StartedAt                time.Time
-	FinishedAt               time.Time
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
-}
 
 const executionColumns = `execution_id, workset_id, operation_type, plan_id, status,
 	idempotency_key, request_hash, expected_operation_version, request_json,
@@ -77,8 +28,8 @@ const executionProgressColumns = `execution_id, workset_id, operation_type, plan
 	current_root, current_component_id, current_component_index, current_phase,
 	error_code, error_message, started_at, finished_at, created_at, updated_at`
 
-func scanExecution(scanner interface{ Scan(...any) error }) (*PlanExecution, error) {
-	var e PlanExecution
+func scanExecution(scanner interface{ Scan(...any) error }) (*workset.PlanExecution, error) {
+	var e workset.PlanExecution
 	var startedAt, finishedAt sql.NullString
 	var cancelRequested int
 	var createdAt, updatedAt string
@@ -124,8 +75,8 @@ func scanExecution(scanner interface{ Scan(...any) error }) (*PlanExecution, err
 
 // scanExecutionProgress scans executionProgressColumns into the same type,
 // leaving the fields the projection does not carry at their zero value.
-func scanExecutionProgress(scanner interface{ Scan(...any) error }) (*PlanExecution, error) {
-	var e PlanExecution
+func scanExecutionProgress(scanner interface{ Scan(...any) error }) (*workset.PlanExecution, error) {
+	var e workset.PlanExecution
 	var startedAt, finishedAt sql.NullString
 	var cancelRequested int
 	var createdAt, updatedAt string
@@ -165,27 +116,6 @@ func scanExecutionProgress(scanner interface{ Scan(...any) error }) (*PlanExecut
 	return &e, nil
 }
 
-// ErrDraftChanged is returned when a guarded execution start observes a draft
-// hash that no longer matches the revision's frozen one.
-var ErrDraftChanged = errors.New("draft changed")
-
-// ErrWorksetOrphaned is returned when a guarded execution start observes a
-// workset whose library is gone.
-var ErrWorksetOrphaned = errors.New("workset is orphaned")
-
-// ErrExecutionNotEligible is the residual outcome of a guarded execution start
-// whose guard predicates refused the insert without a re-readable cause.
-var ErrExecutionNotEligible = errors.New("execution is not eligible")
-
-// ExecutionGuards are the persisted facts an execution start must re-check
-// inside its own write transaction: the read-only eligibility gates cannot
-// freeze the operation version or the draft hash on their own.
-type ExecutionGuards struct {
-	ExpectedOperationVersion int
-	ExpectedCurrentRevision  string
-	ExpectedDraftHash        string
-}
-
 // CreateExecutionGuarded inserts a queued execution session only when the
 // persisted eligibility facts still hold, as one conditional write statement:
 // the guard predicates and the insert are evaluated atomically by SQLite, so a
@@ -194,11 +124,11 @@ type ExecutionGuards struct {
 // indexes cover the remaining invariants (one session per idempotency key and
 // per revision).
 //
-// Sentinel failures: ErrExecutionIdemConflict (key or revision already has a
-// session), ErrVersionConflict, ErrRevisionNotFound (no longer the current
-// revision), ErrDraftChanged, ErrGenerationInProgress, ErrWorksetOrphaned,
-// ErrWorksetNotFound, ErrOperationNotFound.
-func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards) error {
+// Sentinel failures: workset.ErrExecutionIdemConflict (key or revision already has a
+// session), workset.ErrVersionConflict, workset.ErrRevisionNotFound (no longer the current
+// revision), workset.ErrDraftChanged, ErrGenerationInProgress, workset.ErrWorksetOrphaned,
+// workset.ErrWorksetNotFound, workset.ErrOperationNotFound.
+func (r *Repository) CreateExecutionGuarded(e *workset.PlanExecution, g workset.ExecutionGuards) error {
 	now := e.CreatedAt.Format(timeFormat)
 	result, err := r.db.Exec(`
 		INSERT INTO plan_executions (
@@ -232,7 +162,7 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 		e.WorksetID, e.OperationType)
 	if err != nil {
 		if isUniqueConstraintError(err) {
-			return ErrExecutionIdemConflict
+			return workset.ErrExecutionIdemConflict
 		}
 		return fmt.Errorf("insert execution: %w", err)
 	}
@@ -245,18 +175,18 @@ func (r *Repository) CreateExecutionGuarded(e *PlanExecution, g ExecutionGuards)
 // classifyExecutionGuards names the fact that refused a guarded insert. The
 // refusing write already committed, so the re-read observes it; the residual
 // race (a fact that changed and changed back) is reported as
-// ErrExecutionNotEligible.
-func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards) error {
+// workset.ErrExecutionNotEligible.
+func (r *Repository) classifyExecutionGuards(e *workset.PlanExecution, g workset.ExecutionGuards) error {
 	var libraryID sql.NullString
 	err := r.db.QueryRow("SELECT library_id FROM worksets WHERE id = ?", e.WorksetID).Scan(&libraryID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrWorksetNotFound
+		return workset.ErrWorksetNotFound
 	}
 	if err != nil {
 		return err
 	}
 	if !libraryID.Valid || libraryID.String == "" {
-		return ErrWorksetOrphaned
+		return workset.ErrWorksetOrphaned
 	}
 	var version int
 	var current string
@@ -265,16 +195,16 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 		WHERE workset_id = ? AND operation_type = ?
 	`, e.WorksetID, e.OperationType).Scan(&version, &current)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrOperationNotFound
+		return workset.ErrOperationNotFound
 	}
 	if err != nil {
 		return err
 	}
 	if version != g.ExpectedOperationVersion {
-		return ErrVersionConflict
+		return workset.ErrVersionConflict
 	}
 	if current != e.PlanID || g.ExpectedCurrentRevision != e.PlanID {
-		return ErrRevisionNotFound
+		return workset.ErrRevisionNotFound
 	}
 	var draftHash string
 	err = r.db.QueryRow(`
@@ -282,13 +212,13 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 		WHERE workset_id = ? AND operation_type = ?
 	`, e.WorksetID, e.OperationType).Scan(&draftHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrDraftChanged
+		return workset.ErrDraftChanged
 	}
 	if err != nil {
 		return err
 	}
 	if draftHash != g.ExpectedDraftHash {
-		return ErrDraftChanged
+		return workset.ErrDraftChanged
 	}
 	var generating int
 	if genErr := r.db.QueryRow(`
@@ -303,7 +233,7 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 	// The revision already has a session (the caller distinguishes a key replay
 	// from an executed revision), or another session of the operation is active.
 	if existing, existErr := r.GetExecutionForRevision(e.PlanID); existErr == nil && existing != nil {
-		return ErrExecutionIdemConflict
+		return workset.ErrExecutionIdemConflict
 	}
 	if active, activeErr := r.GetActiveExecutionForOperation(
 		e.WorksetID,
@@ -312,16 +242,16 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 		active != nil {
 		return library.ErrExecutionInProgress
 	}
-	return ErrExecutionNotEligible
+	return workset.ErrExecutionNotEligible
 }
 
 // GetExecution retrieves an execution session by id.
-func (r *Repository) GetExecution(executionID string) (*PlanExecution, error) {
+func (r *Repository) GetExecution(executionID string) (*workset.PlanExecution, error) {
 	row := r.db.QueryRow(`SELECT `+executionColumns+` FROM plan_executions WHERE execution_id = ?`, executionID)
 	e, err := scanExecution(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrExecutionNotFound
+			return nil, workset.ErrExecutionNotFound
 		}
 		return nil, err
 	}
@@ -331,7 +261,7 @@ func (r *Repository) GetExecution(executionID string) (*PlanExecution, error) {
 // GetExecutionByOperationKey returns the execution owned by an operation and an
 // idempotency key. Returns nil when no row matches. Every status replays: a
 // retried start must observe the session it already created.
-func (r *Repository) GetExecutionByOperationKey(worksetID, operationType, key string) (*PlanExecution, error) {
+func (r *Repository) GetExecutionByOperationKey(worksetID, operationType, key string) (*workset.PlanExecution, error) {
 	if key == "" {
 		return nil, nil
 	}
@@ -353,7 +283,7 @@ func (r *Repository) GetExecutionByOperationKey(worksetID, operationType, key st
 // GetExecutionForRevision returns the newest execution of one revision, or nil
 // when the revision was never executed. A revision is executed at most once, so
 // the newest row is the only row.
-func (r *Repository) GetExecutionForRevision(planID string) (*PlanExecution, error) {
+func (r *Repository) GetExecutionForRevision(planID string) (*workset.PlanExecution, error) {
 	row := r.db.QueryRow(
 		`SELECT `+executionColumns+` FROM plan_executions
 		 WHERE plan_id = ? ORDER BY julianday(created_at) DESC, execution_id DESC LIMIT 1`,
@@ -371,7 +301,7 @@ func (r *Repository) GetExecutionForRevision(planID string) (*PlanExecution, err
 
 // GetActiveExecutionForOperation returns the queued/running session of one
 // operation, newest first. Returns nil when none is active.
-func (r *Repository) GetActiveExecutionForOperation(worksetID, operationType string) (*PlanExecution, error) {
+func (r *Repository) GetActiveExecutionForOperation(worksetID, operationType string) (*workset.PlanExecution, error) {
 	row := r.db.QueryRow(
 		`SELECT `+executionColumns+` FROM plan_executions
 		 WHERE workset_id = ? AND operation_type = ? AND status IN ('queued','running')
@@ -390,7 +320,7 @@ func (r *Repository) GetActiveExecutionForOperation(worksetID, operationType str
 
 // LatestExecutionForOperation returns the most recently created session of one
 // operation (any status), or nil.
-func (r *Repository) LatestExecutionForOperation(worksetID, operationType string) (*PlanExecution, error) {
+func (r *Repository) LatestExecutionForOperation(worksetID, operationType string) (*workset.PlanExecution, error) {
 	row := r.db.QueryRow(
 		`SELECT `+executionColumns+` FROM plan_executions
 		 WHERE workset_id = ? AND operation_type = ?
@@ -410,7 +340,7 @@ func (r *Repository) LatestExecutionForOperation(worksetID, operationType string
 // NextQueuedExecution claims the oldest queued session globally. Claiming is a
 // conditional update: a session canceled between select and update affects zero
 // rows and is skipped, so a canceled-queued session never starts.
-func (r *Repository) NextQueuedExecution() (*PlanExecution, error) {
+func (r *Repository) NextQueuedExecution() (*workset.PlanExecution, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return nil, err
@@ -425,7 +355,7 @@ func (r *Repository) NextQueuedExecution() (*PlanExecution, error) {
 	if err != nil {
 		return nil, err
 	}
-	var e *PlanExecution
+	var e *workset.PlanExecution
 	if rows.Next() {
 		e, err = scanExecution(rows)
 		if err != nil {
@@ -455,39 +385,16 @@ func (r *Repository) NextQueuedExecution() (*PlanExecution, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	e.Status = ExecStatusRunning
+	e.Status = workset.ExecStatusRunning
 	e.StartedAt = now
 	return e, nil
-}
-
-// ExecutionProgress is the position of a running session: the component it is
-// working on, or the empty position once the run is over. The counters are
-// derived from the component result rows inside the same transaction, so they
-// can never drift from the facts.
-type ExecutionProgress struct {
-	CurrentRoot           string
-	CurrentComponentID    string
-	CurrentComponentIndex int
-	CurrentPhase          string
-}
-
-// ExecutionComponentResult is one component's observed result. The frozen
-// identity of the component (id, root path, partition, operation count) is not
-// repeated here: it lives in the session's frozen worklist and is joined back
-// on read.
-type ExecutionComponentResult struct {
-	ComponentIndex      int
-	Status              string
-	CompletedOperations int
-	ResultJSON          string
-	UpdatedAt           time.Time
 }
 
 // UpdateExecutionPosition records where a running session is without touching
 // any component result. It is used for the first unit of a run, which no
 // boundary has written yet; later boundaries publish the next position with
 // their own result.
-func (r *Repository) UpdateExecutionPosition(executionID string, p ExecutionProgress) error {
+func (r *Repository) UpdateExecutionPosition(executionID string, p workset.ExecutionPosition) error {
 	_, err := r.db.Exec(`
 		UPDATE plan_executions SET
 			current_root = ?, current_component_id = ?, current_component_index = ?,
@@ -506,8 +413,8 @@ func (r *Repository) UpdateExecutionPosition(executionID string, p ExecutionProg
 // the next component to work on — and is left empty for the last one.
 func (r *Repository) SaveExecutionComponentResult(
 	executionID string,
-	res ExecutionComponentResult,
-	p ExecutionProgress,
+	res workset.ExecutionComponentResult,
+	p workset.ExecutionPosition,
 ) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -557,7 +464,7 @@ func (r *Repository) SaveExecutionComponentResult(
 func (r *Repository) ListExecutionComponentResults(
 	executionID string,
 	fromIndex, limit int,
-) ([]ExecutionComponentResult, error) {
+) ([]workset.ExecutionComponentResult, error) {
 	query := `
 		SELECT component_index, status, completed_operations, result_json, updated_at
 		FROM execution_component_results
@@ -575,9 +482,9 @@ func (r *Repository) ListExecutionComponentResults(
 	}
 	defer rows.Close()
 
-	results := make([]ExecutionComponentResult, 0)
+	results := make([]workset.ExecutionComponentResult, 0)
 	for rows.Next() {
-		var res ExecutionComponentResult
+		var res workset.ExecutionComponentResult
 		var updatedAt string
 		if err := rows.Scan(
 			&res.ComponentIndex, &res.Status, &res.CompletedOperations, &res.ResultJSON, &updatedAt,
@@ -595,15 +502,15 @@ func (r *Repository) ListExecutionComponentResults(
 
 // GetExecutionProgress reads the control fields of one session without its
 // frozen request or any component result: what the cancel watchdog and the
-// event stream poll. It returns ErrExecutionNotFound for an unknown session.
-func (r *Repository) GetExecutionProgress(executionID string) (*PlanExecution, error) {
+// event stream poll. It returns workset.ErrExecutionNotFound for an unknown session.
+func (r *Repository) GetExecutionProgress(executionID string) (*workset.PlanExecution, error) {
 	row := r.db.QueryRow(
 		`SELECT `+executionProgressColumns+` FROM plan_executions WHERE execution_id = ?`,
 		executionID,
 	)
 	e, err := scanExecutionProgress(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrExecutionNotFound
+		return nil, workset.ErrExecutionNotFound
 	}
 	if err != nil {
 		return nil, err
