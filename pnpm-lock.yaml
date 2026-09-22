@@ -22,7 +22,7 @@ importers:
         version: 5.102.3(vue@3.5.41(typescript@6.0.2))
       '@tanstack/vue-virtual':
         specifier: ^3.13.36
-        version: 3.13.36(vue@3.5.41(typescript@6.0.2))
+        version: 3.13.39(vue@3.5.41(typescript@6.0.2))
       '@vue/devtools-api':
         specifier: ^8.1.5
         version: 8.2.1
@@ -690,8 +690,8 @@ packages:
   '@tanstack/query-core@5.102.3':
     resolution: {integrity: sha512-5O2VEceonqC4uaTLUGglb0hgPouWCJ4K1ykVWyeV8aThhdNCzwpwu01bYoaRNJ9mgFUXS7Kf9utJ46ysT8m+bw==}
 
-  '@tanstack/virtual-core@3.17.8':
-    resolution: {integrity: sha512-BfEvehNpOT75r5Ksc5xW6NZuXujTfb7nlSEyVu4XHG3gdxNg1KqXruWbDewXOUaUYIo4oRbSfkjIajz4MAT8tA==}
+  '@tanstack/virtual-core@3.17.11':
+    resolution: {integrity: sha512-+ILjvtHup6Y2hzQ6YzwMgX1Q+oQpxEGOXCEsCNaPoIP0VxMbizIBTmYTDtkerkIQS8/CbP1BRuyt8V/8BCsy1g==}
 
   '@tanstack/vue-query@5.102.3':
     resolution: {integrity: sha512-CNR35/HPFlfajOg2dYS2WLJIMFV/G1cE7n9PA/SOaJCwqgSR5cPUwN+huoQW8gQBHFIbz1kFw08Ymdx9ii7WVQ==}
@@ -702,8 +702,8 @@ packages:
       '@vue/composition-api':
         optional: true
 
-  '@tanstack/vue-virtual@3.13.36':
-    resolution: {integrity: sha512-gKpExv4RbB9luVG+SucTXoqPZv/gzu/Yvz6BNO+8kpNxJ2x+I/ulryzl5W9BRciahZGp5Tls3Dp5XP1ztVGbMw==}
+  '@tanstack/vue-virtual@3.13.39':
+    resolution: {integrity: sha512-AG8sI+6nfrDvN6ixuHJL9LaJTf3//0V5VITZYW3UOaIuSVexnEzsbMu4LH/JhMfRTxwhUXPnLqkl1DlzkZbRtg==}
     peerDependencies:
       vue: ^2.7.0 || ^3.0.0
 
@@ -3501,7 +3501,7 @@ snapshots:
 
   '@tanstack/query-core@5.102.3': {}
 
-  '@tanstack/virtual-core@3.17.8': {}
+  '@tanstack/virtual-core@3.17.11': {}
 
   '@tanstack/vue-query@5.102.3(vue@3.5.41(typescript@6.0.2))':
     dependencies:
@@ -3511,9 +3511,9 @@ snapshots:
       vue: 3.5.41(typescript@6.0.2)
       vue-demi: 0.14.10(vue@3.5.41(typescript@6.0.2))
 
-  '@tanstack/vue-virtual@3.13.36(vue@3.5.41(typescript@6.0.2))':
+  '@tanstack/vue-virtual@3.13.39(vue@3.5.41(typescript@6.0.2))':
     dependencies:
-      '@tanstack/virtual-core': 3.17.8
+      '@tanstack/virtual-core': 3.17.11
       vue: 3.5.41(typescript@6.0.2)
 
   '@ts-morph/common@0.29.0':
@@ -5069,7 +5069,7 @@ snapshots:
       '@floating-ui/vue': 1.1.11(vue@3.5.41(typescript@6.0.2))
       '@internationalized/date': 3.12.3
       '@internationalized/number': 3.6.7
-      '@tanstack/vue-virtual': 3.13.36(vue@3.5.41(typescript@6.0.2))
+      '@tanstack/vue-virtual': 3.13.39(vue@3.5.41(typescript@6.0.2))
       '@vueuse/core': 14.4.0(vue@3.5.41(typescript@6.0.2))
       '@vueuse/shared': 14.4.0(vue@3.5.41(typescript@6.0.2))
       aria-hidden: 1.2.6
