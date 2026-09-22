@@ -2,9 +2,11 @@ package conversion_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
@@ -97,7 +99,7 @@ func TestPlanBalancedSatisfied(t *testing.T) {
 	seedRootEntries(t, repo)
 
 	policy := balancedPolicy()
-	res, err := conversion.Plan(context.Background(), repo, "", conversion.Input{
+	res, err := conversion.Plan(context.Background(), repo, appconfig.NewReader(""), conversion.Input{
 		Policy: policy,
 		Roots:  []conversion.RootInput{{Path: "/music", Policy: policy}},
 	})
@@ -148,7 +150,7 @@ func TestPlanInvalidPolicy(t *testing.T) {
 
 	policy := balancedPolicy()
 	policy.SchemaVersion = 99
-	_, err = conversion.Plan(context.Background(), repo, "", conversion.Input{
+	_, err = conversion.Plan(context.Background(), repo, appconfig.NewReader(""), conversion.Input{
 		Policy: policy,
 		Roots:  []conversion.RootInput{{Path: "/music", Policy: policy}},
 	})
@@ -158,5 +160,35 @@ func TestPlanInvalidPolicy(t *testing.T) {
 	planErr, ok := workset.AsError(err)
 	if !ok || planErr.Code != "INVALID_POLICY" {
 		t.Fatalf("error = %v, want INVALID_POLICY", err)
+	}
+}
+
+// TestPlanSurvivesABrokenConfiguration pins the configuration fallback: a
+// config.json that cannot be parsed must neither fail a planning pass nor
+// silently change the shape it writes probed rates in. The plan is the same one
+// an absent configuration produces.
+func TestPlanSurvivesABrokenConfiguration(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("new repo: %v", err)
+	}
+	defer repo.Close()
+	seedRootEntries(t, repo)
+
+	policy := balancedPolicy()
+	res, err := conversion.Plan(context.Background(), repo, appconfig.NewReader(configDir), conversion.Input{
+		Policy: policy,
+		Roots:  []conversion.RootInput{{Path: "/music", Policy: policy}},
+	})
+	if err != nil {
+		t.Fatalf("Plan on a broken configuration: %v", err)
+	}
+	if res.Status != "ok" || res.Summary.SummaryReason != "NO_MATCH" {
+		t.Fatalf("plan on a broken configuration = %q/%q, want the defaults' ok/NO_MATCH",
+			res.Status, res.Summary.SummaryReason)
 	}
 }

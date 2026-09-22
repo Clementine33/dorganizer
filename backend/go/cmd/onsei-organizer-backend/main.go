@@ -196,7 +196,7 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 		repo,
 		generationConcurrency,
 		0,
-		[]workset.Task{conversion.New(configDir, repo)},
+		[]workset.Task{conversion.New(repo, appconfig.NewReader(configDir))},
 		scanSvc.RefreshMember,
 		gate.Enqueue,
 	)
@@ -206,7 +206,7 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 		scan:    scanSvc,
 		fileOps: fileops.NewService(gate, scanSvc.RefreshMember),
 		workset: worksetSvc,
-		catalog: conversion.NewCatalog(repo, repo),
+		catalog: conversion.NewCatalog(repo, repo, appconfig.NewReader(configDir)),
 	}
 }
 
@@ -264,7 +264,6 @@ func runServer(
 
 			Library:        services.library,
 			Catalog:        services.catalog,
-			ConfigDir:      configDir,
 			Token:          token,
 			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
 			Version:        version,

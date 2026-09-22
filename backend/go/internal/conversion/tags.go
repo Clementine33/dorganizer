@@ -24,6 +24,18 @@ type ClassifierTagStore interface {
 	DeleteTag(id int64) error
 }
 
+// DefaultTags returns the maintained literal tags the configuration carries:
+// the read-only half of the library. There is no compiled-in fallback, so an
+// unreadable configuration offers none — but never a nil list, because "no
+// defaults" and "the defaults could not be read" look the same to a browser.
+func (c *Catalog) DefaultTags() []string {
+	tags := c.settings.PruneLiteralTags()
+	if tags == nil {
+		return []string{}
+	}
+	return tags
+}
+
 // Tags returns the custom tags, ordered as the library keeps them.
 func (c *Catalog) Tags() ([]ClassifierTag, error) {
 	return c.tags.Tags()

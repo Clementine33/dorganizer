@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
@@ -67,7 +68,7 @@ func newExecFixtureWithTask(
 		t.Fatalf("write config: %v", cfgErr)
 	}
 	if tasks == nil {
-		tasks = []workset.Task{conversion.New(tmp, repo)}
+		tasks = []workset.Task{conversion.New(repo, appconfig.NewReader(tmp))}
 	}
 	root := filepath.Join(tmp, "music")
 	f := &execFixture{

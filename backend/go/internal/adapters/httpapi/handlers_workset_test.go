@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/library"
@@ -34,12 +35,11 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 		t.Fatalf("write config: %v", err)
 	}
 	svc := workset.NewService(repo, 1, 1, []workset.Task{
-		conversion.New(tmp, repo),
+		conversion.New(repo, appconfig.NewReader(tmp)),
 	}, nil, nil)
 	handler := NewServer(Dependencies{
 		Library:        library.NewService(repo, nil, repo, fileops.ResolveMember),
-		Catalog:        conversion.NewCatalog(repo, repo),
-		ConfigDir:      tmp,
+		Catalog:        conversion.NewCatalog(repo, repo, appconfig.NewReader(tmp)),
 		Token:          testToken,
 		CORSOrigins:    []string{"http://localhost:5173"},
 		WorksetService: svc,

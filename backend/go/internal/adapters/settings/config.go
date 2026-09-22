@@ -1,9 +1,6 @@
 package settings
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -13,25 +10,6 @@ import (
 // literal substrings); it seeds new workset drafts only.
 type PruneConfig struct {
 	LiteralTags []string `json:"literal_tags"`
-}
-
-// LoadPruneLiteralTags reads the maintained initial literal tag list from
-// config.json (prune.literal_tags). A missing/unreadable file yields an empty
-// set — there is deliberately no compiled-in fallback.
-func LoadPruneLiteralTags(configDir string) []string {
-	if configDir == "" {
-		return nil
-	}
-	cfgPath := filepath.Join(configDir, "config.json")
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return nil
-	}
-	var cfg AppConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil
-	}
-	return normalizeTags(cfg.Prune.LiteralTags)
 }
 
 func normalizeTags(tags []string) []string {

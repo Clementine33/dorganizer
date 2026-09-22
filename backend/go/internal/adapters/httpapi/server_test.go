@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/conversion"
@@ -28,7 +29,7 @@ func newTestServer(t *testing.T, mutate func(d *Dependencies, fixture *sqlite.Re
 	fixture := newHTTPTestRepository(t)
 	deps := Dependencies{
 		Library:     library.NewService(fixture, nil, fixture, fileops.ResolveMember),
-		Catalog:     conversion.NewCatalog(fixture, fixture),
+		Catalog:     conversion.NewCatalog(fixture, fixture, appconfig.NewReader("")),
 		Token:       "",
 		CORSOrigins: []string{},
 		Version:     "dev",

@@ -23,7 +23,6 @@ type Dependencies struct {
 	// take the admission slot without the HTTP layer knowing about it.
 	Library        *library.Service
 	Catalog        *conversion.Catalog
-	ConfigDir      string
 	Token          string
 	CORSOrigins    []string
 	Version        string

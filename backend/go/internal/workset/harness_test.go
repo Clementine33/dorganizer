@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
@@ -56,7 +57,7 @@ func newFixtureWithScan(t *testing.T, scan workset.FolderScan) *fixture {
 		t:    t,
 		repo: repo,
 		svc: workset.NewService(repo, 1, 1, []workset.Task{
-			conversion.New(tmp, repo),
+			conversion.New(repo, appconfig.NewReader(tmp)),
 		}, scan, nil),
 		ctx: context.Background(),
 	}

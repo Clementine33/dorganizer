@@ -9,11 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/conversion/execute"
 	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/workset"
@@ -21,14 +18,14 @@ import (
 
 // Task implements workset.Task for the conversion operation.
 type Task struct {
-	configDir string
 	inventory Inventory
+	settings  Settings
 }
 
-// New creates the conversion task rooted at one config directory, reading and
-// writing its input facts through the injected inventory.
-func New(configDir string, inv Inventory) *Task {
-	return &Task{configDir: configDir, inventory: inv}
+// New creates the conversion task: its input facts come from the injected
+// inventory, its configuration from the injected settings.
+func New(inv Inventory, settings Settings) *Task {
+	return &Task{inventory: inv, settings: settings}
 }
 
 func (*Task) Kind() string { return workset.OperationTypeConversion }
@@ -42,7 +39,7 @@ func (t *Task) SeedDraft() ([]byte, string, int) {
 	doc := &DraftDoc{
 		SchemaVersion:  DraftSchemaVersion,
 		Mode:           reconcile.ModeAvailableSources,
-		ClassifierTags: appconfig.LoadPruneLiteralTags(t.configDir),
+		ClassifierTags: t.settings.PruneLiteralTags(),
 		Matched:        defaultProfile(),
 		Unmatched:      defaultProfile(),
 	}
@@ -129,7 +126,7 @@ func (t *Task) PlanSession(
 			in.Progress(workset.PlanProgress(p))
 		}
 	}
-	snap, err := Plan(ctx, t.inventory, t.configDir, Input{
+	snap, err := Plan(ctx, t.inventory, t.settings, Input{
 		Policy:           CommonPolicy(doc),
 		Roots:            roots,
 		MarkMissingRoots: true,
@@ -334,23 +331,6 @@ func (*Task) ReviewRevision(in workset.RevisionFacts) (workset.PlanReview, error
 		})
 	}
 	return out, nil
-}
-
-// tools resolves the encoder tools from config.json, matching the planner's
-// own resolution; empty paths fall back to PATH.
-func (t *Task) tools() execute.ToolsConfig {
-	tools := execute.ToolsConfig{}
-	data, err := os.ReadFile(filepath.Join(t.configDir, "config.json"))
-	if err != nil {
-		return tools
-	}
-	cfg := appconfig.DefaultAppConfig()
-	if json.Unmarshal(data, &cfg) != nil {
-		return tools
-	}
-	tools.FFmpegPath = cfg.Tools.FFmpegPath
-	tools.FFprobePath = cfg.Tools.FFprobePath
-	return tools
 }
 
 // componentErrorOf extracts the stable failure facts of a component run.

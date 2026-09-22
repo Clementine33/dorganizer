@@ -29,7 +29,7 @@ func (t *Task) PrepareUnit(
 	if err != nil {
 		return nil, err
 	}
-	return &preparedUnit{in: in, component: component, profile: profile, tools: t.tools()}, nil
+	return &preparedUnit{in: in, component: component, profile: profile, tools: t.settings.Tools()}, nil
 }
 
 // prepareComponent decodes the frozen unit payloads and prechecks the
@@ -61,7 +61,7 @@ func (t *Task) prepareComponent(
 		Component:  outcome,
 		Specs:      profile,
 		DeleteMode: mode,
-		Tools:      t.tools(),
+		Tools:      t.settings.Tools(),
 		// Recovery copies land under <workset root>/Delete/..., beside the
 		// member folders, so they never re-enter the member's own inventory.
 		RecoveryRoot: in.WorksetRoot,

@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
@@ -40,11 +39,6 @@ func toCustomTagItem(r conversion.ClassifierTag) classifierCustomTagItem {
 // listClassifierTags handles GET /api/v1/classifier-tags.
 // Returns both the read-only defaults from config.json and the custom tags from SQLite.
 func (s *Server) listClassifierTags(w http.ResponseWriter, _ *http.Request) {
-	defaults := appconfig.LoadPruneLiteralTags(s.deps.ConfigDir)
-	if defaults == nil {
-		defaults = []string{}
-	}
-
 	customTags, err := s.deps.Catalog.Tags()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load classifier tags")
@@ -57,7 +51,7 @@ func (s *Server) listClassifierTags(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, classifierTagLibraryResponse{
-		DefaultTags: defaults,
+		DefaultTags: s.deps.Catalog.DefaultTags(),
 		CustomTags:  customItems,
 	})
 }

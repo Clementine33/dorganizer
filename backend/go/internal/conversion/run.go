@@ -20,7 +20,7 @@ import (
 // types; callers persist it through their own adapter.
 //
 //nolint:gocognit,funlen // per-root outcome branches; split when more steps appear
-func Plan(ctx context.Context, inv Inventory, configDir string, in Input) (*Snapshot, error) {
+func Plan(ctx context.Context, inv Inventory, settings Settings, in Input) (*Snapshot, error) {
 	if len(in.Roots) == 0 {
 		return nil, workset.NewError(
 			workset.ErrKindInvalidArgument,
@@ -33,10 +33,9 @@ func Plan(ctx context.Context, inv Inventory, configDir string, in Input) (*Snap
 		return nil, err
 	}
 
-	planCfg, cfgErr := getPlanConfig(configDir)
-	if cfgErr != nil {
-		planCfg = defaultPlanConfig()
-	}
+	// A configuration that cannot be read is not a planning failure: the pass
+	// runs on the defaults.
+	planCfg := settings.Plan()
 
 	// The baseline policy is validated once. Each root only resolves its own
 	// classifier here: per-root policies were validated in full when the
@@ -243,10 +242,10 @@ func enrichBitrate(
 	ctx context.Context,
 	inv Inventory,
 	entries []reconcile.AudioEntry,
-	cfg planConfig,
+	cfg PlanConfig,
 ) ([]reconcile.AudioEntry, error) {
 	analyzer := newBitrateAnalyzer(inv, cfg.FFprobePath)
-	if err := analyzer.enrichMissing(ctx, entries, cfg.Bitrate.BatchUpdate); err != nil {
+	if err := analyzer.enrichMissing(ctx, entries, cfg.BatchUpdate); err != nil {
 		return nil, err
 	}
 	return entries, nil
