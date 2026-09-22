@@ -26,7 +26,11 @@ func (r Reader) Plan() conversion.PlanConfig {
 	defaults := DefaultAppConfig()
 	out := conversion.PlanConfig{BatchUpdate: defaults.Plan.Bitrate.BatchUpdate}
 
-	var cfg AppConfig
+	// Decoded over the defaults, never over a zero value: a key the file omits
+	// keeps its default, so a configuration that names only the probe tool
+	// still writes probed rates in batches. A file that is missing, unreadable
+	// or unparsable leaves the defaults alone.
+	cfg := DefaultAppConfig()
 	if !r.decode(&cfg) {
 		return out
 	}
@@ -40,7 +44,7 @@ func (r Reader) Plan() conversion.PlanConfig {
 // offers as its defaults. A missing/unreadable file yields an empty set — there
 // is deliberately no compiled-in fallback.
 func (r Reader) PruneLiteralTags() []string {
-	var cfg AppConfig
+	cfg := DefaultAppConfig()
 	if !r.decode(&cfg) {
 		return nil
 	}
@@ -50,7 +54,9 @@ func (r Reader) PruneLiteralTags() []string {
 // Tools reads the encoder tool paths (tools.ffmpeg_path, tools.ffprobe_path).
 // An unreadable file yields the zero value, which means PATH.
 func (r Reader) Tools() execute.ToolsConfig {
-	var cfg AppConfig
+	// Decoded over the defaults like the other reads; the tool paths have none,
+	// so an omitted key means PATH.
+	cfg := DefaultAppConfig()
 	if !r.decode(&cfg) {
 		return execute.ToolsConfig{}
 	}

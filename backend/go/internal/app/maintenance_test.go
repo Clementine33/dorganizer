@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -201,6 +202,31 @@ func (c *logCapture) contains(substr string) bool {
 	return strings.Contains(c.text.String(), substr)
 }
 
+// rowsDeletedPerPass reads the per-pass deletion counts out of the loop's own
+// log lines: one line per pass, whatever route it took to the end.
+func (c *logCapture) rowsDeletedPerPass(t *testing.T) []int {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var counts []int
+	for line := range strings.SplitSeq(c.text.String(), "\n") {
+		if !strings.Contains(line, "maintenance: complete=") {
+			continue
+		}
+		_, rest, found := strings.Cut(line, "deleted_scan_and_generation_rows=")
+		if !found {
+			t.Fatalf("pass line without a deletion count: %q", line)
+		}
+		fields := strings.Fields(rest)
+		n, err := strconv.Atoi(fields[0])
+		if err != nil {
+			t.Fatalf("pass line %q: %v", line, err)
+		}
+		counts = append(counts, n)
+	}
+	return counts
+}
+
 func captureLog(t *testing.T) *logCapture {
 	t.Helper()
 	logs := &logCapture{}
@@ -250,18 +276,34 @@ func TestLoop_ContinuesOnTheNextTickWhenTheBudgetRunsOut(t *testing.T) {
 	repo := newLoopRepo(t)
 	seedOldScans(t, repo, 3)
 	acquire := &fakeAcquire{}
+	logs := captureLog(t)
 	options := loopOptions()
 	options.MaxBatches = 1
 	stop := startLoop(t, NewMaintenanceLoop(repo, acquire.begin, options))
 	defer stop()
 
 	// One pass is one batch: the rows go one per tick, not one per interval.
+	waitFor(t, "every seeded row deleted", func() bool { return countScans(t, repo) == 0 })
+	stop()
+
 	// The count is read at the end rather than watched down through every
 	// intermediate value — the loop runs far faster than a poll does, so an
 	// observer that samples instead of counting can miss a state entirely.
-	waitFor(t, "every seeded row deleted", func() bool { return countScans(t, repo) == 0 })
-	if calls := acquire.callCount(); calls < 3 {
-		t.Errorf("acquired %d times for three one-batch ticks, want one admission per tick", calls)
+	//
+	// What makes it the *budget* that ended each pass is the per-pass deletion
+	// count in the loop's own log: one batch per pass can only ever report one
+	// row, so a pass that deleted more would mean the budget was ignored. The
+	// admission count cannot say this — a single pass acquires once per batch
+	// (it releases the slot between them), so three rows in one pass would look
+	// exactly like three one-batch passes.
+	passes := logs.rowsDeletedPerPass(t)
+	if len(passes) < 2 {
+		t.Fatalf("deleted 3 seeded rows in %d pass(es), want the budget to spread them over several", len(passes))
+	}
+	for i, deleted := range passes {
+		if deleted > 1 {
+			t.Errorf("pass %d deleted %d rows; the budget allows one batch, so one row", i+1, deleted)
+		}
 	}
 }
 
