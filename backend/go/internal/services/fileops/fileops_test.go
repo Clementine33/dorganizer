@@ -496,6 +496,55 @@ func TestUnknownOperationIsRefused(t *testing.T) {
 	}
 }
 
+// TestRenameAndMoveTakeOneItem pins the request shape: a rename and a move act
+// on one item and a multi-item request is refused before anything is written,
+// while a soft delete is the one operation that takes a batch.
+func TestRenameAndMoveTakeOneItem(t *testing.T) {
+	f := newFixture(t, false)
+	f.write("albumA/01.mp3", "one")
+	f.write("albumA/02.mp3", "two")
+
+	batches := []struct {
+		operation string
+		items     []fileops.Item
+	}{
+		{
+			fileops.OpRename,
+			[]fileops.Item{{Source: "01.mp3", Name: "a.mp3"}, {Source: "02.mp3", Name: "b.mp3"}},
+		},
+		{
+			fileops.OpMove,
+			[]fileops.Item{{Source: "01.mp3", TargetDir: "sub"}, {Source: "02.mp3", TargetDir: "sub"}},
+		},
+	}
+	for _, tc := range batches {
+		t.Run(tc.operation, func(t *testing.T) {
+			_, err := f.svc.Apply(context.Background(), fileops.Request{
+				LibraryRoot: f.root,
+				MemberPath:  "albumA",
+				Operation:   tc.operation,
+				Items:       tc.items,
+			})
+			var pathErr *fileops.PathError
+			if !errors.As(err, &pathErr) || pathErr.Code != fileops.CodePathInvalid {
+				t.Fatalf("err = %v, want a refused request (%s)", err, fileops.CodePathInvalid)
+			}
+			if !f.exists("albumA/01.mp3") || !f.exists("albumA/02.mp3") {
+				t.Fatal("a refused request must leave every item where it was")
+			}
+		})
+	}
+
+	result := f.apply(fileops.Request{
+		MemberPath: "albumA",
+		Operation:  fileops.OpSoftDelete,
+		Items:      []fileops.Item{{Source: "01.mp3"}, {Source: "02.mp3"}},
+	})
+	if result.Succeeded != 2 {
+		t.Fatalf("counts = %+v, want both items recycled", result)
+	}
+}
+
 // TestRefreshFailureIsReportedSeparately covers F4: the writes happened, so a
 // failed refresh is reported as a refresh failure and never as a failed write.
 func TestRefreshFailureIsReportedSeparately(t *testing.T) {

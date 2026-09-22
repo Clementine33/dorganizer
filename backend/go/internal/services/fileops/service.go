@@ -64,6 +64,15 @@ func (s *Service) Apply(ctx context.Context, req Request) (*Result, error) {
 	if len(req.Items) == 0 {
 		return nil, &PathError{CodePathInvalid, "the request has no items"}
 	}
+	// A rename and a move each act on one item; only soft delete is a batch
+	// (ADR 0007 §4). A request that asks for several renames is refused as a
+	// whole — before the member is touched — rather than applied item by item.
+	if req.Operation != OpSoftDelete && len(req.Items) != 1 {
+		return nil, &PathError{
+			CodePathInvalid,
+			"a " + req.Operation + " takes exactly one item; only a soft delete is a batch",
+		}
+	}
 
 	worklist := planItems(req.Items)
 	result := &Result{
