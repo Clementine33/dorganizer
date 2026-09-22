@@ -22,11 +22,11 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/bootstrap"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -193,7 +193,7 @@ func buildServices(repo *sqlite.Repository, configDir string, generationConcurre
 		repo,
 		generationConcurrency,
 		0,
-		[]workset.Task{tasksconversion.New(configDir, repo)},
+		[]workset.Task{conversion.New(configDir, repo)},
 		scanSvc.RefreshMember,
 		gate.Enqueue,
 	)

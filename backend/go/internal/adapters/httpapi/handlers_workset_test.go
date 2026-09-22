@@ -13,9 +13,9 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -34,7 +34,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 		t.Fatalf("write config: %v", err)
 	}
 	svc := workset.NewService(repo, 1, 1, []workset.Task{
-		tasksconversion.New(tmp, repo),
+		conversion.New(tmp, repo),
 	}, nil, nil)
 	handler := NewServer(Dependencies{
 		Repo:           repo,

@@ -5,7 +5,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/workset"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // MemberEffective is one member's resolved conversion config plus where each

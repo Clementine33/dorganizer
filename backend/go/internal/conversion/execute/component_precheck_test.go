@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/execute"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 //nolint:funlen // declarative rejection matrix; splitting would fragment the shared fixture harness

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -26,11 +26,11 @@ func seedRevision(
 	if err != nil {
 		t.Fatalf("GetDraft: %v", err)
 	}
-	doc, err := tasksconversion.ParseDraft(string(draft.Document))
+	doc, err := conversion.ParseDraft(string(draft.Document))
 	if err != nil {
 		t.Fatalf("parse draft: %v", err)
 	}
-	raw, hash, err := tasksconversion.MarshalDraft(doc)
+	raw, hash, err := conversion.MarshalDraft(doc)
 	if err != nil {
 		t.Fatalf("MarshalDraft: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestExecutionHTTPStartGatesAndShapes(t *testing.T) {
 	seedMember(t, repo, "albumA")
 	wsID := createRecord(t, h, libID, "create-exec-http")
 	svc := workset.NewService(repo, 1, 1, []workset.Task{
-		tasksconversion.New(t.TempDir(), repo),
+		conversion.New(t.TempDir(), repo),
 	}, nil, nil)
 	opPath := "/api/v1/worksets/" + wsID + "/operations/conversion"
 	execPath := opPath + "/revisions/plan-http/executions"

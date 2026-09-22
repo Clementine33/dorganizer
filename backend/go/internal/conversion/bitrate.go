@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/inventory"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // bitrateAnalyzer probes the missing MP3/AAC bitrates of a planning root with

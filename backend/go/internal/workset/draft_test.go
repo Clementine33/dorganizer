@@ -3,8 +3,8 @@ package workset_test
 import (
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -84,7 +84,7 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 	version := ws.Operations[0].Version
 
 	unknown := draftDoc()
-	unknown.Members = []tasksconversion.DraftMember{{MemberID: "m-not-here"}}
+	unknown.Members = []conversion.DraftMember{{MemberID: "m-not-here"}}
 	if _, err := f.svc.SaveDraft(
 		f.ctx,
 		ws.WorksetID,
@@ -102,7 +102,7 @@ func TestDraftRejectsUnknownAndDuplicateMembers(t *testing.T) {
 	}
 
 	dup := draftDoc()
-	dup.Members = []tasksconversion.DraftMember{
+	dup.Members = []conversion.DraftMember{
 		{MemberID: ws.Members[0].MemberID},
 		{MemberID: ws.Members[0].MemberID},
 	}

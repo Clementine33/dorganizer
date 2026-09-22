@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // FFmpeg encodes the frozen target specification, independently of global

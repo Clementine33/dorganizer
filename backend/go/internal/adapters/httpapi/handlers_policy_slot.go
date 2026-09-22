@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // sqlitePolicySlot aliases the repo row type so the mapper stays terse.

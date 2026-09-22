@@ -3,7 +3,7 @@ package execute
 import (
 	"context"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // ComponentRunTestKit replaces component-run IO in external tests so failures

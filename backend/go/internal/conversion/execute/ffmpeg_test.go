@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/execute"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 func audioFixture(t *testing.T) (execute.FFmpeg, string) {

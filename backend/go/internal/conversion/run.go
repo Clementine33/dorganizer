@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 

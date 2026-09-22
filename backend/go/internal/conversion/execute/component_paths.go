@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
 )
 
 // Root-boundary and disk-fact guards of a component run: they keep every

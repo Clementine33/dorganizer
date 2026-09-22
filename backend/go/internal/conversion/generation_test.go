@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/inventory"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	"github.com/onsei/organizer/backend/internal/tasks/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 

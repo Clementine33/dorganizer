@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -56,7 +56,7 @@ func newFixtureWithScan(t *testing.T, scan workset.FolderScan) *fixture {
 		t:    t,
 		repo: repo,
 		svc: workset.NewService(repo, 1, 1, []workset.Task{
-			tasksconversion.New(tmp, repo),
+			conversion.New(tmp, repo),
 		}, scan, nil),
 		ctx: context.Background(),
 	}
@@ -263,9 +263,9 @@ func (f *fixture) currentID(libraryID string) string {
 }
 
 // mustDraft parses the task's opaque draft payload for assertions.
-func mustDraft(t *testing.T, d *workset.Draft) *tasksconversion.DraftDoc {
+func mustDraft(t *testing.T, d *workset.Draft) *conversion.DraftDoc {
 	t.Helper()
-	doc, err := tasksconversion.ParseDraft(string(d.Document))
+	doc, err := conversion.ParseDraft(string(d.Document))
 	if err != nil {
 		t.Fatalf("parse draft: %v", err)
 	}
@@ -273,7 +273,7 @@ func mustDraft(t *testing.T, d *workset.Draft) *tasksconversion.DraftDoc {
 }
 
 // draftJSON encodes a draft document as the task's opaque payload.
-func draftJSON(t *testing.T, doc *tasksconversion.DraftDoc) json.RawMessage {
+func draftJSON(t *testing.T, doc *conversion.DraftDoc) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -302,7 +302,7 @@ func (f *fixture) draft(worksetID string) *workset.Draft {
 
 func (f *fixture) saveDraft(
 	worksetID string,
-	doc *tasksconversion.DraftDoc,
+	doc *conversion.DraftDoc,
 	ifMatch int,
 ) *workset.OperationView {
 	f.t.Helper()
@@ -387,9 +387,9 @@ func profile() reconcile.DesiredProfile {
 }
 
 // draftDoc is a complete, generatable common configuration.
-func draftDoc() *tasksconversion.DraftDoc {
-	return &tasksconversion.DraftDoc{
-		SchemaVersion:  tasksconversion.DraftSchemaVersion,
+func draftDoc() *conversion.DraftDoc {
+	return &conversion.DraftDoc{
+		SchemaVersion:  conversion.DraftSchemaVersion,
 		Mode:           reconcile.ModeAvailableSources,
 		ClassifierTags: []string{"SEなし"},
 		Matched:        profile(),

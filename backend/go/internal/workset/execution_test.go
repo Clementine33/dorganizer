@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -67,7 +67,7 @@ func newExecFixtureWithTask(
 		t.Fatalf("write config: %v", cfgErr)
 	}
 	if tasks == nil {
-		tasks = []workset.Task{tasksconversion.New(tmp, repo)}
+		tasks = []workset.Task{conversion.New(tmp, repo)}
 	}
 	root := filepath.Join(tmp, "music")
 	f := &execFixture{
@@ -117,11 +117,11 @@ func newExecFixtureWithTask(
 		f.members[m.FolderName] = m
 	}
 	draft := f.draft()
-	doc, err := tasksconversion.ParseDraft(string(draft.Document))
+	doc, err := conversion.ParseDraft(string(draft.Document))
 	if err != nil {
 		t.Fatalf("parse draft: %v", err)
 	}
-	raw, hash, err := tasksconversion.MarshalDraft(doc)
+	raw, hash, err := conversion.MarshalDraft(doc)
 	if err != nil {
 		t.Fatalf("marshal draft: %v", err)
 	}
@@ -340,12 +340,12 @@ func (f *execFixture) seedRevision(planID string, comps ...seedComponent) {
 // updated too, exactly as a real draft save would leave it.
 func (f *execFixture) setDraftDeleteMode(mode string) {
 	f.t.Helper()
-	doc, err := tasksconversion.ParseDraft(f.draftJSON)
+	doc, err := conversion.ParseDraft(f.draftJSON)
 	if err != nil {
 		f.t.Fatalf("parse draft: %v", err)
 	}
 	doc.DeleteMode = mode
-	raw, hash, err := tasksconversion.MarshalDraft(doc)
+	raw, hash, err := conversion.MarshalDraft(doc)
 	if err != nil {
 		f.t.Fatalf("marshal draft: %v", err)
 	}

@@ -1,7 +1,7 @@
 package conversion
 
 import (
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // RootInput is one planning root with the effective conversion policy it is

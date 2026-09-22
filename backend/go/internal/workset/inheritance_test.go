@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
-	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
@@ -84,16 +84,16 @@ func TestDesignExampleInheritance(t *testing.T) {
 		},
 	}
 	flac := reconcile.DesiredProfile{Lossless: &reconcile.AudioOutputSpec{Codec: reconcile.CodecFlac}}
-	doc.Members = []tasksconversion.DraftMember{
-		{MemberID: yi, Overrides: &tasksconversion.OverrideSet{Matched: &flac}},
-		{MemberID: bing, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &[]string{"A"}}},
+	doc.Members = []conversion.DraftMember{
+		{MemberID: yi, Overrides: &conversion.OverrideSet{Matched: &flac}},
+		{MemberID: bing, Overrides: &conversion.OverrideSet{ClassifierTags: &[]string{"A"}}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	// Step 1: batch-set unmatched=WAV for 甲 and 乙. Only the unmatched unit
 	// gains an override; 乙's matched=FLAC survives untouched.
 	stored := f.draft(ws.WorksetID)
-	storedMembers := map[string]tasksconversion.DraftMember{}
+	storedMembers := map[string]conversion.DraftMember{}
 	for _, m := range mustDraft(t, stored).Members {
 		storedMembers[m.MemberID] = m
 	}
@@ -104,7 +104,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 		rec := storedMembers[member.MemberID]
 		rec.MemberID = member.MemberID
 		if member.MemberID == jia || member.MemberID == yi {
-			ov := tasksconversion.OverrideSet{}
+			ov := conversion.OverrideSet{}
 			if rec.Overrides != nil {
 				ov = *rec.Overrides
 			}
@@ -125,13 +125,13 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["jia"].policy.Unmatched; got.Lossless == nil || got.Lossless.Codec != reconcile.CodecWav {
 		t.Fatalf("step 1: 甲 unmatched override missing: %+v", got)
 	}
-	if eff["jia"].sources[tasksconversion.UnitUnmatched] != tasksconversion.SourceMember {
-		t.Fatalf("step 1: 甲 unmatched source = %q", eff["jia"].sources[tasksconversion.UnitUnmatched])
+	if eff["jia"].sources[conversion.UnitUnmatched] != conversion.SourceMember {
+		t.Fatalf("step 1: 甲 unmatched source = %q", eff["jia"].sources[conversion.UnitUnmatched])
 	}
-	if eff["jia"].sources[tasksconversion.UnitMatched] != tasksconversion.SourceCommon {
+	if eff["jia"].sources[conversion.UnitMatched] != conversion.SourceCommon {
 		t.Fatal("step 1: 甲 matched must stay inherited")
 	}
-	if eff["yi"].sources[tasksconversion.UnitMatched] != tasksconversion.SourceMember {
+	if eff["yi"].sources[conversion.UnitMatched] != conversion.SourceMember {
 		t.Fatal("step 1: 乙 matched source must be member")
 	}
 
@@ -152,7 +152,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["bing"].policy.ClassifierTags; len(got) != 1 || got[0] != "A" {
 		t.Fatalf("step 2: 丙 tags = %v, want [A]", got)
 	}
-	if eff["bing"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
+	if eff["bing"].sources[conversion.UnitClassifierTags] != conversion.SourceMember {
 		t.Fatal("step 2: 丙 tag source must be member")
 	}
 
@@ -172,7 +172,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if got := eff["bing"].policy.ClassifierTags; len(got) != 1 || got[0] != "B" {
 		t.Fatalf("step 3: 丙 tags = %v, want inherited [B]", got)
 	}
-	if eff["bing"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceCommon {
+	if eff["bing"].sources[conversion.UnitClassifierTags] != conversion.SourceCommon {
 		t.Fatal("step 3: 丙 tag source must be common")
 	}
 
@@ -218,7 +218,7 @@ func TestDesignExampleInheritance(t *testing.T) {
 	if eff["yi"].policy.Matched.Lossless == nil || eff["yi"].policy.Matched.Lossless.Codec != reconcile.CodecFlac {
 		t.Fatal("step 4: excluded member must keep its resolved config")
 	}
-	if eff["yi"].sources[tasksconversion.UnitUnmatched] != tasksconversion.SourceMember {
+	if eff["yi"].sources[conversion.UnitUnmatched] != conversion.SourceMember {
 		t.Fatal("step 4: excluded member must keep its override sources")
 	}
 }
@@ -239,8 +239,8 @@ func TestSparseOverridesSurviveRoundTrip(t *testing.T) {
 	}
 	doc := draftDoc()
 	tags := []string{"only-a"}
-	doc.Members = []tasksconversion.DraftMember{
-		{MemberID: first, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &tags}},
+	doc.Members = []conversion.DraftMember{
+		{MemberID: first, Overrides: &conversion.OverrideSet{ClassifierTags: &tags}},
 		// A participating member with no override is not stored at all.
 		{MemberID: second},
 	}
@@ -269,8 +269,8 @@ func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
 	}
 	empty := []string{}
 	doc := draftDoc()
-	doc.Members = []tasksconversion.DraftMember{
-		{MemberID: byPath["clear"], Overrides: &tasksconversion.OverrideSet{ClassifierTags: &empty}},
+	doc.Members = []conversion.DraftMember{
+		{MemberID: byPath["clear"], Overrides: &conversion.OverrideSet{ClassifierTags: &empty}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
@@ -296,16 +296,16 @@ func TestEqualValueDifferentSource(t *testing.T) {
 	same := []string{"X"}
 	doc := draftDoc()
 	doc.ClassifierTags = same
-	doc.Members = []tasksconversion.DraftMember{
-		{MemberID: byPath["explicit"], Overrides: &tasksconversion.OverrideSet{ClassifierTags: &same}},
+	doc.Members = []conversion.DraftMember{
+		{MemberID: byPath["explicit"], Overrides: &conversion.OverrideSet{ClassifierTags: &same}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	eff := f.resolve(ws)
-	if eff["inherit"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceCommon {
+	if eff["inherit"].sources[conversion.UnitClassifierTags] != conversion.SourceCommon {
 		t.Fatal("inheriting member must be sourced common")
 	}
-	if eff["explicit"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
+	if eff["explicit"].sources[conversion.UnitClassifierTags] != conversion.SourceMember {
 		t.Fatal("equal explicit value must stay sourced member")
 	}
 
@@ -330,7 +330,7 @@ func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 	ids := f.standardLibrary("only")
 	ws := f.createCurrent("全排除", ids...)
 	doc := draftDoc()
-	doc.Members = []tasksconversion.DraftMember{{MemberID: ws.Members[0].MemberID, Excluded: true}}
+	doc.Members = []conversion.DraftMember{{MemberID: ws.Members[0].MemberID, Excluded: true}}
 	view := f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
 	_, err := f.svc.StartGeneration(
@@ -360,8 +360,8 @@ func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	tags := []string{"old"}
 	doc := draftDoc()
 	doc.ClassifierTags = []string{"common-old"}
-	doc.Members = []tasksconversion.DraftMember{
-		{MemberID: byPath, Overrides: &tasksconversion.OverrideSet{ClassifierTags: &tags}},
+	doc.Members = []conversion.DraftMember{
+		{MemberID: byPath, Overrides: &conversion.OverrideSet{ClassifierTags: &tags}},
 	}
 	f.saveDraft(ws.WorksetID, doc, ws.Operations[0].Version)
 
@@ -380,7 +380,7 @@ func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {
 	if got := frozen["a"].policy.ClassifierTags; len(got) != 1 || got[0] != "old" {
 		t.Fatalf("frozen revision tags = %v, want [old]", got)
 	}
-	if frozen["a"].sources[tasksconversion.UnitClassifierTags] != tasksconversion.SourceMember {
+	if frozen["a"].sources[conversion.UnitClassifierTags] != conversion.SourceMember {
 		t.Fatal("frozen revision must keep the override source")
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // ToolsConfig represents the tools configuration for conversion.

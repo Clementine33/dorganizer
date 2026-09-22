@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/services/execute"
-	"github.com/onsei/organizer/backend/internal/services/reconcile"
+	"github.com/onsei/organizer/backend/internal/conversion/execute"
+	"github.com/onsei/organizer/backend/internal/conversion/reconcile"
 )
 
 // newAudioRoot returns a member root holding one real 24-bit PCM WAV source.

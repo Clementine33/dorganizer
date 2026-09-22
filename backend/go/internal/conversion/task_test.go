@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/onsei/organizer/backend/internal/tasks/conversion"
+	"github.com/onsei/organizer/backend/internal/conversion"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 
