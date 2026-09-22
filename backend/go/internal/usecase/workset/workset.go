@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
@@ -69,7 +70,7 @@ func (s *serviceImpl) CreateCurrentWorkset(
 	}
 	lib, err := s.repo.GetLibrary(req.LibraryID)
 	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+		if errors.Is(err, library.ErrLibraryNotFound) {
 			return nil, NewError(ErrKindNotFound, "LIBRARY_NOT_FOUND", "library not found", nil)
 		}
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to load library", err)
@@ -124,7 +125,7 @@ func (s *serviceImpl) CreateCurrentWorkset(
 // resurrects the record it replaced nor replaces the current record again.
 func (s *serviceImpl) replayCreate(
 	ctx context.Context,
-	lib *sqlite.Library,
+	lib *library.Library,
 	req CreateCurrentRequest,
 	requestHash string,
 	skipped []SkippedFolder,
@@ -185,7 +186,7 @@ func (s *serviceImpl) replayCreate(
 // in one transaction.
 func (s *serviceImpl) persistCurrentWorkset(
 	ctx context.Context,
-	lib *sqlite.Library,
+	lib *library.Library,
 	req CreateCurrentRequest,
 	requestHash, title string,
 	members []sqlite.WorksetMember,
@@ -272,7 +273,7 @@ func (s *serviceImpl) persistCurrentWorkset(
 // knows it as a directory of the library root that holds audio somewhere
 // beneath it.
 func (s *serviceImpl) resolveSelectedMembers(
-	lib *sqlite.Library,
+	lib *library.Library,
 	relPaths []string,
 ) ([]sqlite.WorksetMember, []SkippedFolder, error) {
 	clean := make([]string, 0, len(relPaths))

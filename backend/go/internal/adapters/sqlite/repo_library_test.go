@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // insertEntryAtRoot inserts an entry belonging to another library root, so a
@@ -100,8 +102,8 @@ func TestCreateAndGetLibrary(t *testing.T) {
 	}
 
 	_, err = repo.GetLibrary("no-such-id")
-	if !errors.Is(err, ErrLibraryNotFound) {
-		t.Errorf("expected ErrLibraryNotFound for unknown id, got %v", err)
+	if !errors.Is(err, library.ErrLibraryNotFound) {
+		t.Errorf("expected library.ErrLibraryNotFound for unknown id, got %v", err)
 	}
 }
 
@@ -113,13 +115,13 @@ func TestCreateLibraryDuplicateRootPath(t *testing.T) {
 	}
 
 	// Same path directly.
-	if _, err := repo.CreateLibrary("Two", "/music"); !errors.Is(err, ErrLibraryExists) {
-		t.Errorf("expected ErrLibraryExists for duplicate root path, got %v", err)
+	if _, err := repo.CreateLibrary("Two", "/music"); !errors.Is(err, library.ErrLibraryExists) {
+		t.Errorf("expected library.ErrLibraryExists for duplicate root path, got %v", err)
 	}
 
 	// Same path with a different style, normalized to the same value.
-	if _, err := repo.CreateLibrary("Three", `\music`); !errors.Is(err, ErrLibraryExists) {
-		t.Errorf("expected ErrLibraryExists for normalized duplicate root path, got %v", err)
+	if _, err := repo.CreateLibrary("Three", `\music`); !errors.Is(err, library.ErrLibraryExists) {
+		t.Errorf("expected library.ErrLibraryExists for normalized duplicate root path, got %v", err)
 	}
 }
 
@@ -164,13 +166,13 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 	}
 
 	// Updating to a duplicate root path must fail with ErrLibraryExists.
-	if _, err := repo.UpdateLibrary(lib3.ID, "Third", "/cinema"); !errors.Is(err, ErrLibraryExists) {
-		t.Errorf("expected ErrLibraryExists on update to duplicate root path, got %v", err)
+	if _, err := repo.UpdateLibrary(lib3.ID, "Third", "/cinema"); !errors.Is(err, library.ErrLibraryExists) {
+		t.Errorf("expected library.ErrLibraryExists on update to duplicate root path, got %v", err)
 	}
 
 	// Updating an unknown library must fail with ErrLibraryNotFound.
-	if _, err := repo.UpdateLibrary("no-such-id", "Nope", "/x"); !errors.Is(err, ErrLibraryNotFound) {
-		t.Errorf("expected ErrLibraryNotFound on update of unknown id, got %v", err)
+	if _, err := repo.UpdateLibrary("no-such-id", "Nope", "/x"); !errors.Is(err, library.ErrLibraryNotFound) {
+		t.Errorf("expected library.ErrLibraryNotFound on update of unknown id, got %v", err)
 	}
 
 	// A processing record (with its members, operation, draft and plan) is
@@ -182,8 +184,8 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 	if err := repo.DeleteLibrary(lib1.ID); err != nil {
 		t.Fatalf("DeleteLibrary failed: %v", err)
 	}
-	if _, err := repo.GetLibrary(lib1.ID); !errors.Is(err, ErrLibraryNotFound) {
-		t.Errorf("expected ErrLibraryNotFound after delete, got %v", err)
+	if _, err := repo.GetLibrary(lib1.ID); !errors.Is(err, library.ErrLibraryNotFound) {
+		t.Errorf("expected library.ErrLibraryNotFound after delete, got %v", err)
 	}
 
 	for _, query := range []struct {
@@ -209,8 +211,8 @@ func TestListAndUpdateAndDeleteLibrary(t *testing.T) {
 	}
 
 	// Deleting an unknown library must fail with ErrLibraryNotFound.
-	if err := repo.DeleteLibrary("no-such-id"); !errors.Is(err, ErrLibraryNotFound) {
-		t.Errorf("expected ErrLibraryNotFound on delete of unknown id, got %v", err)
+	if err := repo.DeleteLibrary("no-such-id"); !errors.Is(err, library.ErrLibraryNotFound) {
+		t.Errorf("expected library.ErrLibraryNotFound on delete of unknown id, got %v", err)
 	}
 }
 
@@ -274,7 +276,7 @@ func TestListLibraryDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
-	got := map[string]LibraryDir{}
+	got := map[string]library.LibraryDir{}
 	for _, d := range dirs {
 		got[d.RelPath] = *d
 	}
@@ -381,15 +383,15 @@ func TestCreateLibraryCanonicalIdentity(t *testing.T) {
 		t.Fatalf("CreateLibrary(/music) failed: %v", err)
 	}
 	// Lexically equivalent spelling must conflict.
-	if _, err := repo.CreateLibrary("Two", "/music/."); !errors.Is(err, ErrLibraryExists) {
-		t.Errorf("expected ErrLibraryExists for `/music/.`, got %v", err)
+	if _, err := repo.CreateLibrary("Two", "/music/."); !errors.Is(err, library.ErrLibraryExists) {
+		t.Errorf("expected library.ErrLibraryExists for `/music/.`, got %v", err)
 	}
 	// Windows-syntax roots collide on case regardless of the host OS.
 	if _, err := repo.CreateLibrary("Three", `C:\Music`); err != nil {
 		t.Fatalf("CreateLibrary(C:\\Music) failed: %v", err)
 	}
-	if _, err := repo.CreateLibrary("Four", `c:\music\`); !errors.Is(err, ErrLibraryExists) {
-		t.Errorf("expected ErrLibraryExists for `c:\\music\\` vs `C:\\Music`, got %v", err)
+	if _, err := repo.CreateLibrary("Four", `c:\music\`); !errors.Is(err, library.ErrLibraryExists) {
+		t.Errorf("expected library.ErrLibraryExists for `c:\\music\\` vs `C:\\Music`, got %v", err)
 	}
 }
 

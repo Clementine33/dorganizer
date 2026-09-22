@@ -8,6 +8,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -17,7 +18,11 @@ import (
 // scan route; WorksetService by the workset routes. Any may be nil until
 // wired, and the handlers guard against that.
 type Dependencies struct {
-	Repo           *sqlite.Repository
+	Repo *sqlite.Repository
+	// Library is the media-library business entry: creation, edits, root
+	// changes and deletions go through it, so a root change and a deletion
+	// take the admission slot without the HTTP layer knowing about it.
+	Library        *library.Service
 	ConfigDir      string
 	Token          string
 	CORSOrigins    []string

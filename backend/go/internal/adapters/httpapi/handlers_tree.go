@@ -10,6 +10,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
@@ -48,7 +49,7 @@ func (s *Server) listLibraryDirs(w http.ResponseWriter, r *http.Request) {
 			Name:           d.Name,
 			Path:           d.Path,
 			RelPath:        d.RelPath,
-			DirID:          dirID(lib.ID, lib.RootPath, d.RelPath),
+			DirID:          library.DirID(lib.ID, lib.RootPath, d.RelPath),
 			AudioFileCount: d.AudioFileCount,
 			FileCount:      d.FileCount,
 		})
@@ -148,7 +149,7 @@ func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 // id: the library it belongs to, the library-relative path the inventory stores
 // as the member's identity, and the absolute path the repository queries by.
 type resolvedMember struct {
-	library *sqlite.Library
+	library *library.Library
 	relPath string
 	absPath string
 	dirID   string
@@ -170,7 +171,7 @@ func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedM
 		writeError(w, http.StatusBadRequest, "DIR_ID_REQUIRED", "dir must be a directory id")
 		return nil, false
 	}
-	if !validDirID(raw) {
+	if !library.ValidDirID(raw) {
 		writeError(w, http.StatusBadRequest, "DIR_ID_INVALID", "dir is not a directory id")
 		return nil, false
 	}
@@ -179,7 +180,7 @@ func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedM
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to resolve the folder")
 		return nil, false
 	}
-	rel, found, ambiguous := matchDirID(children, lib.ID, lib.RootPath, raw)
+	rel, found, ambiguous := library.MatchDirID(children, lib.ID, lib.RootPath, raw)
 	if ambiguous {
 		// Answering "not found" would hide a real state and answering with one
 		// of the matches would be a guess (ADR 0003 §4).
@@ -204,7 +205,7 @@ func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedM
 		library: lib,
 		relPath: rel,
 		absPath: pathnorm.NormalizeToPOSIX(abs),
-		dirID:   dirID(lib.ID, lib.RootPath, rel),
+		dirID:   library.DirID(lib.ID, lib.RootPath, rel),
 	}, true
 }
 
@@ -232,22 +233,6 @@ func (s *Server) beginScan(w http.ResponseWriter) (func(), bool) {
 		return func() {}, true
 	}
 	release, err := s.deps.Gate.BeginScan()
-	if err != nil {
-		writeBusyError(w, err)
-		return nil, false
-	}
-	return release, true
-}
-
-// beginManual takes the direct-file-management slot for a route that rewrites
-// paths (a library root change or a library deletion) without writing files
-// itself. A nil gate means this process has no file management wired; every
-// test server is in that state.
-func (s *Server) beginManual(w http.ResponseWriter) (func(), bool) {
-	if s.deps.Gate == nil {
-		return func() {}, true
-	}
-	release, err := s.deps.Gate.BeginManual()
 	if err != nil {
 		writeBusyError(w, err)
 		return nil, false

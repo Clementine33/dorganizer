@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
@@ -36,6 +37,7 @@ func newWorksetServer(t *testing.T) (http.Handler, *sqlite.Repository) {
 	}, nil, nil)
 	handler := NewServer(Dependencies{
 		Repo:           repo,
+		Library:        library.NewService(repo, nil),
 		ConfigDir:      tmp,
 		Token:          testToken,
 		CORSOrigins:    []string{"http://localhost:5173"},

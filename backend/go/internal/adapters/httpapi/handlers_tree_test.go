@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
@@ -170,7 +171,7 @@ func TestListLibraryDirs(t *testing.T) {
 		t.Errorf("a directory without audio is still listed: %+v", docs)
 	}
 	for rel, dir := range byRel {
-		if !validDirID(dir.DirID) {
+		if !library.ValidDirID(dir.DirID) {
 			t.Errorf("dir %q id = %q, want 32 lowercase hex characters", rel, dir.DirID)
 		}
 	}
@@ -314,7 +315,7 @@ func TestMemberTreeRefusals(t *testing.T) {
 		{"unknown identity", libA, strings.Repeat("0", 32), http.StatusNotFound, "DIRECTORY_NOT_FOUND"},
 		{"another library's identity", libB, albumID, http.StatusNotFound, "DIRECTORY_NOT_FOUND"},
 		{
-			"the recovery directory has no identity", libA, dirID(libA, rootA, "Delete"),
+			"the recovery directory has no identity", libA, library.DirID(libA, rootA, "Delete"),
 			http.StatusNotFound, "DIRECTORY_NOT_FOUND",
 		},
 		{"gone from disk", libA, vanishedID, http.StatusNotFound, "MEMBER_MISSING"},

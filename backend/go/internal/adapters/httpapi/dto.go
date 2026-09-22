@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // errorResponse is the standard API error envelope: {"code":"...","message":"..."}.
@@ -37,7 +37,7 @@ type libraryResponse struct {
 	LastScanError  string     `json:"last_scan_error"`
 }
 
-func toLibraryResponse(l *sqlite.Library) libraryResponse {
+func toLibraryResponse(l *library.Library) libraryResponse {
 	return libraryResponse{
 		ID:             l.ID,
 		Name:           l.Name,

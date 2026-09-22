@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 func newExecutionRepo(t *testing.T) *sqlite.Repository {
@@ -216,8 +217,8 @@ func TestCreateExecutionGuardedRejections(t *testing.T) {
 			t.Fatalf("seed generation: %v", err)
 		}
 		err := repo.CreateExecutionGuarded(newExecution("exec-1", "ws-1", "plan-1", "key-1"), guards)
-		if !errors.Is(err, sqlite.ErrGenerationInProgress) {
-			t.Fatalf("err = %v, want ErrGenerationInProgress", err)
+		if !errors.Is(err, library.ErrGenerationInProgress) {
+			t.Fatalf("err = %v, want library.ErrGenerationInProgress", err)
 		}
 	})
 }

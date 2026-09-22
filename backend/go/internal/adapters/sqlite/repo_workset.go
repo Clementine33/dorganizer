@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // ==================== Workset aggregates ====================
@@ -465,7 +467,7 @@ func (r *Repository) LibraryRootPath(libraryID string) (string, error) {
 	err := r.db.QueryRow("SELECT root_path FROM libraries WHERE id = ?", libraryID).Scan(&p)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrLibraryNotFound
+			return "", library.ErrLibraryNotFound
 		}
 		return "", err
 	}

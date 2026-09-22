@@ -11,14 +11,20 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // newTestServer builds a router with a fresh temp repository and the given
-// dependency overrides.
+// dependency overrides. As in server.go, no gate is wired unless a test asks
+// for one: the library entry and the scan routes run without admission, which
+// is the state a process without file management is in.
 func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 	t.Helper()
+	repo := newHTTPTestRepository(t)
 	deps := Dependencies{
-		Repo:        newHTTPTestRepository(t),
+		Repo:        repo,
+		Library:     library.NewService(repo, nil),
 		Token:       "",
 		CORSOrigins: []string{},
 		Version:     "dev",
@@ -27,6 +33,15 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 		mutate(&deps)
 	}
 	return NewServer(deps)
+}
+
+// testGate installs one gate into every path that takes a slot — the library
+// service (root change, deletion) and the scan routes — so a test that holds
+// the slot really refuses both. Replacing only Dependencies.Gate would leave
+// the library service holding its own, and the test would pass vacuously.
+func testGate(d *Dependencies, gate *admission.Gate) {
+	d.Gate = gate
+	d.Library = library.NewService(d.Repo, gate)
 }
 
 // newHTTPTestRepository opens a repository on a fresh temp DB file.

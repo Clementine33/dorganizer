@@ -1,4 +1,4 @@
-package httpapi
+package library
 
 import (
 	"crypto/sha256"
@@ -16,7 +16,7 @@ const dirIDVersion = "onsei.dirid.v1"
 // dirIDLen is the length of one directory id: 128 bits as lowercase hex.
 const dirIDLen = 32
 
-// dirID derives the navigation identity of one member directory from durable
+// DirID derives the navigation identity of one member directory from durable
 // facts only: the version marker, the library, the canonical identity of the
 // library root, and the exact relative path the inventory stores (ADR 0003
 // §2).
@@ -25,7 +25,7 @@ const dirIDLen = 32
 // normalization, no repeated URL decoding. A directory is therefore identified
 // by the name it really has, and the same root plus path always yields the same
 // identity — before and after a rescan or a restart.
-func dirID(libraryID, rootPath, relPath string) string {
+func DirID(libraryID, rootPath, relPath string) string {
 	payload, err := json.Marshal([4]string{
 		dirIDVersion,
 		libraryID,
@@ -41,10 +41,10 @@ func dirID(libraryID, rootPath, relPath string) string {
 	return hex.EncodeToString(sum[:dirIDLen/2])
 }
 
-// validDirID reports whether a value is one directory id: exactly 32 lowercase
+// ValidDirID reports whether a value is one directory id: exactly 32 lowercase
 // hex characters. A malformed value is refused before any lookup, so a wrong
 // shape is a bad request rather than an unknown directory.
-func validDirID(value string) bool {
+func ValidDirID(value string) bool {
 	if len(value) != dirIDLen {
 		return false
 	}
@@ -57,12 +57,12 @@ func validDirID(value string) bool {
 	return true
 }
 
-// matchDirID finds the one library-relative directory whose identity is id. It
+// MatchDirID finds the one library-relative directory whose identity is id. It
 // reports the match, and whether more than one directory claims the identity:
 // an ambiguous identity is never resolved to the first match (ADR 0003 §4).
-func matchDirID(candidates []string, libraryID, rootPath, id string) (rel string, found, ambiguous bool) {
+func MatchDirID(candidates []string, libraryID, rootPath, id string) (rel string, found, ambiguous bool) {
 	for _, candidate := range candidates {
-		if dirID(libraryID, rootPath, candidate) != id {
+		if DirID(libraryID, rootPath, candidate) != id {
 			continue
 		}
 		if found {

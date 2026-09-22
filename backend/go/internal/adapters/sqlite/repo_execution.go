@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // ErrExecutionNotFound is returned when an execution session cannot be found.
@@ -17,7 +19,6 @@ var ErrExecutionIdemConflict = errors.New("execution idempotency key conflict")
 
 // ErrExecutionInProgress is returned when an operation that must wait for an
 // active execution (library deletion) is attempted.
-var ErrExecutionInProgress = errors.New("execution in progress")
 
 // Execution session statuses. Terminal statuses never regress.
 const (
@@ -296,7 +297,7 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 		return genErr
 	}
 	if generating > 0 {
-		return ErrGenerationInProgress
+		return library.ErrGenerationInProgress
 	}
 	// The revision already has a session (the caller distinguishes a key replay
 	// from an executed revision), or another session of the operation is active.
@@ -308,7 +309,7 @@ func (r *Repository) classifyExecutionGuards(e *PlanExecution, g ExecutionGuards
 		e.OperationType,
 	); activeErr == nil &&
 		active != nil {
-		return ErrExecutionInProgress
+		return library.ErrExecutionInProgress
 	}
 	return ErrExecutionNotEligible
 }

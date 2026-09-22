@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
@@ -55,9 +55,9 @@ type scanEventData struct {
 // stays synchronous over the request lifecycle: the scan usecase runs with
 // r.Context(), so a client disconnect cancels the scan.
 func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
-	lib, err := s.deps.Repo.GetLibrary(r.PathValue("id"))
+	lib, err := s.deps.Library.Get(r.PathValue("id"))
 	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+		if errors.Is(err, library.ErrLibraryNotFound) {
 			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
 			return
 		}
@@ -89,7 +89,7 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	// before streaming so an unwired server reports a terminal error and a
 	// failed scan state instead of panicking mid-stream.
 	if s.deps.ScanService == nil {
-		_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "failed", "scan service not configured", time.Now())
+		_ = s.deps.Library.RecordScanState(lib.ID, "failed", "scan service not configured", time.Now())
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "scan service not configured")
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		now := time.Now()
 		if errors.Is(err, context.Canceled) {
-			_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "canceled", "", now)
+			_ = s.deps.Library.RecordScanState(lib.ID, "canceled", "", now)
 			_ = sw.Send("cancelled", scanEventData{Stage: "scan", Message: "scan canceled"})
 			return
 		}
@@ -146,7 +146,7 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		if scanErr, ok := scanusecase.AsError(err); ok {
 			code, message = scanErr.Code, scanErr.Message
 		}
-		_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "failed", message, now)
+		_ = s.deps.Library.RecordScanState(lib.ID, "failed", message, now)
 		_ = sw.Send("error", scanEventData{Stage: "scan", Code: code, Message: message})
 		return
 	}
@@ -155,7 +155,7 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 	// the overview's whole input: there is no separate derived folder table to
 	// rebuild, which is why a rescan cannot renumber anything the workbench
 	// navigates by.
-	_ = s.deps.Repo.UpdateLibraryScanState(lib.ID, "completed", "", time.Now())
+	_ = s.deps.Library.RecordScanState(lib.ID, "completed", "", time.Now())
 	_ = sw.Send("completed", scanEventData{
 		Stage:        "scan",
 		ScanID:       result.ScanID,

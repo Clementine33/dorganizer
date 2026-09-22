@@ -60,7 +60,7 @@ func fileOpsServer(t *testing.T) (http.Handler, string, *blockingScan) {
 		repo = d.Repo
 		d.ScanService = scan
 		gate = admission.NewGate(d.Repo.HasActiveSession)
-		d.Gate = gate
+		testGate(d, gate)
 		d.FileOps = fileops.NewService(gate, func(context.Context, string, string) error { return nil })
 	})
 	if _, err := repo.CreateLibrary("Music", filepath.ToSlash(root)); err != nil {

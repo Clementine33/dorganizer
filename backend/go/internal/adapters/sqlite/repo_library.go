@@ -8,34 +8,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
 // ==================== Types ====================
-
-// Library represents a user-facing music library.
-type Library struct {
-	ID             string
-	Name           string
-	RootPath       string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	LastScanAt     *time.Time
-	LastScanStatus string
-	LastScanError  string
-}
-
-// LibraryDir is one direct child directory of a library root as the workbench
-// overview lists it: identity is the library-relative path (stable across
-// rescans), and the audio count is a status fact — a directory without audio
-// is still listed and still browsable.
-type LibraryDir struct {
-	Path           string
-	Name           string
-	RelPath        string
-	AudioFileCount int
-	FileCount      int
-}
 
 // EntryRow is a row from the entries table used for building folder trees.
 type EntryRow struct {
@@ -48,15 +25,6 @@ type EntryRow struct {
 	Bitrate    *int32
 	Format     string
 }
-
-// ==================== Sentinels ====================
-
-var (
-	// ErrLibraryExists is returned when a library root path already exists.
-	ErrLibraryExists = errors.New("library already exists")
-	// ErrLibraryNotFound is returned when a library cannot be found.
-	ErrLibraryNotFound = errors.New("library not found")
-)
 
 // audioExtCond is a SQL predicate matching file entries whose name has one of
 // the recognized audio extensions (case-insensitive).
@@ -85,7 +53,7 @@ func isUniqueConstraintError(err error) bool {
 // canonical root (POSIX separators, lexical cleaning); uniqueness is enforced
 // on the canonical identity key, so equivalent spellings (`/music/.`,
 // `C:/Music` vs `c:/music`) conflict.
-func (r *Repository) CreateLibrary(name, rootPath string) (*Library, error) {
+func (r *Repository) CreateLibrary(name, rootPath string) (*library.Library, error) {
 	rootPath = pathnorm.CleanRootPath(rootPath)
 	rootPathKey := pathnorm.RootPathKey(rootPath)
 	now := time.Now().Format(timeFormat)
@@ -96,7 +64,7 @@ func (r *Repository) CreateLibrary(name, rootPath string) (*Library, error) {
 	`, id, name, rootPath, rootPathKey, now, now)
 	if err != nil {
 		if isUniqueConstraintError(err) {
-			return nil, ErrLibraryExists
+			return nil, library.ErrLibraryExists
 		}
 		return nil, err
 	}
@@ -104,7 +72,7 @@ func (r *Repository) CreateLibrary(name, rootPath string) (*Library, error) {
 }
 
 // ListLibraries returns all libraries ordered by created_at (newest first).
-func (r *Repository) ListLibraries() ([]*Library, error) {
+func (r *Repository) ListLibraries() ([]*library.Library, error) {
 	rows, err := r.db.Query(`
 		SELECT id, name, root_path, created_at, updated_at, last_scan_at, last_scan_status, last_scan_error
 		FROM libraries ORDER BY created_at DESC
@@ -114,7 +82,7 @@ func (r *Repository) ListLibraries() ([]*Library, error) {
 	}
 	defer rows.Close()
 
-	var libraries []*Library
+	var libraries []*library.Library
 	for rows.Next() {
 		lib, err := scanLibrary(rows)
 		if err != nil {
@@ -129,7 +97,7 @@ func (r *Repository) ListLibraries() ([]*Library, error) {
 }
 
 // GetLibrary retrieves a library by id.
-func (r *Repository) GetLibrary(id string) (*Library, error) {
+func (r *Repository) GetLibrary(id string) (*library.Library, error) {
 	row := r.db.QueryRow(`
 		SELECT id, name, root_path, created_at, updated_at, last_scan_at, last_scan_status, last_scan_error
 		FROM libraries WHERE id = ?
@@ -137,7 +105,7 @@ func (r *Repository) GetLibrary(id string) (*Library, error) {
 	lib, err := scanLibrary(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrLibraryNotFound
+			return nil, library.ErrLibraryNotFound
 		}
 		return nil, err
 	}
@@ -148,12 +116,10 @@ func (r *Repository) GetLibrary(id string) (*Library, error) {
 // library that still owns worksets. Workset membership identity is a
 // normalized library-relative path, so silently rebinding the root would
 // reattach fixed worksets to unrelated content.
-var ErrLibraryHasWorksets = errors.New("library has worksets")
 
 // ErrGenerationInProgress is returned when an owned workset has a queued or
 // running planning session and an operation that must wait for it (library
 // deletion) is attempted.
-var ErrGenerationInProgress = errors.New("generation in progress")
 
 // UpdateLibrary updates a library's name and root path and returns the
 // updated row. Changing the root drops the scanned inventory of the old root
@@ -162,7 +128,7 @@ var ErrGenerationInProgress = errors.New("generation in progress")
 // rejected with ErrLibraryHasWorksets while a processing record still belongs
 // to the library (a record keeps its root until it is replaced); name
 // edits stay allowed.
-func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) {
+func (r *Repository) UpdateLibrary(id, name, rootPath string) (*library.Library, error) {
 	candidateRoot := pathnorm.CleanRootPath(rootPath)
 	rootPathKey := pathnorm.RootPathKey(candidateRoot)
 	tx, err := r.db.Begin()
@@ -174,7 +140,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	var currentRoot string
 	if err := tx.QueryRow("SELECT root_path FROM libraries WHERE id = ?", id).Scan(&currentRoot); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrLibraryNotFound
+			return nil, library.ErrLibraryNotFound
 		}
 		return nil, err
 	}
@@ -190,7 +156,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 			return nil, err
 		}
 		if n > 0 {
-			return nil, ErrLibraryHasWorksets
+			return nil, library.ErrLibraryHasWorksets
 		}
 	}
 	query := `UPDATE libraries SET name = ?, root_path = ?, root_path_key = ?, updated_at = ? WHERE id = ?`
@@ -204,7 +170,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	}
 	if _, err := tx.Exec(query, name, candidateRoot, rootPathKey, now, id); err != nil {
 		if isUniqueConstraintError(err) {
-			return nil, ErrLibraryExists
+			return nil, library.ErrLibraryExists
 		}
 		return nil, err
 	}
@@ -246,7 +212,7 @@ func (r *Repository) DeleteLibrary(id string) error {
 		return countErr
 	}
 	if exists == 0 {
-		return ErrLibraryNotFound
+		return library.ErrLibraryNotFound
 	}
 
 	var active int
@@ -258,7 +224,7 @@ func (r *Repository) DeleteLibrary(id string) error {
 		return countErr
 	}
 	if active > 0 {
-		return ErrGenerationInProgress
+		return library.ErrGenerationInProgress
 	}
 
 	if countErr := tx.QueryRow(`
@@ -269,7 +235,7 @@ func (r *Repository) DeleteLibrary(id string) error {
 		return countErr
 	}
 	if active > 0 {
-		return ErrExecutionInProgress
+		return library.ErrExecutionInProgress
 	}
 
 	rows, err := tx.Query("SELECT id FROM worksets WHERE library_id = ?", id)
@@ -317,8 +283,8 @@ func (r *Repository) UpdateLibraryScanState(id, status, errMsg string, finishedA
 }
 
 // scanLibrary decodes a library row from a row or rows-based scanner.
-func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
-	var l Library
+func scanLibrary(row interface{ Scan(...any) error }) (*library.Library, error) {
+	var l library.Library
 	var createdAtStr, updatedAtStr string
 	var lastScanAt sql.NullString
 	if err := row.Scan(
@@ -353,7 +319,7 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 // The listing comes from the scanned inventory rather than from the disk, so
 // it describes exactly the state the rest of the workbench reads, and its
 // identity is the library-relative path, which a rescan cannot change.
-func (r *Repository) ListLibraryDirs(rootPath string) ([]*LibraryDir, error) {
+func (r *Repository) ListLibraryDirs(rootPath string) ([]*library.LibraryDir, error) {
 	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
 	if len(rootPath) > 1 {
 		rootPath = strings.TrimRight(rootPath, "/")
@@ -378,9 +344,9 @@ func (r *Repository) ListLibraryDirs(rootPath string) ([]*LibraryDir, error) {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	var out []*LibraryDir
+	var out []*library.LibraryDir
 	for rows.Next() {
-		var d LibraryDir
+		var d library.LibraryDir
 		if err := rows.Scan(&d.Path, &d.Name, &d.AudioFileCount, &d.FileCount); err != nil {
 			return nil, err
 		}

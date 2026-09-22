@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // Execution eligibility reasons returned with PLAN_NOT_EXECUTABLE. They are
@@ -512,9 +513,9 @@ func (s *serviceImpl) persistExecution(
 			return nil, notExecutable([]string{ExecBlockedNotCurrent})
 		case errors.Is(err, sqlite.ErrDraftChanged):
 			return nil, notExecutable([]string{ExecBlockedDraft})
-		case errors.Is(err, sqlite.ErrGenerationInProgress):
+		case errors.Is(err, library.ErrGenerationInProgress):
 			return nil, notExecutable([]string{ExecBlockedGeneration})
-		case errors.Is(err, sqlite.ErrExecutionInProgress):
+		case errors.Is(err, library.ErrExecutionInProgress):
 			return nil, NewError(
 				ErrKindConflict,
 				"EXECUTION_IN_PROGRESS",

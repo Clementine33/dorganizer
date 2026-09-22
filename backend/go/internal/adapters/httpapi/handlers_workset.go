@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/onsei/organizer/backend/internal/library"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -162,7 +163,7 @@ func toWorksetResponse(v *worksetusecase.WorksetView) worksetResponse {
 	for _, m := range v.Members {
 		dirIdentity := ""
 		if v.Library != nil && m.RelPath != "" {
-			dirIdentity = dirID(v.Library.LibraryID, v.Library.RootPath, m.RelPath)
+			dirIdentity = library.DirID(v.Library.LibraryID, v.Library.RootPath, m.RelPath)
 		}
 		out.Members = append(out.Members, memberResponse{
 			MemberID:   m.MemberID,

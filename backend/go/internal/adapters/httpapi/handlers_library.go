@@ -4,15 +4,15 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/pathnorm"
+	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/library"
 )
 
 // library loads the library of the request path.
-func (s *Server) library(w http.ResponseWriter, r *http.Request) (*sqlite.Library, bool) {
-	lib, err := s.deps.Repo.GetLibrary(r.PathValue("id"))
+func (s *Server) library(w http.ResponseWriter, r *http.Request) (*library.Library, bool) {
+	lib, err := s.deps.Library.Get(r.PathValue("id"))
 	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+		if errors.Is(err, library.ErrLibraryNotFound) {
 			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
 			return nil, false
 		}
@@ -22,8 +22,8 @@ func (s *Server) library(w http.ResponseWriter, r *http.Request) (*sqlite.Librar
 	return lib, true
 }
 
-func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
-	libs, err := s.deps.Repo.ListLibraries()
+func (s *Server) listLibraries(w http.ResponseWriter, _ *http.Request) {
+	libs, err := s.deps.Library.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list libraries")
 		return
@@ -43,9 +43,9 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, "invalid library payload")
 		return
 	}
-	lib, err := s.deps.Repo.CreateLibrary(req.Name, req.RootPath)
+	lib, err := s.deps.Library.Create(req.Name, req.RootPath)
 	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryExists) {
+		if errors.Is(err, library.ErrLibraryExists) {
 			writeError(w, http.StatusConflict, "LIBRARY_EXISTS", "a library with this root path already exists")
 			return
 		}
@@ -56,119 +56,75 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
-	lib, err := s.deps.Repo.GetLibrary(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
-			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
+	lib, ok := s.library(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, toLibraryResponse(lib))
 }
 
+// patchLibrary edits one library. Only the fields the request carries change;
+// a root change is a path-rewriting action and an admission refusal is one of
+// its legitimate answers (ADR 0002 §2).
 func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 	var req libraryPatchRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeDecodeError(w, err, "invalid library payload")
 		return
 	}
-	id := r.PathValue("id")
 
-	lib, err := s.deps.Repo.GetLibrary(id)
+	updated, err := s.deps.Library.Patch(r.PathValue("id"), req.Name, req.RootPath)
 	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
-			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
-		return
-	}
-
-	// PATCH semantics: only the provided fields are applied; the rest are
-	// preserved from the current row.
-	name, rootPath := lib.Name, lib.RootPath
-	if req.Name != nil {
-		name = *req.Name
-	}
-	if req.RootPath != nil {
-		rootPath = *req.RootPath
-	}
-
-	// A root change rebinds every member path of the library, so it takes the
-	// direct-file-management slot: it neither interleaves with a file operation
-	// nor with a scan (ADR 0002 §2; ADR 0001 §5). A name-only edit touches no path and needs
-	// no admission.
-	if pathnorm.RootPathKey(rootPath) != pathnorm.RootPathKey(lib.RootPath) {
-		release, ok := s.beginManual(w)
-		if !ok {
-			return
-		}
-		defer release()
-	}
-
-	updated, err := s.deps.Repo.UpdateLibrary(id, name, rootPath)
-	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryExists) {
+		switch {
+		case admission.IsBusy(err):
+			writeBusyError(w, err)
+		case errors.Is(err, library.ErrLibraryExists):
 			writeError(w, http.StatusConflict, "LIBRARY_EXISTS", "a library with this root path already exists")
-			return
-		}
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
+		case errors.Is(err, library.ErrLibraryNotFound):
 			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		if errors.Is(err, sqlite.ErrLibraryHasWorksets) {
+		case errors.Is(err, library.ErrLibraryHasWorksets):
 			writeError(
 				w,
 				http.StatusConflict,
 				"LIBRARY_HAS_WORKSETS",
 				"cannot change the library root while a record is linked; delete the library (its record goes with it) and re-create it at the new root",
 			)
-			return
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update library")
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update library")
 		return
 	}
 	writeJSON(w, http.StatusOK, toLibraryResponse(updated))
 }
 
+// deleteLibrary removes a library entry together with its record; the media and
+// the recovery directory on disk stay. The admission slot is the library
+// service's to take, so a busy process answers BUSY before this id is even
+// looked up (ADR 0002 §2; ADR 0001 §5).
 func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
-	// Deleting a library removes its records, plans and sessions, so it takes
-	// the direct-file-management slot: it cannot interleave with a file
-	// operation on the same tree (ADR 0002 §2; ADR 0001 §5).
-	release, ok := s.beginManual(w)
-	if !ok {
-		return
-	}
-	defer release()
-
-	err := s.deps.Repo.DeleteLibrary(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, sqlite.ErrLibraryNotFound) {
-			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		if errors.Is(err, sqlite.ErrGenerationInProgress) {
-			writeError(
-				w,
-				http.StatusConflict,
-				"GENERATION_IN_PROGRESS",
-				"cancel active generations before deleting the library",
-			)
-			return
-		}
-		if errors.Is(err, sqlite.ErrExecutionInProgress) {
-			writeError(
-				w,
-				http.StatusConflict,
-				"EXECUTION_IN_PROGRESS",
-				"cancel active executions before deleting the library",
-			)
-			return
-		}
+	err := s.deps.Library.Delete(r.PathValue("id"))
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case admission.IsBusy(err):
+		writeBusyError(w, err)
+	case errors.Is(err, library.ErrLibraryNotFound):
+		writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
+	case errors.Is(err, library.ErrGenerationInProgress):
+		writeError(
+			w,
+			http.StatusConflict,
+			"GENERATION_IN_PROGRESS",
+			"cancel active generations before deleting the library",
+		)
+	case errors.Is(err, library.ErrExecutionInProgress):
+		writeError(
+			w,
+			http.StatusConflict,
+			"EXECUTION_IN_PROGRESS",
+			"cancel active executions before deleting the library",
+		)
+	default:
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to delete library")
-		return
 	}
-	w.WriteHeader(http.StatusNoContent)
 }

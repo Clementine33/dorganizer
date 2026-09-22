@@ -21,6 +21,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/bootstrap"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
 	"github.com/onsei/organizer/backend/internal/services/scanner"
@@ -220,9 +221,15 @@ func runServer(
 		maintenanceLoop.Run(ctx)
 	}()
 
+	// The library entry owns the library row: creation, edits, root changes and
+	// deletions. A root change and a deletion take the same admission slot as
+	// direct file management (ADR 0002 §2), so it gets the one gate.
+	librarySvc := library.NewService(repo, gate)
+
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
 			Repo:           repo,
+			Library:        librarySvc,
 			ConfigDir:      configDir,
 			Token:          token,
 			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),

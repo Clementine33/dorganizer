@@ -132,7 +132,7 @@ func TestLibrariesCRUD(t *testing.T) {
 // while a scan is running.
 func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {
 	gate := admission.NewGate(nil)
-	engine := newTestServer(t, func(d *Dependencies) { d.Gate = gate })
+	engine := newTestServer(t, func(d *Dependencies) { testGate(d, gate) })
 	libID := createLibraryViaAPI(t, engine, "Music", "/music")
 
 	for _, root := range []string{"/new-music", "/music"} {

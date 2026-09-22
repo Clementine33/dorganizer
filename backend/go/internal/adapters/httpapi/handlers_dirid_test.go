@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
@@ -30,7 +31,12 @@ func serverOnDB(t *testing.T, dbPath string) (http.Handler, *sqlite.Repository) 
 	if err != nil {
 		t.Fatalf("open repository: %v", err)
 	}
-	return NewServer(Dependencies{Repo: repo, CORSOrigins: []string{}, Version: "dev"}), repo
+	return NewServer(Dependencies{
+		Repo:        repo,
+		Library:     library.NewService(repo, nil),
+		CORSOrigins: []string{},
+		Version:     "dev",
+	}), repo
 }
 
 // treeFor reads one member tree by identity, with the token the harness expects.
@@ -145,7 +151,7 @@ func TestDirIDCoversUnicodeAndReservedCharacters(t *testing.T) {
 	seen := make(map[string]string, len(names))
 	for _, name := range names {
 		identity := dirIDFor(t, engine, libID, name)
-		if !validDirID(identity) {
+		if !library.ValidDirID(identity) {
 			t.Fatalf("identity of %q = %q, want 32 lowercase hex characters", name, identity)
 		}
 		if other, taken := seen[identity]; taken {
@@ -248,7 +254,13 @@ func TestADirectoryOutsideTheInventoryHasNoIdentity(t *testing.T) {
 			t.Fatal("a directory no scan has seen was listed")
 		}
 	}
-	if code, body := treeFor(t, engine, "", libID, dirID(libID, root, "unscanned")); code != http.StatusNotFound {
+	if code, body := treeFor(
+		t,
+		engine,
+		"",
+		libID,
+		library.DirID(libID, root, "unscanned"),
+	); code != http.StatusNotFound {
 		t.Fatalf("status = %d (%v), want 404: resolution reads the inventory", code, body)
 	}
 }
@@ -303,31 +315,5 @@ func TestMemberIdentityMatchesTheOverviewListing(t *testing.T) {
 	if code, body := treeFor(t, engine, testToken, libID, member.DirID); code != http.StatusOK ||
 		body["member_path"] != "albumA" {
 		t.Fatalf("the identity the record handed out resolved to %v / %v", code, body)
-	}
-}
-
-// TestMatchDirIDRefusesAnAmbiguousIdentity pins the rule the API cannot reach:
-// the inventory cannot hold two rows for one path, so an identity two
-// directories claim is refused where the match is decided, never answered with
-// the first of them (ADR 0003 §4).
-func TestMatchDirIDRefusesAnAmbiguousIdentity(t *testing.T) {
-	identity := dirID("lib-1", "/music", "albumA")
-
-	rel, found, ambiguous := matchDirID([]string{"albumA", "albumA"}, "lib-1", "/music", identity)
-	if found || !ambiguous || rel != "" {
-		t.Fatalf("an ambiguous identity resolved to %q (found=%v ambiguous=%v)", rel, found, ambiguous)
-	}
-	if rel, found, ambiguous = matchDirID(
-		[]string{"other", "albumA"}, "lib-1", "/music", identity,
-	); !found || ambiguous || rel != "albumA" {
-		t.Fatalf("match = %q / %v / %v, want albumA", rel, found, ambiguous)
-	}
-	if _, found, ambiguous = matchDirID([]string{"other"}, "lib-1", "/music", identity); found || ambiguous {
-		t.Fatal("an absent identity was reported as found")
-	}
-	// The library is part of the identity: the same path in another library is
-	// another directory.
-	if _, found, _ = matchDirID([]string{"albumA"}, "lib-2", "/music", identity); found {
-		t.Fatal("another library's directory answered to this identity")
 	}
 }
