@@ -54,9 +54,8 @@ func main() {
 	app.Run(ctx, app.Config{
 		DataDir: dataDir,
 		// The configuration file lives beside the database.
-		ConfigDir:  dataDir,
-		FFmpegPath: os.Getenv("ONSEI_FFMPEG"),
-		Token:      os.Getenv("ONSEI_TOKEN"),
-		Version:    version,
+		ConfigDir: dataDir,
+		Token:     os.Getenv("ONSEI_TOKEN"),
+		Version:   version,
 	})
 }

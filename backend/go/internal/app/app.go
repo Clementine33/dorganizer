@@ -63,16 +63,14 @@ func Run(ctx context.Context, cfg Config) {
 }
 
 // Config is what the process is started with: where its data and configuration
-// live, the token its API authenticates with, and the build's version.
+// live, the token its API authenticates with, and the build's version. The
+// encoder lives in the configuration, not here: tools.ffmpeg_path and
+// tools.ffprobe_path name the binaries, and an empty path means PATH.
 type Config struct {
 	DataDir   string
 	ConfigDir string
-	// FFmpegPath is the ONSEI_FFMPEG override. The execution pipeline takes its
-	// tool paths from the configuration file (tools.ffmpeg_path), so this is
-	// carried through, not consumed.
-	FFmpegPath string
-	Token      string
-	Version    string
+	Token     string
+	Version   string
 }
 
 // ParseCORSOrigins splits a comma-separated allowlist into a slice, trimming
