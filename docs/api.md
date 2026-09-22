@@ -7,7 +7,7 @@ service and the workset service.
 
 HTTP endpoints live under `/api/v1`. Machine-checked contract coverage lives
 in the Go tests (`backend/go/tests/e2e/*_test.go` and the
-`backend/go/internal/httpapi` handler tests); this document is the human
+`backend/go/internal/adapters/httpapi` handler tests); this document is the human
 reference.
 
 ## Startup handshake
@@ -637,7 +637,7 @@ the backend resolves them.**
 The Vue frontend displays and sends the original user strings — it never
 touches path separators, never joins or resolves paths, and never uses any
 `path` module. Absolute paths (`root_path`) are normalized to POSIX form in Go
-(`backend/go/internal/pathnorm`) before they reach SQLite or the plan usecase.
+(`backend/go/internal/pathnorm`) before they reach the storage adapter or the planning rules.
 
 Paths *inside* a library are relative, and the backend resolves them: a
 directory listing returns `rel_path`, a member tree is read by `?dir=<dir_id>`

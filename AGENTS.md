@@ -6,7 +6,9 @@
 - `scripts/dev-web.mjs` boots backend + Vite together (`ONSEI_DATA_DIR` → `<repo>/.dev_data`).
 
 ## Go module structure & engineering rules
+- **Layout**: business packages own their types, their use cases and the ports they need — `internal/{library,inventory,workset,conversion,fileops}` (+ `conversion/{reconcile,execute}`); `internal/adapters/{sqlite,httpapi,filesystem,ffmpeg,settings}` implement those ports; `internal/app` is the assembly root and the only place that knows every adapter at once; `cmd/…/main.go` is signals, the data directory and one call. The rules are asserted in `internal/arch` and recorded in [ADR 0009](docs/adr/0009-business-packages-and-dependency-direction.md).
 - **Core goal**: Low coupling across modules, high cohesion within each file. Each file has one clear responsibility.
+- **Dependency direction**: `app → adapters → business → pathnorm`. A business package never imports `internal/adapters/…` or `internal/app`; a port is declared by its consumer and implements only the methods that consumer calls.
 - **Service decomposition**: `service.go` holds only types, constructors, and DI wiring (≤80 lines); use cases split into separate files named by business verb (e.g., `run.go`, `persist.go`, `load_plan.go`).
 - **No semantic-less files**: Never create `helpers.go`, `util.go`, or `common.go` dumps.
 - **Split heuristics**: Split when a file hosts ≥2 responsibilities that change at different frequencies, or when a struct + method cluster exceeds single-screen readability. Never split purely to satisfy line limits.
