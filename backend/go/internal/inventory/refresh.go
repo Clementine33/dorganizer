@@ -1,11 +1,9 @@
-package scan
+package inventory
 
 import (
 	"context"
 	"fmt"
 	"os"
-
-	"github.com/onsei/organizer/backend/internal/services/scanner"
 )
 
 // RefreshMember re-scans one member directory subtree into the stored
@@ -15,9 +13,14 @@ import (
 // the rows it writes keep their owning root and the stale cleanup inside the
 // scope removes what the disk no longer has.
 //
+// It takes no admission: every caller either already holds the slot (direct
+// file management refreshes what it wrote) or takes it through
+// AdmitMemberRefresh. Taking it here would refuse the refresh of a file
+// operation that legitimately holds the slot.
+//
 // It is the disk → inventory seam, not a scheduled job: the caller decides
 // when it runs, and it reports the scan's failure rather than swallowing it.
-func (s *serviceImpl) RefreshMember(ctx context.Context, folderPath, rootPath string) error {
+func (s *service) RefreshMember(ctx context.Context, folderPath, rootPath string) error {
 	if folderPath == "" || rootPath == "" {
 		return NewError(
 			ErrKindInvalidArgument,
@@ -43,8 +46,7 @@ func (s *serviceImpl) RefreshMember(ctx context.Context, folderPath, rootPath st
 			nil,
 		)
 	}
-	svc := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(s.repo))
-	if _, scanErr := svc.ScanFolderCtx(ctx, folderPath, rootPath); scanErr != nil {
+	if _, scanErr := s.pipeline.ScanFolderCtx(ctx, folderPath, rootPath); scanErr != nil {
 		return NewError(ErrKindInternal, "SCAN_FAILED", "failed to refresh the member inventory", scanErr)
 	}
 	return nil

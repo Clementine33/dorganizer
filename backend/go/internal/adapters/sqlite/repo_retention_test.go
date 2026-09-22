@@ -3,6 +3,8 @@ package sqlite //nolint:testpackage // white-box tests exercise unexported inter
 import (
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // seedRetentionWorkset persists a current record for plan_generations rows to
@@ -48,7 +50,7 @@ func TestRepository_RunRetentionCleanupBatch_DeletesOnlyOlderThanCutoff(t *testi
 	oldTime := cutoff.Add(-24 * time.Hour) // 2025-05-31
 	newTime := cutoff.Add(24 * time.Hour)  // 2025-06-02
 
-	oldScan := &ScanSession{
+	oldScan := &inventory.ScanSession{
 		SessionID: "scan-old",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -59,7 +61,7 @@ func TestRepository_RunRetentionCleanupBatch_DeletesOnlyOlderThanCutoff(t *testi
 		t.Fatalf("create old scan session: %v", err)
 	}
 
-	newScan := &ScanSession{
+	newScan := &inventory.ScanSession{
 		SessionID: "scan-new",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -108,7 +110,7 @@ func TestRepository_RunRetentionCleanupBatch_InterruptedScanBecomesEligible(t *t
 	repo := newTestRepository(t)
 
 	cutoff := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	crashed := &ScanSession{
+	crashed := &inventory.ScanSession{
 		SessionID: "scan-crashed",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -218,7 +220,13 @@ func TestRepository_RunRetentionCleanupBatch_LimitsEachTable(t *testing.T) {
 	cutoff := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	old := cutoff.Add(-24 * time.Hour)
 	for _, id := range []string{"scan-a", "scan-b", "scan-c"} {
-		session := &ScanSession{SessionID: id, RootPath: "/music", Kind: "full", Status: "completed", StartedAt: old}
+		session := &inventory.ScanSession{
+			SessionID: id,
+			RootPath:  "/music",
+			Kind:      "full",
+			Status:    "completed",
+			StartedAt: old,
+		}
 		if err := repo.CreateScanSession(session); err != nil {
 			t.Fatalf("create %s: %v", id, err)
 		}

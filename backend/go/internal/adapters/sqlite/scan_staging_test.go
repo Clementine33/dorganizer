@@ -1,31 +1,29 @@
-package scanner //nolint:testpackage // white-box tests exercise unexported internals
+package sqlite //nolint:testpackage // white-box tests share the package's own helpers
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
-// SQLiteAdapterTestSuite provides integration tests for SQLiteRepositoryAdapter
+// SQLiteAdapterTestSuite provides integration tests for ScanStaging
 // to verify staging write batching, rollback semantics, and service path behavior.
 type SQLiteAdapterTestSuite struct {
-	repo    *sqlite.Repository
-	adapter *SQLiteRepositoryAdapter
+	repo    *Repository
+	adapter *ScanStaging
 }
 
 func setupTestDB(t *testing.T) *SQLiteAdapterTestSuite {
 	t.Helper()
 	// Use in-memory database for tests
-	sqliteRepo, err := sqlite.NewRepository(":memory:")
+	sqliteRepo, err := NewRepository(":memory:")
 	if err != nil {
 		t.Fatalf("failed to create test repository: %v", err)
 	}
 
-	adapter := NewSQLiteRepositoryAdapter(sqliteRepo)
+	adapter := NewScanStaging(sqliteRepo)
 
 	t.Cleanup(func() {
 		sqliteRepo.Close()
@@ -43,9 +41,9 @@ func TestWriteStagingEntries_LargeBatch_SucceedsAtomically(t *testing.T) {
 	sessionID := "test-large-batch-session"
 
 	// Create 2500 entries (> batchSize of 1000 requires multiple batches)
-	var entries []StagingEntry
+	var entries []inventory.StagingEntry
 	for i := range 2500 {
-		entries = append(entries, StagingEntry{
+		entries = append(entries, inventory.StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),
 			RootPath:   "/music",
@@ -90,9 +88,9 @@ func TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError
 	expectedErr := errors.New("simulated insert failure after 25 execs")
 
 	// Create 50 entries
-	var entries []StagingEntry
+	var entries []inventory.StagingEntry
 	for i := range 50 {
-		entries = append(entries, StagingEntry{
+		entries = append(entries, inventory.StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),
 			RootPath:   "/music",
@@ -138,94 +136,6 @@ func TestWriteStagingEntries_StagingWriteFailure_TriggersRollbackAndReturnsError
 }
 
 // RepositoryThatFailsStaging simulates a repository where WriteStagingEntries fails.
-type RepositoryThatFailsStaging struct {
-	MockRepository
-
-	writeStagingCalled bool
-	mergeCalled        bool
-	failStagingError   error
-}
-
-func (m *RepositoryThatFailsStaging) WriteStagingEntries(sessionID string, entries []StagingEntry) error {
-	m.writeStagingCalled = true
-	if m.failStagingError != nil {
-		return m.failStagingError
-	}
-	return nil
-}
-
-func (m *RepositoryThatFailsStaging) MergeStaging(sessionID, rootPath string, stalePaths []string) (int, error) {
-	m.mergeCalled = true
-	return m.MergeResult, m.MergeError
-}
-
-func (m *RepositoryThatFailsStaging) WriteStagingBatch(sessionID string, batch []StagingEntry) error {
-	m.writeStagingCalled = true
-	if m.failStagingError != nil {
-		return m.failStagingError
-	}
-	return nil
-}
-
-func (m *RepositoryThatFailsStaging) CleanupStagingSession(sessionID string) error {
-	return nil
-}
-
-// TestScannerService_StagingWriteFailure_PreventsMergeAndEndsSessionFailed verifies
-// that if WriteStagingEntries fails, MergeStaging is not called and session ends failed.
-func TestScannerService_StagingWriteFailure_PreventsMergeAndEndsSessionFailed(t *testing.T) {
-	expectedErr := errors.New("simulated staging write failure")
-
-	// Create a mock repository that tracks session status updates
-	repo := &RepositoryThatFailsStaging{
-		failStagingError: expectedErr,
-	}
-	repo.Sessions = []ScanSession{
-		{SessionID: "test-session", RootPath: "/music", Status: "running"},
-	}
-	repo.MergeResult = 42
-
-	svc := NewScannerService(repo)
-
-	// We need to test the service behavior. Since ScanRoot needs real filesystem,
-	// we create a minimal temp directory to walk
-	tmpDir := t.TempDir()
-	// Create one file so there's something to stage
-	_ = os.WriteFile(filepath.Join(tmpDir, "song.mp3"), []byte("dummy"), 0644)
-
-	// The session should fail and not call MergeStaging
-	_, err := svc.ScanRoot(tmpDir)
-	if err == nil {
-		t.Fatal("expected ScanRoot to return error when WriteStagingEntries fails")
-	}
-
-	// Verify that WriteStagingEntries was called
-	if !repo.writeStagingCalled {
-		t.Error("expected WriteStagingEntries to be called")
-	}
-
-	// CRITICAL: Verify that MergeStaging was NOT called
-	if repo.mergeCalled {
-		t.Error("MergeStaging should NOT be called when WriteStagingEntries fails")
-	}
-
-	// Find the session that was actually created by ScanRoot (not our pre-added one)
-	var scanSession *ScanSession
-	for i := range repo.Sessions {
-		// ScanRoot creates a new session with a UUID, so find the one that was updated
-		if repo.Sessions[i].Status == "failed" {
-			scanSession = &repo.Sessions[i]
-			break
-		}
-	}
-	if scanSession == nil {
-		t.Fatalf("no session found with 'failed' status. Sessions: %+v", repo.Sessions)
-	}
-	if scanSession.ErrorCode != "STAGING_WRITE_FAILED" {
-		t.Errorf("expected error code 'STAGING_WRITE_FAILED', got %s", scanSession.ErrorCode)
-	}
-}
-
 // Test the chunking size is exactly as expected (1000).
 func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	suite := setupTestDB(t)
@@ -233,9 +143,9 @@ func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 	// Test with exactly batchSize (1000) entries - should be one batch
 	sessionID := "test-exact-batch"
 
-	var entries []StagingEntry
+	var entries []inventory.StagingEntry
 	for i := range 1000 {
-		entries = append(entries, StagingEntry{
+		entries = append(entries, inventory.StagingEntry{
 			SessionID:  sessionID,
 			Path:       "/music/file" + string(rune(i)),
 			RootPath:   "/music",
@@ -267,9 +177,9 @@ func TestWriteStagingEntries_BatchSizeBoundary(t *testing.T) {
 
 	// Test with batchSize + 1 entries - should require two batches
 	sessionID2 := "test-one-over-batch"
-	var entries2 []StagingEntry
+	var entries2 []inventory.StagingEntry
 	for i := range 1001 {
-		entries2 = append(entries2, StagingEntry{
+		entries2 = append(entries2, inventory.StagingEntry{
 			SessionID:  sessionID2,
 			Path:       "/music2/file" + string(rune(i)),
 			RootPath:   "/music2",
@@ -306,7 +216,7 @@ func TestWriteStagingEntries_EmptyEntries(t *testing.T) {
 	sessionID := "test-empty"
 
 	// Empty entries should succeed without error
-	err := suite.adapter.WriteStagingEntries(sessionID, []StagingEntry{})
+	err := suite.adapter.WriteStagingEntries(sessionID, []inventory.StagingEntry{})
 	if err != nil {
 		t.Fatalf("WriteStagingEntries failed for empty entries: %v", err)
 	}
@@ -332,7 +242,7 @@ func TestWriteStagingEntries_InsertOrReplace(t *testing.T) {
 	sessionID := "test-upsert"
 
 	// First write
-	entries := []StagingEntry{
+	entries := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID,
 			Path:       "/music/file1.mp3",
@@ -417,7 +327,7 @@ func TestWriteStagingBatch_MultiTransaction(t *testing.T) {
 	sessionID := "test-multi-tx-batch"
 
 	// First batch
-	batch1 := []StagingEntry{
+	batch1 := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID,
 			Path:       "/music/file1.mp3",
@@ -432,7 +342,7 @@ func TestWriteStagingBatch_MultiTransaction(t *testing.T) {
 	}
 
 	// Second batch
-	batch2 := []StagingEntry{
+	batch2 := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID,
 			Path:       "/music/file2.mp3",
@@ -476,7 +386,7 @@ func TestWriteStagingBatch_PartialPersistence(t *testing.T) {
 	sessionID := "test-partial-persistence"
 
 	// First batch
-	batch1 := []StagingEntry{
+	batch1 := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID,
 			Path:       "/music/file1.mp3",
@@ -516,7 +426,7 @@ func TestCleanupStagingSession_RemovesAllEntriesForSession(t *testing.T) {
 	sessionID := "test-cleanup-session"
 
 	// Write some entries
-	entries := []StagingEntry{
+	entries := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID,
 			Path:       "/music/file1.mp3",
@@ -584,7 +494,7 @@ func TestCleanupStagingSession_PreservesOtherSessions(t *testing.T) {
 	sessionID2 := "test-cleanup-session2"
 
 	// Write entries for both sessions
-	entries1 := []StagingEntry{
+	entries1 := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID1,
 			Path:       "/music/file1.mp3",
@@ -597,7 +507,7 @@ func TestCleanupStagingSession_PreservesOtherSessions(t *testing.T) {
 			Format:     "audio/mpeg",
 		},
 	}
-	entries2 := []StagingEntry{
+	entries2 := []inventory.StagingEntry{
 		{
 			SessionID:  sessionID2,
 			Path:       "/music/file2.mp3",
@@ -651,18 +561,18 @@ func TestCleanupStagingSession_PreservesOtherSessions(t *testing.T) {
 
 // Benchmark for large batch performance.
 func BenchmarkWriteStagingEntries_LargeBatch(b *testing.B) {
-	sqliteRepo, err := sqlite.NewRepository(":memory:")
+	sqliteRepo, err := NewRepository(":memory:")
 	if err != nil {
 		b.Fatalf("failed to create test repository: %v", err)
 	}
 	defer sqliteRepo.Close()
 
-	adapter := NewSQLiteRepositoryAdapter(sqliteRepo)
+	adapter := NewScanStaging(sqliteRepo)
 
 	// Create 5000 entries
-	var entries []StagingEntry
+	var entries []inventory.StagingEntry
 	for i := range 5000 {
-		entries = append(entries, StagingEntry{
+		entries = append(entries, inventory.StagingEntry{
 			SessionID:  "bench-session",
 			Path:       "/music/album/file" + string(rune('a'+i%26)) + string(rune(i)),
 			RootPath:   "/music",

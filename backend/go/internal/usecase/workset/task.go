@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // Task is one kind of work a workset operation can carry. The workset module
@@ -237,10 +238,10 @@ type UnitResult struct {
 	// InventoryRemoved are entry paths whose rows the generic side drops, and
 	// InventoryRefreshed the on-disk facts it re-reads into the inventory.
 	InventoryRemoved   []string
-	InventoryRefreshed []sqlite.InventoryFile
+	InventoryRefreshed []inventory.InventoryFile
 	// Generated are the generation credentials of the outputs this unit
 	// committed: what the next plan reads to accept them without re-encoding.
-	Generated []sqlite.GenerationRecord
+	Generated []inventory.GenerationRecord
 }
 
 // RevisionMemberFacts is one member's frozen effective configuration.

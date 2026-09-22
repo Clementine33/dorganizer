@@ -8,12 +8,11 @@ import (
 
 	"facette.io/natsort"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 // dirResponse is one direct child directory of a library root. Identity is the
@@ -106,22 +105,23 @@ func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.deps.ScanService == nil {
+	if s.deps.Inventory == nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "scan service not configured")
 		return
 	}
-	release, ok := s.beginScan(w)
-	if !ok {
+	release, admitErr := s.deps.Inventory.AdmitMemberRefresh()
+	if admitErr != nil {
+		writeScanAdmissionError(w, admitErr)
 		return
 	}
 	defer release()
 
-	if err := s.deps.ScanService.RefreshMember(r.Context(), member.absPath, member.library.RootPath); err != nil {
+	if err := s.deps.Inventory.RefreshMember(r.Context(), member.absPath, member.library.RootPath); err != nil {
 		// The refresh failed; the caller keeps the tree it already shows and
 		// says so. Nothing else was touched, so the failure is the whole
 		// outcome.
 		code, message := "REFRESH_FAILED", "failed to refresh the folder"
-		if scanErr, isScanErr := scanusecase.AsError(err); isScanErr {
+		if scanErr, isScanErr := inventory.AsError(err); isScanErr {
 			code, message = scanErr.Code, scanErr.Message
 		}
 		writeError(w, http.StatusBadGateway, code, message)
@@ -224,22 +224,6 @@ func writeMemberError(w http.ResponseWriter, err error) {
 	}
 }
 
-// beginScan registers one scanning operation with the admission gate; it
-// answers the request and returns false when the scan must not start. The
-// returned release is per-request state, never server state: one server serves
-// concurrent requests.
-func (s *Server) beginScan(w http.ResponseWriter) (func(), bool) {
-	if s.deps.Gate == nil {
-		return func() {}, true
-	}
-	release, err := s.deps.Gate.BeginScan()
-	if err != nil {
-		writeBusyError(w, err)
-		return nil, false
-	}
-	return release, true
-}
-
 // busyMessage explains an admission refusal in the user's terms.
 func busyMessage(err error) string {
 	if busy, ok := errors.AsType[*admission.BusyError](err); ok {
@@ -265,7 +249,7 @@ func writeBusyError(w http.ResponseWriter, err error) {
 // member directory. Directories sort before files; within the same type, both
 // sort naturally by name. Node names are basenames only and RelPath is
 // relative to the member root.
-func buildMemberTree(rootPath string, entries []sqlite.EntryRow) *treeNode {
+func buildMemberTree(rootPath string, entries []inventory.Entry) *treeNode {
 	index := map[string]*treeNode{}
 	root := &treeNode{Name: basename(rootPath), Path: rootPath, RelPath: "", Type: "dir"}
 	index[rootPath] = root

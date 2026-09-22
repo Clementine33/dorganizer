@@ -7,15 +7,14 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// Dependencies carries the wiring for the HTTP API. ScanService is used by the
-// scan route; WorksetService by the workset routes. Any may be nil until
+// Dependencies carries the wiring for the HTTP API. Inventory is used by the
+// scan and refresh routes; WorksetService by the workset routes. Any may be nil until
 // wired, and the handlers guard against that.
 type Dependencies struct {
 	Repo *sqlite.Repository
@@ -27,13 +26,12 @@ type Dependencies struct {
 	Token          string
 	CORSOrigins    []string
 	Version        string
-	ScanService    scanusecase.Service
+	Inventory      inventory.Service
 	WorksetService worksetusecase.Service
-	// FileOps applies direct file management inside a member; Gate is the same
-	// admission control it uses, so the scan and library routes take their side
-	// of it. Both may be nil in tests that do not exercise them.
+	// FileOps applies direct file management inside a member. It and every
+	// other path that takes an admission slot own that decision themselves, so
+	// the HTTP layer never holds the gate.
 	FileOps *fileops.Service
-	Gate    *admission.Gate
 }
 
 type Server struct{ deps Dependencies }

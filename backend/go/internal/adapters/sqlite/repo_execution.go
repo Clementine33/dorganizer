@@ -7,6 +7,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 )
 
@@ -683,14 +684,6 @@ func (r *Repository) HasActiveExecutionForRoot(rootPath string) (bool, error) {
 	return n > 0, nil
 }
 
-// InventoryFile is one observed file fact to write into the entries inventory
-// after an execution changed it on disk.
-type InventoryFile struct {
-	Path  string // persisted POSIX form
-	Size  int64
-	Mtime int64
-}
-
 // SyncObservedInventory applies the observed disk changes of an execution to the
 // entries inventory without a rescan: removed paths lose their row, changed
 // paths are refreshed with the scan merge's content_rev semantics (a changed
@@ -701,8 +694,8 @@ type InventoryFile struct {
 func (r *Repository) SyncObservedInventory(
 	rootPath string,
 	removed []string,
-	changed []InventoryFile,
-	generated []GenerationRecord,
+	changed []inventory.InventoryFile,
+	generated []inventory.GenerationRecord,
 ) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -737,7 +730,7 @@ func (r *Repository) SyncObservedInventory(
 // upsertObservedFile writes one observed file with the same lifecycle rules the
 // scan merge applies: new rows start at content_rev 1, changed rows bump it and
 // drop the stale bitrate, unchanged rows keep both.
-func upsertObservedFile(tx *sql.Tx, rootPath string, f InventoryFile) error {
+func upsertObservedFile(tx *sql.Tx, rootPath string, f inventory.InventoryFile) error {
 	var contentRev, size, mtime int64
 	var bitrate sql.NullInt64
 	err := tx.QueryRow(

@@ -6,32 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/onsei/organizer/backend/internal/library"
+	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
-
-// allowScanDuringExecution enforces the scan/execution mutual exclusion: a
-// scan rewrites the inventory a running execution validates against, so it
-// waits for the session to end. It answers the request and returns false when
-// the scan must not start.
-func (s *Server) allowScanDuringExecution(w http.ResponseWriter, rootPath string) bool {
-	executing, err := s.deps.Repo.HasActiveExecutionForRoot(rootPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to check active executions")
-		return false
-	}
-	if executing {
-		writeError(
-			w,
-			http.StatusConflict,
-			"EXECUTION_IN_PROGRESS",
-			"cancel or wait for the active execution before scanning",
-		)
-		return false
-	}
-	return true
-}
 
 // scanRequest is the POST /api/v1/libraries/:id/scans payload. root_path is
 // optional; when absent the library's own root path is scanned.
@@ -51,17 +29,29 @@ type scanEventData struct {
 	Code         string `json:"code,omitempty"`
 }
 
+// writeScanAdmissionError maps a refused admission to its envelope: the gate's
+// BUSY, or the scan's own code — an active execution refuses a full scan.
+func writeScanAdmissionError(w http.ResponseWriter, err error) {
+	if admission.IsBusy(err) {
+		writeBusyError(w, err)
+		return
+	}
+	if scanErr, ok := inventory.AsError(err); ok {
+		writeError(w, http.StatusConflict, scanErr.Code, scanErr.Message)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to admit the scan")
+}
+
 // postLibraryScan streams a scan of the library root over SSE. The handler
-// stays synchronous over the request lifecycle: the scan usecase runs with
+// stays synchronous over the request lifecycle: the scan runs with
 // r.Context(), so a client disconnect cancels the scan.
+//
+// Admission is taken here, before the stream is committed: a refusal is a 409
+// envelope, never an event inside a response that already answered 200.
 func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
-	lib, err := s.deps.Library.Get(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, library.ErrLibraryNotFound) {
-			writeError(w, http.StatusNotFound, "LIBRARY_NOT_FOUND", "library not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load library")
+	lib, ok := s.library(w, r)
+	if !ok {
 		return
 	}
 
@@ -85,20 +75,18 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The scan service is optional in Dependencies (nil until wired); guard
+	// The scanning entry is optional in Dependencies (nil until wired); guard
 	// before streaming so an unwired server reports a terminal error and a
 	// failed scan state instead of panicking mid-stream.
-	if s.deps.ScanService == nil {
+	if s.deps.Inventory == nil {
 		_ = s.deps.Library.RecordScanState(lib.ID, "failed", "scan service not configured", time.Now())
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "scan service not configured")
 		return
 	}
 
-	if !s.allowScanDuringExecution(w, lib.RootPath) {
-		return
-	}
-	release, ok := s.beginScan(w)
-	if !ok {
+	release, err := s.deps.Inventory.AdmitLibraryScan(lib.RootPath)
+	if err != nil {
+		writeScanAdmissionError(w, err)
 		return
 	}
 	defer release()
@@ -120,11 +108,11 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.deps.ScanService.Scan(
+	result, err := s.deps.Inventory.Scan(
 		r.Context(),
-		scanusecase.Request{RootPath: rootPath},
-		func(ev scanusecase.Event) {
-			// The usecase emits started/progress/completed/error internally; only
+		inventory.Request{LibraryID: lib.ID, RootPath: rootPath},
+		func(ev inventory.Event) {
+			// The entry emits started/progress/completed internally; only
 			// progress is forwarded, the handler owns the terminal events.
 			if ev.Type == "progress" {
 				_ = sw.Send("progress", scanEventData{
@@ -136,26 +124,21 @@ func (s *Server) postLibraryScan(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		now := time.Now()
 		if errors.Is(err, context.Canceled) {
-			_ = s.deps.Library.RecordScanState(lib.ID, "canceled", "", now)
 			_ = sw.Send("cancelled", scanEventData{Stage: "scan", Message: "scan canceled"})
 			return
 		}
 		code, message := "INTERNAL", err.Error()
-		if scanErr, ok := scanusecase.AsError(err); ok {
+		if scanErr, ok := inventory.AsError(err); ok {
 			code, message = scanErr.Code, scanErr.Message
 		}
-		_ = s.deps.Library.RecordScanState(lib.ID, "failed", message, now)
 		_ = sw.Send("error", scanEventData{Stage: "scan", Code: code, Message: message})
 		return
 	}
 
-	// Record the scan outcome and signal completion. The scanned inventory is
-	// the overview's whole input: there is no separate derived folder table to
-	// rebuild, which is why a rescan cannot renumber anything the workbench
-	// navigates by.
-	_ = s.deps.Library.RecordScanState(lib.ID, "completed", "", time.Now())
+	// The scanned inventory is the overview's whole input: there is no separate
+	// derived folder table to rebuild, which is why a rescan cannot renumber
+	// anything the workbench navigates by.
 	_ = sw.Send("completed", scanEventData{
 		Stage:        "scan",
 		ScanID:       result.ScanID,

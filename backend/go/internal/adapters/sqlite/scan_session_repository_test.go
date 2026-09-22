@@ -3,12 +3,14 @@ package sqlite //nolint:testpackage // white-box tests exercise unexported inter
 import (
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 func TestRepository_ScanSessionMethods(t *testing.T) {
 	repo := newTestRepository(t)
 
-	session := &ScanSession{
+	session := &inventory.ScanSession{
 		SessionID: "scan-001",
 		RootPath:  "/music",
 		ScopePath: nil,
@@ -45,7 +47,7 @@ func TestRepository_ScanSessionMethods(t *testing.T) {
 func TestRepository_CreateAndGetScanSession_ScopePathNullableRoundTrip(t *testing.T) {
 	repo := newTestRepository(t)
 
-	session1 := &ScanSession{
+	session1 := &inventory.ScanSession{
 		SessionID: "scan-full",
 		RootPath:  "/music",
 		ScopePath: nil,
@@ -67,7 +69,7 @@ func TestRepository_CreateAndGetScanSession_ScopePathNullableRoundTrip(t *testin
 	}
 
 	scopePathVal := "/music/albums"
-	session2 := &ScanSession{
+	session2 := &inventory.ScanSession{
 		SessionID: "scan-folder",
 		RootPath:  "/music",
 		ScopePath: &scopePathVal,
@@ -100,7 +102,7 @@ func TestRepository_RunRetentionCleanupBatch_ScanEligibility(t *testing.T) {
 	newTime := cutoff.Add(24 * time.Hour)  // after cutoff
 
 	// 1) Completed scan with old finished_at → should be deleted
-	completedOld := &ScanSession{
+	completedOld := &inventory.ScanSession{
 		SessionID: "scan-completed-old",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -127,7 +129,7 @@ func TestRepository_RunRetentionCleanupBatch_ScanEligibility(t *testing.T) {
 	// terminal rows only, so age alone never purges a row a scan may still own.
 	// A row left behind by a dead process is finalized by
 	// InterruptStaleScanSessions at startup, not deleted here.
-	runningOld := &ScanSession{
+	runningOld := &inventory.ScanSession{
 		SessionID: "scan-running-old",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -139,7 +141,7 @@ func TestRepository_RunRetentionCleanupBatch_ScanEligibility(t *testing.T) {
 	}
 
 	// 3) Newer scan → should be retained
-	newerScan := &ScanSession{
+	newerScan := &inventory.ScanSession{
 		SessionID: "scan-new",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -154,7 +156,7 @@ func TestRepository_RunRetentionCleanupBatch_ScanEligibility(t *testing.T) {
 	}
 
 	// 4) Old started_at but new finished_at → COALESCE(finished_at, started_at) picks finished_at → retained
-	coalesceScan := &ScanSession{
+	coalesceScan := &inventory.ScanSession{
 		SessionID: "scan-coalesce-precedence",
 		RootPath:  "/music",
 		Kind:      "full",
@@ -244,7 +246,7 @@ func TestRepository_InterruptStaleScanSessions(t *testing.T) {
 	// A scan only ever writes these three states while it is running, so at
 	// startup they all belong to a process that died without finalizing them.
 	for _, status := range []string{"queued", "running", "merging"} {
-		session := &ScanSession{
+		session := &inventory.ScanSession{
 			SessionID: "scan-" + status,
 			RootPath:  "/music",
 			Kind:      "full",
@@ -256,7 +258,7 @@ func TestRepository_InterruptStaleScanSessions(t *testing.T) {
 		}
 	}
 
-	done := &ScanSession{
+	done := &inventory.ScanSession{
 		SessionID: "scan-done",
 		RootPath:  "/music",
 		Kind:      "full",

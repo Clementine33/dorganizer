@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // growThenDeleteScanSessions fills the file with scan rows and then deletes them
@@ -21,7 +23,7 @@ func growThenDeleteScanSessions(t *testing.T, repo *Repository, rows int) {
 	payload := strings.Repeat("x", 1024)
 
 	for i := range rows {
-		session := &ScanSession{
+		session := &inventory.ScanSession{
 			SessionID: fmt.Sprintf("scan-%05d", i),
 			RootPath:  "/music",
 			Kind:      "full",

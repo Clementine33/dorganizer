@@ -3,12 +3,14 @@ package sqlite
 import (
 	"database/sql"
 	"time"
+
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // ==================== Scan Session Methods ====================
 
 // CreateScanSession creates a new scan session.
-func (r *Repository) CreateScanSession(s *ScanSession) error {
+func (r *Repository) CreateScanSession(s *inventory.ScanSession) error {
 	var scopePath any
 	if s.ScopePath != nil {
 		scopePath = *s.ScopePath
@@ -21,8 +23,8 @@ func (r *Repository) CreateScanSession(s *ScanSession) error {
 }
 
 // GetScanSession retrieves a scan session by ID.
-func (r *Repository) GetScanSession(sessionID string) (*ScanSession, error) {
-	var s ScanSession
+func (r *Repository) GetScanSession(sessionID string) (*inventory.ScanSession, error) {
+	var s inventory.ScanSession
 	var startedAtStr string
 	var finishedAtStr, errorCode, errorMessage, scopePath sql.NullString
 	err := r.db.QueryRow(`
@@ -83,7 +85,7 @@ func (r *Repository) InterruptStaleScanSessions() (int64, error) {
 }
 
 // ListScanSessionsByRoot returns scan sessions for a root.
-func (r *Repository) ListScanSessionsByRoot(rootPath string) ([]*ScanSession, error) {
+func (r *Repository) ListScanSessionsByRoot(rootPath string) ([]*inventory.ScanSession, error) {
 	rows, err := r.db.Query(`
 		SELECT session_id, root_path, scope_path, kind, status, started_at, finished_at
 		FROM scan_sessions WHERE root_path = ? ORDER BY started_at DESC
@@ -93,9 +95,9 @@ func (r *Repository) ListScanSessionsByRoot(rootPath string) ([]*ScanSession, er
 	}
 	defer rows.Close()
 
-	var sessions []*ScanSession
+	var sessions []*inventory.ScanSession
 	for rows.Next() {
-		var s ScanSession
+		var s inventory.ScanSession
 		var startedAtStr string
 		var finishedAtStr, scopePath sql.NullString
 		if err := rows.Scan(

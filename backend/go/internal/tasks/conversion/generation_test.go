@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	"github.com/onsei/organizer/backend/internal/tasks/conversion"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -156,7 +157,7 @@ func runOneEncodedUnit(
 // assertRecordDescribesFile checks the binding half of a credential: the size
 // and mtime a plan compares against the inventory, and the hash it could compare
 // against the bytes.
-func assertRecordDescribesFile(t *testing.T, record sqlite.GenerationRecord, path string) {
+func assertRecordDescribesFile(t *testing.T, record inventory.GenerationRecord, path string) {
 	t.Helper()
 	written, err := os.Stat(path)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // These tests drive the real loop against a real database. They wait for the
@@ -45,7 +46,7 @@ func seedOldScans(t *testing.T, repo *sqlite.Repository, rows int) {
 	t.Helper()
 	finished := time.Now().Add(-30 * 24 * time.Hour)
 	for i := range rows {
-		session := &sqlite.ScanSession{
+		session := &inventory.ScanSession{
 			SessionID: fmt.Sprintf("scan-%03d", i),
 			RootPath:  "/music",
 			Kind:      "full",

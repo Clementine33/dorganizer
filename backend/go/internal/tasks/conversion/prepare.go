@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/execute"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
@@ -171,7 +172,7 @@ func (p *preparedUnit) recordGenerations(ctx context.Context, result *worksetuse
 			result.InventoryError = fmt.Sprintf("hash committed output %s: %v", path, hashErr)
 			return
 		}
-		result.Generated = append(result.Generated, sqlite.GenerationRecord{
+		result.Generated = append(result.Generated, inventory.GenerationRecord{
 			Path:           path,
 			Codec:          string(spec.Codec),
 			Encoder:        encoder,
@@ -229,14 +230,14 @@ func fillInventoryFacts(result *worksetusecase.UnitResult, in worksetusecase.Uni
 			paths = append(paths, p)
 		}
 	}
-	facts := make([]sqlite.InventoryFile, 0, len(paths))
+	facts := make([]inventory.InventoryFile, 0, len(paths))
 	for _, p := range paths {
 		info, err := os.Stat(filepath.FromSlash(p))
 		if err != nil {
 			result.InventoryError = fmt.Sprintf("stat %s: %v", p, err)
 			return
 		}
-		facts = append(facts, sqlite.InventoryFile{Path: p, Size: info.Size(), Mtime: info.ModTime().Unix()})
+		facts = append(facts, inventory.InventoryFile{Path: p, Size: info.Size(), Mtime: info.ModTime().Unix()})
 	}
 	result.InventoryRemoved = result.Removed
 	result.InventoryRefreshed = facts

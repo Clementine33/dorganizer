@@ -51,19 +51,6 @@ type Plan struct {
 	CreatedAt         time.Time
 }
 
-// ScanSession represents a scan operation.
-type ScanSession struct {
-	SessionID    string
-	RootPath     string
-	ScopePath    *string // nullable for full scans
-	Kind         string  // full, folder
-	Status       string  // queued, running, merging, completed, failed, canceled, interrupted
-	ErrorCode    string
-	ErrorMessage string
-	StartedAt    time.Time
-	FinishedAt   time.Time
-}
-
 // CleanupStats holds counts of rows deleted by each cleanup operation.
 type CleanupStats struct {
 	DeletedScanSessions int64

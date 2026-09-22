@@ -1,4 +1,4 @@
-package scanner
+package filesystem
 
 import (
 	"context"
@@ -6,22 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
 // dirEntryInfoFunc is a seam for testing Info() error paths.
 // In production, this is nil and job.d.Info() is called directly.
 // Tests can override to inject deterministic errors.
 var dirEntryInfoFunc func(fs.DirEntry) (fs.FileInfo, error)
-
-// DirEntry represents a directory entry from walking.
-type DirEntry struct {
-	Path       string
-	ParentPath string
-	Name       string
-	IsDir      bool
-	Size       int64
-	Mtime      int64
-}
 
 // walkDirItem represents a directory to be processed in parallel walk.
 type walkDirItem struct {
@@ -43,7 +35,7 @@ type walkResult struct {
 //   - rootPath: the root directory to walk
 //   - basePath: the base path for parent path normalization
 //   - dirConcurrency: number of concurrent directory readers (default 4)
-//   - emit: callback for each DirEntry found; returning error cancels the walk
+//   - emit: callback for each inventory.DirEntry found; returning error cancels the walk
 //
 // Returns error if walk fails or if emit returns error.
 //
@@ -52,7 +44,7 @@ func WalkRootEntriesParallel(
 	ctx context.Context,
 	rootPath, basePath string,
 	dirConcurrency int,
-	emit func(DirEntry) error,
+	emit func(inventory.DirEntry) error,
 ) error {
 	if dirConcurrency <= 0 {
 		dirConcurrency = 4 // Default as per plan
@@ -126,7 +118,7 @@ func WalkRootEntriesParallel(
 							return
 						}
 
-						entry := DirEntry{
+						entry := inventory.DirEntry{
 							Path:       entryPath,
 							ParentPath: parentPath,
 							Name:       d.Name(),
@@ -215,13 +207,13 @@ func WalkRootEntriesParallel(
 //   - ctx: context for cancellation
 //   - folderPath: the folder to walk
 //   - basePath: the base path for parent path normalization
-//   - emit: callback for each DirEntry found; returning error cancels the walk
+//   - emit: callback for each inventory.DirEntry found; returning error cancels the walk
 //
 // Returns error if walk fails or if emit returns error.
 //
 // CONTRACT: This function is streaming - it MUST call emit immediately for each
-// entry as it's discovered, without pre-aggregating into []DirEntry.
-func WalkFolderEntries(ctx context.Context, folderPath, basePath string, emit func(DirEntry) error) error {
+// entry as it's discovered, without pre-aggregating into []inventory.DirEntry.
+func WalkFolderEntries(ctx context.Context, folderPath, basePath string, emit func(inventory.DirEntry) error) error {
 	// Validate context
 	if err := ctx.Err(); err != nil {
 		return err
@@ -264,7 +256,7 @@ func WalkFolderEntries(ctx context.Context, folderPath, basePath string, emit fu
 				return infoErr
 			}
 
-			entry := DirEntry{
+			entry := inventory.DirEntry{
 				Path:       entryPath,
 				ParentPath: parentPath,
 				Name:       d.Name(),

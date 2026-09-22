@@ -12,8 +12,9 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 // treeLibrary creates a library whose root exists on disk. The member routes
@@ -360,20 +361,34 @@ func TestMemberTreeRefusals(t *testing.T) {
 	})
 }
 
-// fakeScanService is a handwritten scan double: it records the refreshes it
-// was asked for and answers with the configured error.
+// fakeScanService is a handwritten scanning entry: it records the refreshes it
+// was asked for and answers with the configured error. Its admission pair takes
+// the same gate the scan routes take, so a test that holds the slot really
+// refuses a refresh.
 type fakeScanService struct {
 	refreshed []string
 	err       error
 	onRefresh func()
+	gate      *admission.Gate
+}
+
+func (f *fakeScanService) AdmitLibraryScan(string) (func(), error) { return f.admit() }
+
+func (f *fakeScanService) AdmitMemberRefresh() (func(), error) { return f.admit() }
+
+func (f *fakeScanService) admit() (func(), error) {
+	if f.gate == nil {
+		return func() {}, nil
+	}
+	return f.gate.BeginScan()
 }
 
 func (f *fakeScanService) Scan(
 	_ context.Context,
-	_ scanusecase.Request,
-	_ func(scanusecase.Event),
-) (scanusecase.Result, error) {
-	return scanusecase.Result{}, nil
+	_ inventory.Request,
+	_ func(inventory.Event),
+) (inventory.Result, error) {
+	return inventory.Result{}, nil
 }
 
 func (f *fakeScanService) RefreshMember(_ context.Context, folderPath, _ string) error {
@@ -392,7 +407,7 @@ func TestRefreshMemberTree(t *testing.T) {
 	scan := &fakeScanService{}
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scan
+		d.Inventory = scan
 	})
 
 	libID, root := treeLibrary(t, engine, repo, "Music")
@@ -438,12 +453,12 @@ func TestRefreshMemberTree(t *testing.T) {
 // refresh is reported as a failed refresh, and it never looks like a tree.
 func TestRefreshMemberTreeFailureIsReported(t *testing.T) {
 	var repo *sqlite.Repository
-	scan := &fakeScanService{err: scanusecase.NewError(
-		scanusecase.ErrKindInternal, "SCAN_FAILED", "scan blew up", nil,
+	scan := &fakeScanService{err: inventory.NewError(
+		inventory.ErrKindInternal, "SCAN_FAILED", "scan blew up", nil,
 	)}
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scan
+		d.Inventory = scan
 	})
 
 	libID, root := treeLibrary(t, engine, repo, "Music")

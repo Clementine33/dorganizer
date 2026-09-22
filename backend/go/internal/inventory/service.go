@@ -1,4 +1,4 @@
-package scanner
+package inventory
 
 import (
 	"context"
@@ -102,25 +102,13 @@ func (t *progressTracker) emit() {
 	t.cb(t.last)
 }
 
-// Repository interface for scanner.
-type Repository interface {
+// StagingStore is the staging and session storage one scan needs, declared
+// here by its consumer and satisfied by the SQLite adapter.
+type StagingStore interface {
 	WriteStagingEntries(sessionID string, entries []StagingEntry) error
 	MergeStaging(sessionID, rootPath string, stalePaths []string) (int, error)
 	CreateScanSession(session *ScanSession) error
 	UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage string) error
-}
-
-// ScanSession represents a scan session.
-type ScanSession struct {
-	SessionID    string
-	RootPath     string
-	ScopePath    *string
-	Kind         string
-	Status       string
-	ErrorCode    string
-	ErrorMessage string
-	StartedAt    time.Time
-	FinishedAt   time.Time
 }
 
 // StagingEntry represents an entry to be written to staging.
@@ -171,16 +159,25 @@ func detectFormatFromPath(path string, isDir bool) string {
 	}
 }
 
-// ScannerService handles filesystem scanning.
-type ScannerService struct {
-	repo            Repository
+// Pipeline runs one scan: it walks a root (or one member directory) through
+// the injected traversal, stages every observed entry through the store, and
+// merges the staged rows into the inventory. The traversal is a port so this
+// pipeline never reads the filesystem itself.
+type Pipeline struct {
+	repo            StagingStore
+	walkRoot        WalkRoot
+	walkMember      WalkMember
 	rootConcurrency int
 }
 
-// NewScannerService creates a new scanner service.
-func NewScannerService(repo Repository) *ScannerService {
-	return &ScannerService{
+// NewPipeline creates a scan pipeline. walkRoot is the full-root traversal and
+// walkMember the single-directory one; both are wired from the filesystem
+// adapter.
+func NewPipeline(repo StagingStore, walkRoot WalkRoot, walkMember WalkMember) *Pipeline {
+	return &Pipeline{
 		repo:            repo,
+		walkRoot:        walkRoot,
+		walkMember:      walkMember,
 		rootConcurrency: defaultRootConcurrency,
 	}
 }
@@ -189,7 +186,7 @@ func NewScannerService(repo Repository) *ScannerService {
 // parallel directory descent + inline metadata + staging pipeline.
 //
 // Invariant: Root = parallel directory descent + inline metadata + pipeline.
-func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
+func (s *Pipeline) ScanRoot(rootPath string) (string, error) {
 	return s.ScanRootCtx(context.Background(), rootPath)
 }
 
@@ -202,7 +199,7 @@ func (s *ScannerService) ScanRoot(rootPath string) (string, error) {
 // Invariant: Root = parallel directory descent + inline metadata + pipeline.
 //
 //nolint:gocognit,funlen // producer/consumer pipeline with cancellation has many coordinated branches
-func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts ...ScanOption) (string, error) {
+func (s *Pipeline) ScanRootCtx(ctx context.Context, rootPath string, opts ...ScanOption) (string, error) {
 	var o scanOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -259,7 +256,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 			}
 		}
 
-		if err := WalkRootEntriesParallel(ctx, rootPath, rootPath, s.rootConcurrency, emitFn); err != nil {
+		if err := s.walkRoot(ctx, rootPath, rootPath, s.rootConcurrency, emitFn); err != nil {
 			producerErr = err
 			cancel()
 		}
@@ -380,7 +377,7 @@ func (s *ScannerService) ScanRootCtx(ctx context.Context, rootPath string, opts 
 // single-enumerator directory discovery + inline metadata + staging pipeline.
 //
 // Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline.
-func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error) {
+func (s *Pipeline) ScanFolder(folderPath, rootPath string) (string, error) {
 	return s.ScanFolderCtx(context.Background(), folderPath, rootPath)
 }
 
@@ -393,7 +390,7 @@ func (s *ScannerService) ScanFolder(folderPath, rootPath string) (string, error)
 // Invariant: Folder = single-enumerator directory discovery + inline metadata + pipeline.
 //
 //nolint:gocognit,funlen // mirrors the root-scan pipeline branches (folder-scoped)
-func (s *ScannerService) ScanFolderCtx(
+func (s *Pipeline) ScanFolderCtx(
 	ctx context.Context,
 	folderPath, rootPath string,
 	opts ...ScanOption,
@@ -453,7 +450,7 @@ func (s *ScannerService) ScanFolderCtx(
 			}
 		}
 
-		if err := WalkFolderEntries(ctx, folderPath, rootPath, emitFn); err != nil {
+		if err := s.walkMember(ctx, folderPath, rootPath, emitFn); err != nil {
 			producerErr = err
 			cancel()
 		}

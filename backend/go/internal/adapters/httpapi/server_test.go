@@ -10,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 )
 
@@ -35,13 +37,32 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 	return NewServer(deps)
 }
 
+// wireInventory builds the real scanning entry over the test repository: the
+// staging adapter, the filesystem traversal and the library row the outcome is
+// recorded on. gate may be nil, which is the state of a process without file
+// management.
+func wireInventory(d *Dependencies, gate *admission.Gate) {
+	d.Inventory = inventory.NewService(
+		inventory.NewPipeline(
+			sqlite.NewScanStaging(d.Repo),
+			filesystem.WalkRootEntriesParallel,
+			filesystem.WalkFolderEntries,
+		),
+		d.Repo,
+		gate,
+		d.Repo.UpdateLibraryScanState,
+	)
+}
+
 // testGate installs one gate into every path that takes a slot — the library
-// service (root change, deletion) and the scan routes — so a test that holds
-// the slot really refuses both. Replacing only Dependencies.Gate would leave
-// the library service holding its own, and the test would pass vacuously.
+// service (root change, deletion), the scanning entry and direct file
+// management — so a test that holds the slot really refuses them all. One
+// shared gate is the point: a path holding its own would pass vacuously.
 func testGate(d *Dependencies, gate *admission.Gate) {
-	d.Gate = gate
 	d.Library = library.NewService(d.Repo, gate)
+	if d.Inventory == nil {
+		wireInventory(d, gate)
+	}
 }
 
 // newHTTPTestRepository opens a repository on a fresh temp DB file.

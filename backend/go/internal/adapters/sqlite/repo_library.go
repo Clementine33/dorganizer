@@ -8,23 +8,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/pathnorm"
 )
 
 // ==================== Types ====================
-
-// EntryRow is a row from the entries table used for building folder trees.
-type EntryRow struct {
-	Path       string
-	ParentPath string
-	Name       string
-	IsDir      bool
-	Size       int64
-	Mtime      int64
-	Bitrate    *int32
-	Format     string
-}
 
 // audioExtCond is a SQL predicate matching file entries whose name has one of
 // the recognized audio extensions (case-insensitive).
@@ -463,7 +452,7 @@ func (r *Repository) DirAudioCounts(rootPath string, relPaths []string) (map[str
 // prefix itself) for tree building. Path identity is binary and slash-boundary
 // exact, so folder names like "100%_hits" match only their own subtree and
 // case-distinct siblings stay distinct.
-func (r *Repository) ListEntriesUnderPath(pathPrefix string) ([]EntryRow, error) {
+func (r *Repository) ListEntriesUnderPath(pathPrefix string) ([]inventory.Entry, error) {
 	pathPrefix = pathnorm.NormalizeToPOSIX(pathPrefix)
 	rows, err := r.db.Query(`
 		SELECT path, parent_path, name, is_dir, size, mtime, bitrate, format
@@ -476,9 +465,9 @@ func (r *Repository) ListEntriesUnderPath(pathPrefix string) ([]EntryRow, error)
 	}
 	defer rows.Close()
 
-	var entries []EntryRow
+	var entries []inventory.Entry
 	for rows.Next() {
-		var e EntryRow
+		var e inventory.Entry
 		var isDir int
 		var bitrate sql.NullInt32
 		var format sql.NullString

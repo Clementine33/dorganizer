@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 // seedScanTree writes a small real music tree on disk and returns its root.
@@ -36,7 +35,7 @@ func TestScanSSEHappyPath(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 
 	// Create the library pointing at the temp tree.
@@ -91,7 +90,7 @@ func TestScanSSECancelledByRequestContext(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
@@ -132,7 +131,7 @@ func TestScanSSETypedFailureEmitsErrorEvent(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", missing)
 
@@ -163,14 +162,14 @@ func TestScanSSETypedFailureEmitsErrorEvent(t *testing.T) {
 	}
 }
 
-// TestScanSSENilServiceGuard verifies that an unwired (nil) ScanService
+// TestScanSSENilServiceGuard verifies that an unwired (nil) scanning entry
 // produces a terminal error and a failed scan state instead of a mid-stream
 // panic.
 func TestScanSSENilServiceGuard(t *testing.T) {
 	root := seedScanTree(t)
 
 	var repo *sqlite.Repository
-	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo }) // ScanService left nil
+	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo }) // the scanning entry left nil
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
 	w := doRequest(t, engine, http.MethodPost, "/api/v1/libraries/"+libID+"/scans",
@@ -199,7 +198,7 @@ func TestScanSSERejectsRootOutsideLibrary(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", libraryRoot)
 
@@ -245,7 +244,7 @@ func TestScanAcceptsEmptyBody(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 
@@ -276,7 +275,7 @@ func TestScanAcceptsEmptyBody(t *testing.T) {
 func TestScanRejectsInvalidPayloads(t *testing.T) {
 	root := seedScanTree(t)
 	engine := newTestServer(t, func(d *Dependencies) {
-		d.ScanService = scanusecase.NewService(d.Repo)
+		wireInventory(d, nil)
 	})
 	libID := createLibraryViaAPI(t, engine, "Music", root)
 

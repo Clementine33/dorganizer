@@ -12,8 +12,8 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	inventory "github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 )
 
 // blockingScan is a scan double that holds the scanning slot until released,
@@ -22,6 +22,21 @@ type blockingScan struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	gate    *admission.Gate
+}
+
+// AdmitLibraryScan and AdmitMemberRefresh register the scan against the same
+// gate the file-management path uses: that shared slot is what the test
+// observes when a file operation is refused while a scan runs.
+func (b *blockingScan) AdmitLibraryScan(string) (func(), error) { return b.admit() }
+
+func (b *blockingScan) AdmitMemberRefresh() (func(), error) { return b.admit() }
+
+func (b *blockingScan) admit() (func(), error) {
+	if b.gate == nil {
+		return func() {}, nil
+	}
+	return b.gate.BeginScan()
 }
 
 func newBlockingScan() *blockingScan {
@@ -30,17 +45,17 @@ func newBlockingScan() *blockingScan {
 
 func (b *blockingScan) Scan(
 	ctx context.Context,
-	_ scanusecase.Request,
-	emit func(scanusecase.Event),
-) (scanusecase.Result, error) {
+	_ inventory.Request,
+	emit func(inventory.Event),
+) (inventory.Result, error) {
 	b.once.Do(func() { close(b.started) })
 	select {
 	case <-b.release:
 	case <-ctx.Done():
-		return scanusecase.Result{}, ctx.Err()
+		return inventory.Result{}, ctx.Err()
 	}
-	emit(scanusecase.Event{Type: "completed"})
-	return scanusecase.Result{ScanID: "scan-blocking", RootPath: "/music"}, nil
+	emit(inventory.Event{Type: "completed"})
+	return inventory.Result{ScanID: "scan-blocking", RootPath: "/music"}, nil
 }
 
 func (b *blockingScan) RefreshMember(ctx context.Context, _, _ string) error {
@@ -58,8 +73,9 @@ func fileOpsServer(t *testing.T) (http.Handler, string, *blockingScan) {
 	var gate *admission.Gate
 	handler := newTestServer(t, func(d *Dependencies) {
 		repo = d.Repo
-		d.ScanService = scan
 		gate = admission.NewGate(d.Repo.HasActiveSession)
+		scan.gate = gate
+		d.Inventory = scan
 		testGate(d, gate)
 		d.FileOps = fileops.NewService(gate, func(context.Context, string, string) error { return nil })
 	})

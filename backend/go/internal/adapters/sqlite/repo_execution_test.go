@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 )
 
@@ -387,11 +388,11 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 
 	err := repo.SyncObservedInventory("/music",
 		[]string{"/music/album/gone.mp3"},
-		[]sqlite.InventoryFile{
+		[]inventory.InventoryFile{
 			{Path: "/music/album/changed.mp3", Size: 222, Mtime: 2000},
 			{Path: "/music/album/Delete/gone.mp3", Size: 100, Mtime: 1000},
 		},
-		[]sqlite.GenerationRecord{{
+		[]inventory.GenerationRecord{{
 			Path: "/music/album/changed.mp3", Codec: "mp3", Encoder: "libmp3lame",
 			EncoderVersion: "ffmpeg version n9.0.1", BitrateKbps: 320, Mode: "cbr",
 			Size: 222, Mtime: 2000, ContentSHA256: "0f1e2d",
@@ -436,7 +437,7 @@ func TestSyncObservedInventoryLifecycle(t *testing.T) {
 	}
 
 	// An unchanged observation keeps the surviving bitrate fact and revision.
-	err = repo.SyncObservedInventory("/music", nil, []sqlite.InventoryFile{
+	err = repo.SyncObservedInventory("/music", nil, []inventory.InventoryFile{
 		{Path: "/music/album/changed.mp3", Size: 222, Mtime: 2000},
 	}, nil)
 	if err != nil {

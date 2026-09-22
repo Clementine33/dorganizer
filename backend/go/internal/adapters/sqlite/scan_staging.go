@@ -1,28 +1,28 @@
-package scanner
+package sqlite
 
 import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
 
-	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
+	"github.com/onsei/organizer/backend/internal/inventory"
 )
 
-// SQLiteRepositoryAdapter adapts sqlite.Repository to scanner.Repository.
-type SQLiteRepositoryAdapter struct {
-	repo *sqlite.Repository
+// ScanStaging adapts Repository to scanner.Repository.
+type ScanStaging struct {
+	repo *Repository
 	// testExecSeam allows tests to inject failures after N exec calls.
 	// Production code leaves this nil (uses real exec).
 	testExecSeam func(callCount int) error
 }
 
-// NewSQLiteRepositoryAdapter creates a scanner repository adapter for sqlite.
-func NewSQLiteRepositoryAdapter(repo *sqlite.Repository) *SQLiteRepositoryAdapter {
-	return &SQLiteRepositoryAdapter{repo: repo}
+// NewScanStaging creates a scanner repository adapter for sqlite.
+func NewScanStaging(repo *Repository) *ScanStaging {
+	return &ScanStaging{repo: repo}
 }
 
 // execFn is a testable wrapper around sql.Stmt.Exec for deterministic failure injection.
-func (a *SQLiteRepositoryAdapter) execStmt(stmt *sql.Stmt, callCount int, args ...any) (sql.Result, error) {
+func (a *ScanStaging) execStmt(stmt *sql.Stmt, callCount int, args ...any) (sql.Result, error) {
 	if a.testExecSeam != nil {
 		if err := a.testExecSeam(callCount); err != nil {
 			return nil, err
@@ -36,7 +36,7 @@ const defaultBatchSize = 1000
 // WriteStagingEntries writes scanner staging entries into sqlite entries_staging.
 // Entries are chunked into batches (defaultBatchSize=1000) within a single transaction
 // for atomicity. On any mid-batch error, the entire transaction is rolled back.
-func (a *SQLiteRepositoryAdapter) WriteStagingEntries(_ string, entries []StagingEntry) error {
+func (a *ScanStaging) WriteStagingEntries(_ string, entries []inventory.StagingEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -94,7 +94,7 @@ func (a *SQLiteRepositoryAdapter) WriteStagingEntries(_ string, entries []Stagin
 }
 
 // MergeStaging merges staged entries and returns merged count.
-func (a *SQLiteRepositoryAdapter) MergeStaging(sessionID, rootPath string, _ []string) (int, error) {
+func (a *ScanStaging) MergeStaging(sessionID, rootPath string, _ []string) (int, error) {
 	if err := a.repo.MergeStagingSimple(sessionID, rootPath); err != nil {
 		return 0, err
 	}
@@ -110,14 +110,14 @@ func (a *SQLiteRepositoryAdapter) MergeStaging(sessionID, rootPath string, _ []s
 }
 
 // CreateScanSession persists a scanner scan session in sqlite.
-func (a *SQLiteRepositoryAdapter) CreateScanSession(session *ScanSession) error {
+func (a *ScanStaging) CreateScanSession(session *inventory.ScanSession) error {
 	var scopePath *string
 	if session.ScopePath != nil {
 		p := filepath.ToSlash(*session.ScopePath)
 		scopePath = &p
 	}
 
-	return a.repo.CreateScanSession(&sqlite.ScanSession{
+	return a.repo.CreateScanSession(&inventory.ScanSession{
 		SessionID:    session.SessionID,
 		RootPath:     filepath.ToSlash(session.RootPath),
 		ScopePath:    scopePath,
@@ -131,14 +131,14 @@ func (a *SQLiteRepositoryAdapter) CreateScanSession(session *ScanSession) error 
 }
 
 // UpdateScanSessionStatus updates session lifecycle status in sqlite.
-func (a *SQLiteRepositoryAdapter) UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage string) error {
+func (a *ScanStaging) UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage string) error {
 	return a.repo.UpdateScanSessionStatus(sessionID, status, errorCode, errorMessage)
 }
 
 // CleanupStagingSession deletes all staging entries for a session.
 // This is used for failure cleanup to remove partial staging data.
 // Note: Partial staging persistence may exist before cleanup - this is expected.
-func (a *SQLiteRepositoryAdapter) CleanupStagingSession(sessionID string) error {
+func (a *ScanStaging) CleanupStagingSession(sessionID string) error {
 	_, err := a.repo.DB().Exec(
 		"DELETE FROM entries_staging WHERE session_id = ?",
 		sessionID,
@@ -151,19 +151,19 @@ func (a *SQLiteRepositoryAdapter) CleanupStagingSession(sessionID string) error 
 
 // pipelineRepo is an internal interface for pipeline batch writing capabilities.
 // This interface is NOT part of the public Repository interface and is only
-// used internally by ScannerService for streaming batch writes.
+// used internally by Pipeline for streaming batch writes.
 type pipelineRepo interface {
-	WriteStagingBatch(sessionID string, batch []StagingEntry) error
+	WriteStagingBatch(sessionID string, batch []inventory.StagingEntry) error
 	CleanupStagingSession(sessionID string) error
 }
 
 // Compile-time interface check.
-var _ pipelineRepo = (*SQLiteRepositoryAdapter)(nil)
+var _ pipelineRepo = (*ScanStaging)(nil)
 
 // WriteStagingBatch writes a batch of staging entries in a single transaction.
 // This is used for pipeline batch writing (batchSize=1000).
 // Each batch is committed individually - partial persistence is possible on failure.
-func (a *SQLiteRepositoryAdapter) WriteStagingBatch(sessionID string, batch []StagingEntry) error {
+func (a *ScanStaging) WriteStagingBatch(sessionID string, batch []inventory.StagingEntry) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -211,4 +211,4 @@ func (a *SQLiteRepositoryAdapter) WriteStagingBatch(sessionID string, batch []St
 }
 
 // Ensure compile-time interface compatibility.
-var _ Repository = (*SQLiteRepositoryAdapter)(nil)
+var _ inventory.StagingStore = (*ScanStaging)(nil)

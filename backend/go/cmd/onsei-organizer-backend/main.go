@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
 	"github.com/onsei/organizer/backend/internal/adapters/httpapi"
 	appconfig "github.com/onsei/organizer/backend/internal/adapters/settings"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/bootstrap"
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/maintenance"
 	"github.com/onsei/organizer/backend/internal/services/fileops"
-	"github.com/onsei/organizer/backend/internal/services/scanner"
 	tasksconversion "github.com/onsei/organizer/backend/internal/tasks/conversion"
-	scanusecase "github.com/onsei/organizer/backend/internal/usecase/scan"
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
@@ -148,6 +148,64 @@ func main() {
 	runServer(ctx, repo, dataDir, configDir, ffmpegPath, token, version)
 }
 
+// services is the wired core: one gate, one scanning entry, one library entry
+// and the workset service. It exists so the listener setup below reads as
+// startup, not as assembly.
+type services struct {
+	gate    *admission.Gate
+	library *library.Service
+	scan    inventory.Service
+	fileOps *fileops.Service
+	workset worksetusecase.Service
+}
+
+// buildServices wires the process. Direct file management and the managed task
+// paths share one admission control: a file operation is refused while a scan,
+// planning session or execution is running, and starting one of those is
+// refused while a file operation holds the slot (ADR 0002 §2).
+//
+// There is one scanning entry for the whole process — scanning a library,
+// refreshing one member directory, and the refresh a session does before
+// planning or writing all go through the same pipeline.
+func buildServices(repo *sqlite.Repository, configDir string, generationConcurrency int) services {
+	gate := admission.NewGate(repo.HasActiveSession)
+	librarySvc := library.NewService(repo, gate)
+	scanSvc := inventory.NewService(
+		inventory.NewPipeline(
+			sqlite.NewScanStaging(repo),
+			filesystem.WalkRootEntriesParallel,
+			filesystem.WalkFolderEntries,
+		),
+		repo,
+		gate,
+		librarySvc.RecordScanState,
+	)
+	// Encode concurrency stays automatic (min(4, CPU count)); a user setting
+	// will feed this parameter later.
+	//
+	// Task registration: every kind a workset operation can carry. Creation
+	// materializes one operation and seed draft per entry, in this order.
+	//
+	// Sessions refresh their member folders before planning and before writing:
+	// the stored inventory is the only input fact a plan reads, and it is only
+	// as current as the last scan.
+	worksetSvc := worksetusecase.NewService(
+		repo,
+		generationConcurrency,
+		0,
+		[]worksetusecase.Task{tasksconversion.New(configDir)},
+		scanSvc.RefreshMember,
+		gate.Enqueue,
+	)
+	return services{
+		gate:    gate,
+		library: librarySvc,
+		scan:    scanSvc,
+		fileOps: fileops.NewService(gate, scanSvc.RefreshMember),
+		workset: worksetSvc,
+	}
+}
+
 // runServer starts the HTTP listener and blocks until the process is killed.
 // Startup failures are fatal (log.Fatalf) so CI/dev surfaces them.
 func runServer(
@@ -165,7 +223,6 @@ func runServer(
 
 	// The HTTP API is the only client surface. The workset service owns the
 	// async planning dispatcher.
-	scanSvc := scanusecase.NewService(repo)
 	generationConcurrency := appconfig.DefaultAppConfig().Workset.GenerationConcurrency
 	if cfg, err := os.ReadFile(filepath.Join(configDir, "config.json")); err == nil {
 		var appCfg appconfig.AppConfig
@@ -173,41 +230,18 @@ func runServer(
 			generationConcurrency = appCfg.Workset.GenerationConcurrency
 		}
 	}
-	// Task registration: every kind a workset operation can carry. Creation
-	// materializes one operation and seed draft per entry, in this order.
-	//
-	// Sessions refresh their member folders through the scanner before planning
-	// and before writing: the stored inventory is the only input fact a plan
-	// reads, and it is only as current as the last scan.
-	memberScanner := scanner.NewScannerService(scanner.NewSQLiteRepositoryAdapter(repo))
-	// Direct file management and the managed task paths share one admission
-	// control: a file operation is refused while a scan, planning session or
-	// execution is running, and starting one of those is refused while a file
-	// operation holds the slot (ADR 0002 §2).
-	gate := admission.NewGate(repo.HasActiveSession)
-	fileOpsSvc := fileops.NewService(gate, func(scanCtx context.Context, folderPath, rootPath string) error {
-		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
-		return scanErr
-	})
-	// Encode concurrency stays automatic (min(4, CPU count)); a user setting
-	// will feed this parameter later.
-	worksetSvc := worksetusecase.NewService(repo, generationConcurrency, 0, []worksetusecase.Task{
-		tasksconversion.New(configDir),
-	}, func(scanCtx context.Context, folderPath, rootPath string) error {
-		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)
-		return scanErr
-	}, gate.Enqueue)
+	services := buildServices(repo, configDir, generationConcurrency)
 
 	// Startup recovery: any session left queued/running by a previous process
 	// is marked interrupted before the dispatcher starts from an empty queue.
 	interruptStaleSessions(repo)
-	worksetSvc.DispatcherHandle().Start()
-	defer worksetSvc.DispatcherHandle().Stop()
+	services.workset.DispatcherHandle().Start()
+	defer services.workset.DispatcherHandle().Stop()
 
 	// Idle-time maintenance shares the gate with everything that reads or writes
 	// the trees and the database, so a pass and a scan, planning session or
 	// execution never overlap. It runs for this process's lifetime only.
-	maintenanceLoop := maintenance.New(repo, gate.BeginMaintenance, maintenance.Options{
+	maintenanceLoop := maintenance.New(repo, services.gate.BeginMaintenance, maintenance.Options{
 		ScanRetention:       scanRetention,
 		GenerationRetention: generationRetention,
 	})
@@ -221,23 +255,17 @@ func runServer(
 		maintenanceLoop.Run(ctx)
 	}()
 
-	// The library entry owns the library row: creation, edits, root changes and
-	// deletions. A root change and a deletion take the same admission slot as
-	// direct file management (ADR 0002 §2), so it gets the one gate.
-	librarySvc := library.NewService(repo, gate)
-
 	httpSrv := &http.Server{
 		Handler: httpapi.NewServer(httpapi.Dependencies{
 			Repo:           repo,
-			Library:        librarySvc,
+			Library:        services.library,
 			ConfigDir:      configDir,
 			Token:          token,
 			CORSOrigins:    parseCORSOrigins(os.Getenv("ONSEI_CORS_ORIGINS")),
 			Version:        version,
-			ScanService:    scanSvc,
-			WorksetService: worksetSvc,
-			FileOps:        fileOpsSvc,
-			Gate:           gate,
+			Inventory:      services.scan,
+			WorksetService: services.workset,
+			FileOps:        services.fileOps,
 		}),
 	}
 	go func() {
