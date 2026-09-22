@@ -308,7 +308,7 @@ func scanLibrary(row interface{ Scan(...any) error }) (*library.Library, error) 
 // The listing comes from the scanned inventory rather than from the disk, so
 // it describes exactly the state the rest of the workbench reads, and its
 // identity is the library-relative path, which a rescan cannot change.
-func (r *Repository) ListLibraryDirs(rootPath string) ([]*library.LibraryDir, error) {
+func (r *Repository) ListLibraryDirs(rootPath string) ([]*inventory.LibraryDir, error) {
 	rootPath = pathnorm.NormalizeToPOSIX(rootPath)
 	if len(rootPath) > 1 {
 		rootPath = strings.TrimRight(rootPath, "/")
@@ -333,9 +333,9 @@ func (r *Repository) ListLibraryDirs(rootPath string) ([]*library.LibraryDir, er
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	var out []*library.LibraryDir
+	var out []*inventory.LibraryDir
 	for rows.Next() {
-		var d library.LibraryDir
+		var d inventory.LibraryDir
 		if err := rows.Scan(&d.Path, &d.Name, &d.AudioFileCount, &d.FileCount); err != nil {
 			return nil, err
 		}

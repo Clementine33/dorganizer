@@ -27,29 +27,26 @@ type Library struct {
 	LastScanError  string
 }
 
-// LibraryDir is one direct child directory of a library root as the workbench
-// overview lists it: identity is the library-relative path (stable across
-// rescans), and the audio count is a status fact — a directory without audio
-// is still listed and still browsable.
-type LibraryDir struct {
-	Path           string
-	Name           string
-	RelPath        string
-	AudioFileCount int
-	FileCount      int
-}
-
 // Service applies the library use cases.
 type Service struct {
-	store Store
-	gate  *admission.Gate
+	store         Store
+	gate          *admission.Gate
+	inventory     InventoryReader
+	resolveMember ResolveMember
 }
 
 // NewService creates the library service. gate is the process-wide admission
 // control; a nil gate means this process has no direct file management wired,
-// which is the state every test server starts in.
-func NewService(store Store, gate *admission.Gate) *Service {
-	return &Service{store: store, gate: gate}
+// which is the state every test server starts in. inventory is the read side
+// the overview and the member trees browse through, resolveMember the disk
+// check the member resolution applies.
+func NewService(
+	store Store,
+	gate *admission.Gate,
+	inventory InventoryReader,
+	resolveMember ResolveMember,
+) *Service {
+	return &Service{store: store, gate: gate, inventory: inventory, resolveMember: resolveMember}
 }
 
 // beginManual takes the direct-file-management slot for a use case that

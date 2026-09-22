@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 )
 
@@ -276,7 +277,7 @@ func TestListLibraryDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListLibraryDirs failed: %v", err)
 	}
-	got := map[string]library.LibraryDir{}
+	got := map[string]inventory.LibraryDir{}
 	for _, d := range dirs {
 		got[d.RelPath] = *d
 	}

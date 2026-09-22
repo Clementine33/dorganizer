@@ -15,6 +15,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
+	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
 // newTestServer builds a router with a fresh temp repository and the given
@@ -26,7 +27,7 @@ func newTestServer(t *testing.T, mutate func(*Dependencies)) http.Handler {
 	repo := newHTTPTestRepository(t)
 	deps := Dependencies{
 		Repo:        repo,
-		Library:     library.NewService(repo, nil),
+		Library:     library.NewService(repo, nil, repo, fileops.ResolveMember),
 		Token:       "",
 		CORSOrigins: []string{},
 		Version:     "dev",
@@ -59,7 +60,7 @@ func wireInventory(d *Dependencies, gate *admission.Gate) {
 // management — so a test that holds the slot really refuses them all. One
 // shared gate is the point: a path holding its own would pass vacuously.
 func testGate(d *Dependencies, gate *admission.Gate) {
-	d.Library = library.NewService(d.Repo, gate)
+	d.Library = library.NewService(d.Repo, gate, d.Repo, fileops.ResolveMember)
 	if d.Inventory == nil {
 		wireInventory(d, gate)
 	}

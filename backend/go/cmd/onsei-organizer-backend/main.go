@@ -169,7 +169,7 @@ type services struct {
 // planning or writing all go through the same pipeline.
 func buildServices(repo *sqlite.Repository, configDir string, generationConcurrency int) services {
 	gate := admission.NewGate(repo.HasActiveSession)
-	librarySvc := library.NewService(repo, gate)
+	librarySvc := library.NewService(repo, gate, repo, fileops.ResolveMember)
 	scanSvc := inventory.NewService(
 		inventory.NewPipeline(
 			sqlite.NewScanStaging(repo),
