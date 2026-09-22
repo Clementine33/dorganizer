@@ -252,7 +252,6 @@ test.describe('workset execution', () => {
       await page.getByTestId(`common-${partition}-preset-opus-160`).click()
     }
     await expect(page.getByTestId('common-matched-preset-opus-160')).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.getByTestId('encoded-codec-hint').first()).toContainText('48 kHz')
     await page.getByTestId('apply-common').click()
     await expect(page.getByTestId('apply-common')).toBeDisabled()
     await page.getByRole('link', { name: '← 转换列表' }).click()

@@ -43,7 +43,7 @@ describe('CommonSettingsForm', () => {
     const wrapper = mountForm(draft())
     // The values are the persisted ones, editable in place.
     expect(wrapper.findComponent(UnitSelect).props('value')).toBe('strict')
-    expect((wrapper.get('[data-testid="common-classifier_tags"]').element as HTMLInputElement).value).toBe('自定义')
+    expect(wrapper.get('[data-testid="common-classifier_tags"]').text()).toContain('自定义')
     expect(wrapper.find('[data-testid="common-matched-encoded"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="unit-mode-set"]').exists()).toBe(false)
   })

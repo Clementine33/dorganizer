@@ -39,6 +39,25 @@ describe('editor session', () => {
     expect(store.isDirty).toBe(true)
   })
 
+  it('does not count an intent that lands on the persisted value as an edit', () => {
+    const store = useWorksetEditorStore()
+    store.open({
+      worksetId: 'ws-1',
+      operation: 'conversion',
+      target: { kind: 'common' },
+      baseVersion: 3,
+      baseDocument: base,
+    })
+
+    // Re-picking the value that is already saved records an intent, but it
+    // changes nothing — it must not read as dirty (C09) or block a switch.
+    store.setUnit('mode', { intent: 'set', value: base.mode })
+    store.setUnit('matched', { intent: 'set', value: base.matched })
+
+    expect(store.isDirty).toBe(false)
+    expect(openMember(store, 'm-1')).toBe(true)
+  })
+
   it('does not mutate the persisted base document', () => {
     const store = useWorksetEditorStore()
     openMember(store, 'm-1')

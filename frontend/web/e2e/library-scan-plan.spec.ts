@@ -121,8 +121,8 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('nav-conversion')).not.toHaveAttribute('aria-current', 'page')
     // The fields are editable directly, and 恢复默认 puts a group back to the
     // seeded value.
-    await page.getByTestId('common-classifier_tags').fill('SEなし')
-    await page.getByTestId('common-classifier_tags').blur()
+    await page.getByTestId('common-classifier_tags-input').fill('SEなし')
+    await page.getByTestId('common-classifier_tags-input').press('Enter')
     await pickUnitOption(page, 'common-matched-encoded', 'MP3')
     await page.getByTestId('apply-common').click()
     await expect(page.getByTestId('conversion-settings')).toBeVisible()
@@ -231,7 +231,7 @@ test.describe('workset operation smoke', () => {
     // unfolded first (it was folded back in the drawer above).
     await page.getByTestId('nav-group-conversion').click()
     await page.getByTestId('nav-conversion-settings').click()
-    await pickUnitOption(page, 'common-mode', '严格（strict）')
+    await pickUnitOption(page, 'common-mode', '严格')
     await page.getByTestId('apply-common').click()
     await page.getByRole('link', { name: '← 转换列表' }).click()
     await page.getByTestId('start-generation').click()

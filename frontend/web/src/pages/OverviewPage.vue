@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import Modal from '@/components/ui/modal/Modal.vue'
 import WorkbenchShell from '@/components/layout/WorkbenchShell.vue'
+import WorkbenchNav from '@/features/worksets/WorkbenchNav.vue'
+import { settingsEditBlockedReason } from '@/features/worksets/workbench-nav'
 import ScanProgressBar from '@/features/libraries/ScanProgressBar.vue'
 import DirList from '@/features/libraries/DirList.vue'
 import LibraryManager from '@/features/libraries/LibraryManager.vue'
@@ -70,6 +72,12 @@ const dirsError = computed(() => {
 
 const recordQuery = useQuery(() => currentRecordQueryOptions(api, libraryId.value, CONVERSION))
 const record = computed(() => recordQuery.data.value?.workset ?? null)
+const conversionOperation = computed(
+  () => record.value?.operations.find((operation) => operation.operation_type === CONVERSION) ?? null,
+)
+// The sidebar disables 转换全局设置 for the same reasons the conversion page
+// does: this page shares the navigation, so it shares its one source of truth.
+const settingsBlockedReason = computed(() => settingsEditBlockedReason(conversionOperation.value))
 
 // ---- scope → record ---------------------------------------------------
 
@@ -244,22 +252,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
     </template>
 
     <template #nav>
-      <nav class="p-2" aria-label="工作台导航">
-        <RouterLink
-          :to="{ name: 'workbench-overview', params: { libraryId } }"
-          class="block rounded-md px-2 py-1.5 text-xs hover:bg-muted"
-          :class="filesOpen ? '' : 'bg-muted font-medium'"
-        >
-          概览与成员
-        </RouterLink>
-        <RouterLink
-          v-if="record"
-          :to="{ name: 'conversion', params: { libraryId } }"
-          class="mt-0.5 block rounded-md px-2 py-1.5 text-xs hover:bg-muted"
-        >
-          转换
-        </RouterLink>
-      </nav>
+      <WorkbenchNav :library-id="libraryId" :settings-blocked-reason="settingsBlockedReason" />
     </template>
 
     <template #main>

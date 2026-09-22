@@ -62,6 +62,7 @@ function routerFor(): Router {
       { path: '/worksets/:libraryId', name: 'workbench-overview', component: OverviewPage },
       { path: '/worksets/:libraryId/f/:dirId', name: 'overview-files', component: { template: '<div />' } },
       { path: '/worksets/:libraryId/conversion', name: 'conversion', component: { template: '<div />' } },
+      { path: '/worksets/:libraryId/conversion/settings', name: 'conversion-settings', component: { template: '<div />' } },
       { path: '/worksets', name: 'worksets', component: { template: '<div />' } },
     ],
   })
@@ -97,6 +98,15 @@ describe('workbench overview', () => {
     const { wrapper, api } = await mountOverview()
 
     expect(api.listDirs).toHaveBeenCalled()
+    // The overview shares the workbench navigation with the conversion page
+    // instead of hand-rolling its own entry list (N20). jsdom's zero-width
+    // container is the narrow tier, so the same list lives in the drawer.
+    await wrapper.get('[data-testid="workbench-nav-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="nav-overview"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.find('[data-testid="nav-conversion"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="workbench-nav-toggle"]').trigger('click')
+    await flushPromises()
     expect(wrapper.get('[data-testid="dir-list"]').text()).toContain('共 2 个文件夹')
     // The overview has no detail to show, so it does not reserve the wide
     // tier's detail column: the list is what the page is.

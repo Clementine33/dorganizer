@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet } from '@/components/ui/modal'
 import WorkbenchShell from '@/components/layout/WorkbenchShell.vue'
 import WorkbenchNav from '@/features/worksets/WorkbenchNav.vue'
+import { settingsEditBlockedReason } from '@/features/worksets/workbench-nav'
 import OperationHeader from '@/features/worksets/OperationHeader.vue'
 import MemberList from '@/features/worksets/MemberList.vue'
 import {
@@ -334,11 +335,7 @@ watch(
  * frozen plan being reviewed. The navigation entry is disabled with the reason
  * instead of opening a form whose save the server would refuse.
  */
-const settingsBlockedReason = computed(() => {
-  if (operation.value?.planning_state === 'orphaned') return '媒体库已删除：该记录只读'
-  if (operation.value?.active_generation) return '正在生成计划版本：完成后才能修改设置'
-  return null
-})
+const settingsBlockedReason = computed(() => settingsEditBlockedReason(operation.value))
 
 /** The page in view, for the narrow header context (N31). */
 const currentPage = computed(() => {

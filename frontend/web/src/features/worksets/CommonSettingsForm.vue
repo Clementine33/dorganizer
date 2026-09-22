@@ -24,8 +24,8 @@ const props = defineProps<{
 const editor = useWorksetEditorStore()
 
 const UNIT_LABELS: Record<OverrideUnit, { label: string; hint: string }> = {
-  mode: { label: '转换模式', hint: '严格保留组件一致性；可用源在没有合格无损源时保留原轨。' },
-  classifier_tags: { label: '分类标签', hint: '按字面匹配判定“无音效”；留空表示不做分类。' },
+  mode: { label: '转换模式', hint: '严格模式要求最终格式完全符合设置；可用源模式在没有合格无损源时保留原轨。' },
+  classifier_tags: { label: '分类标签', hint: '按字面匹配判定“无音效”,不区分大小写；留空表示不做分类。' },
   matched: { label: '无音效目标', hint: '匹配标签的文件夹要保留或生成的目标。' },
   unmatched: { label: '有音效目标', hint: '未匹配标签的文件夹要保留或生成的目标。' },
 }
@@ -87,9 +87,6 @@ const dirtyUnits = computed(() => OVERRIDE_UNITS.filter((unit) => editor.session
 <template>
   <div class="space-y-3" data-testid="common-settings-form">
     <div class="flex flex-wrap items-center gap-2">
-      <p class="text-[11px] text-[var(--text-muted)]">
-        全局设置是所有继承它的文件夹的基准；此处修改只写全局值，不会给任何文件夹写入独立设置。
-      </p>
       <Button
         v-if="dirtyUnits.length > 0 || deleteModeDirty"
         size="xs"

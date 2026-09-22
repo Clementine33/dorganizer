@@ -1,4 +1,5 @@
 import type { RouteLocationRaw } from 'vue-router'
+import type { Operation } from '@/lib/api/types'
 
 /**
  * The workbench navigation definition (N05, N18, N19).
@@ -88,4 +89,15 @@ export function workbenchNavPosition(routeName: unknown): WorkbenchNavPosition |
   return typeof routeName === 'string' && routeName in POSITION_BY_ROUTE_NAME
     ? POSITION_BY_ROUTE_NAME[routeName as WorkbenchRouteName]
     : null
+}
+
+/**
+ * Why 转换全局设置 cannot be edited right now (E09): generating, or orphaned
+ * against a deleted library. Shared so the overview and the conversion page
+ * disable the entry with the same words, never one reason each.
+ */
+export function settingsEditBlockedReason(operation: Operation | null | undefined): string | null {
+  if (operation?.planning_state === 'orphaned') return '媒体库已删除：该记录只读'
+  if (operation?.active_generation) return '正在生成计划版本：完成后才能修改设置'
+  return null
 }

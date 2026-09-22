@@ -44,7 +44,7 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
   }),
   getters: {
     active: (state) => state.session,
-    isDirty: (state) => (state.session ? !intentIsEmpty(state.session.intent) : false),
+    isDirty: (state) => (state.session ? sessionHasChanges(state.session) : false),
     /** The document a save would send: base + intents, never the live draft. */
     pendingDocument(state): OperationDraftDocument | null {
       if (!state.session) return null
@@ -69,7 +69,7 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
       baseDocument: OperationDraftDocument
       readOnly?: boolean
     }): boolean {
-      if (this.session && !intentIsEmpty(this.session.intent) && !sameTarget(this.session.target, input.target)) {
+      if (this.session && sessionHasChanges(this.session) && !sameTarget(this.session.target, input.target)) {
         this.conflictNotices++
         return false
       }
@@ -168,7 +168,23 @@ function saveFailureMessage(error: { code?: string; message?: string }): string 
   return mapped ?? error.message ?? '保存草稿失败'
 }
 
-function sameTarget(a: EditTarget, b: EditTarget): boolean {  if (a.kind !== b.kind) return false
+/**
+ * Whether a session holds edits that would actually change the saved document.
+ * A recorded intent that lands on the value already persisted — re-picking the
+ * same option, clearing an override that was never set — is not an edit, so it
+ * must not read as dirty or block switching the edit target (E04, C09).
+ */
+function sessionHasChanges(session: EditSession): boolean {
+  // Both sides are built by applyIntent so the comparison is normalization-
+  // insensitive: a persisted document that still carries a bare member record
+  // (something the server prunes) is not a difference.
+  const applied = applyIntent(session.baseDocument, session.target, session.intent)
+  const untouched = applyIntent(session.baseDocument, session.target, EMPTY_INTENT)
+  return !sameDocument(applied, untouched)
+}
+
+function sameTarget(a: EditTarget, b: EditTarget): boolean {
+  if (a.kind !== b.kind) return false
   if (a.kind === 'member' && b.kind === 'member') return a.memberId === b.memberId
   if (a.kind === 'batch' && b.kind === 'batch') {
     return a.memberIds.length === b.memberIds.length && a.memberIds.every((id, i) => id === b.memberIds[i])

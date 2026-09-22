@@ -43,6 +43,15 @@ function statusText(wrapper: VueWrapper, unit: string): string {
   return wrapper.get(`[data-testid="unit-${unit}"] [data-testid="unit-status"]`).text()
 }
 
+/** Types into the TagsInput one character at a time so the delimiter commits a tag. */
+async function typeTags(wrapper: VueWrapper, testId: string, text: string) {
+  const input = wrapper.get(`[data-testid="${testId}"]`)
+  for (const char of text) {
+    ;(input.element as HTMLInputElement).value += char
+    await input.trigger('input', { data: char })
+  }
+}
+
 describe('OverrideEditor', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -157,13 +166,14 @@ describe('OverrideEditor', () => {
     expect(useWorksetEditorStore().session?.intent.units.unmatched).toEqual({ intent: 'inherit' })
 
     await wrapper.get('[data-testid="unit-classifier_tags-override"]').trigger('click')
-    await wrapper.get('[data-testid="override-classifier_tags"]').setValue('X, Y')
+    await typeTags(wrapper, 'override-classifier_tags-input', 'X, Y,')
     await nextTick()
 
     const members = useWorksetEditorStore().pendingDocument?.members ?? []
     expect(members).toHaveLength(2)
     for (const record of members) {
-      expect(record.overrides?.classifier_tags).toEqual(['X', 'Y'])
+      // The seeded tag stays a removable chip; the typed ones are appended.
+      expect(record.overrides?.classifier_tags).toEqual(['A', 'X', 'Y'])
     }
     // The batch never touches the matched overrides it did not edit.
     expect(members.find((m) => m.member_id === 'm-1')?.overrides?.matched).toEqual(FLAC)

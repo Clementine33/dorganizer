@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import {
+  TagsInputInput, TagsInputItem, TagsInputItemDelete, TagsInputItemText, TagsInputRoot,
+} from 'reka-ui'
 import { cloneProfile } from '@/features/worksets/plan-readers'
 import type { DesiredProfile, OverrideUnit } from '@/lib/api/types'
 import UnitSelect from './UnitSelect.vue'
@@ -22,8 +25,8 @@ const props = defineProps<{
 const emit = defineEmits<{ change: [value: unknown] }>()
 
 const MODES = [
-  { value: 'available_sources', label: '可用源（available_sources）' },
-  { value: 'strict', label: '严格（strict）' },
+  { value: 'available_sources', label: '可用源' },
+  { value: 'strict', label: '严格' },
 ]
 
 // An absent lane is not "do not generate": the declared profile is the
@@ -53,19 +56,20 @@ const PRESETS = [
 ]
 
 const profile = computed<DesiredProfile>(() => cloneProfile(props.value))
-const tags = computed(() => ((props.value as string[] | undefined) ?? []).join(', '))
+const tagList = computed<string[]>(() => (props.value as string[] | undefined) ?? [])
+
+// A tag ends at a comma, with any surrounding spaces swallowed so "," and ", "
+// both commit the same tag. Reka keeps a pasted list split the same way.
+const TAG_DELIMITER = /\s*,\s*/
 
 function setMode(mode: string) {
   emit('change', mode)
 }
 
-function setTags(raw: string) {
+function setTags(next: string[]) {
   emit(
     'change',
-    raw
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter((tag) => tag.length > 0),
+    next.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
   )
 }
 
@@ -122,16 +126,35 @@ function applyPreset(preset: (typeof PRESETS)[number]) {
       @change="setMode($event)"
     />
 
-    <input
+    <TagsInputRoot
       v-else-if="unit === 'classifier_tags'"
-      class="h-8 w-full rounded-md border border-[var(--control-border)] bg-background px-2 font-mono text-xs"
-      :value="tags"
+      :model-value="tagList"
       :disabled="disabled"
-      :aria-label="`${label} 分类标签`"
+      :delimiter="TAG_DELIMITER"
+      :add-on-paste="true"
+      class="flex min-h-8 w-full flex-wrap items-center gap-1 rounded-md border border-[var(--control-border)] bg-background px-1.5 py-1 focus-within:outline-2 focus-within:outline-ring"
       :data-testid="`${scope}-${unit}`"
-      placeholder="用逗号分隔；留空表示没有标签"
-      @change="setTags(($event.target as HTMLInputElement).value)"
-    />
+      @update:model-value="setTags"
+    >
+      <TagsInputItem
+        v-for="(tag, index) in tagList"
+        :key="`${index}-${tag}`"
+        :value="tag"
+        class="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+      >
+        <TagsInputItemText />
+        <TagsInputItemDelete
+          class="rounded px-0.5 text-[var(--text-muted)] hover:text-foreground focus-visible:outline-none"
+          :aria-label="`删除标签 ${tag}`"
+        >×</TagsInputItemDelete>
+      </TagsInputItem>
+      <TagsInputInput
+        class="min-w-[8ch] flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-[var(--text-muted)]"
+        :aria-label="`${label} 分类标签`"
+        :data-testid="`${scope}-${unit}-input`"
+        placeholder="输入后按回车或逗号"
+      />
+    </TagsInputRoot>
 
     <div v-else class="flex flex-wrap items-center gap-3">
       <label class="flex items-center gap-1 text-[11px]">
@@ -195,9 +218,6 @@ function applyPreset(preset: (typeof PRESETS)[number]) {
           {{ preset.label }}
         </button>
       </span>
-      <p v-if="encodedCodec === 'opus'" class="text-[11px] text-[var(--text-muted)]" data-testid="encoded-codec-hint">
-        Opus 以 VBR 编码（码率为平均值，体积更小），采样率固定 48 kHz。
-      </p>
     </div>
     <p
       v-if="(unit === 'matched' || unit === 'unmatched') && !profile.lossless && !profile.encoded"

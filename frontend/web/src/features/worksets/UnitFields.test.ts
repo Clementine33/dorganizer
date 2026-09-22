@@ -71,16 +71,6 @@ describe('UnitFields', () => {
     expect((wrapper.get('[data-testid="common-matched-bitrate"]').element as HTMLInputElement).value).toBe('192')
   })
 
-  it('names what the opus target does to the file it writes', () => {
-    const mp3 = mountFields({ encoded: { codec: 'mp3', quality: { kind: 'bitrate', bitrate: 320 } } })
-    expect(mp3.find('[data-testid="encoded-codec-hint"]').exists()).toBe(false)
-
-    const opus = mountFields({ encoded: { codec: 'opus', quality: { kind: 'bitrate', bitrate: 160 } } })
-    const hint = opus.get('[data-testid="encoded-codec-hint"]').text()
-    expect(hint).toContain('48 kHz')
-    expect(hint).toContain('VBR')
-  })
-
   it('warns that an empty profile removes the partition audio', () => {
     const empty = mountFields({})
     expect(empty.get('[data-testid="empty-profile-warning"]').text()).toContain('该分类下的音频将被移除')
