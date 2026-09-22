@@ -204,16 +204,10 @@ func classifierTagSnapshot(tags []string) string {
 }
 
 // rootExistsInInventory reports whether the planning root itself is present in
-// the scanned entries table (directory or file row). A folder that was never
-// scanned, or whose scan removed it, is treated as absent.
+// the scanned entries. A folder that was never scanned, or whose scan removed
+// it, is treated as absent.
 func rootExistsInInventory(repo *sqlite.Repository, root string) (bool, error) {
-	normalized := normalizeScopePath(root)
-	var n int
-	err := repo.DB().QueryRow("SELECT COUNT(*) FROM entries WHERE path = ?", normalized).Scan(&n)
-	if err != nil {
-		return false, fmt.Errorf("check root existence: %w", err)
-	}
-	return n > 0, nil
+	return repo.RootExistsInInventory(normalizeScopePath(root))
 }
 
 // planStatus maps an aggregated summary onto the plan's persisted status.

@@ -1,10 +1,8 @@
 package conversion
 
 import (
-	"database/sql"
 	"encoding/json"
 	"sort"
-	"strings"
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/services/reconcile"
@@ -31,55 +29,41 @@ func rootIsStale(repo *sqlite.Repository, r sqlite.PlanRootRecord) bool {
 // collectRootEntries loads recognized audio entries under a planning root with
 // the metadata needed for fingerprinting, plus the generation credential of any
 // file this app wrote (same semantics as the planner's own collection).
+// collectRootEntries loads the observed audio entries under a planning root
+// with the generation credentials recorded for them, and maps them onto the
+// planning fact set. The reads and their null handling belong to the inventory
+// adapter; the mapping onto a planning fact — including which paths count once
+// and the order they are planned in — belongs here.
 func collectRootEntries(repo *sqlite.Repository, root string) ([]reconcile.AudioEntry, error) {
-	rootPosix := normalizeScopePath(root)
-	prefix := strings.TrimSuffix(rootPosix, "/")
-	// The subtree is matched as a binary range rather than with LIKE, for the
-	// two reasons repo_library.go's subtreeFilePredicateSQL gives: SQLite's LIKE
-	// is ASCII case-insensitive, which would conflate case-distinct POSIX
-	// siblings and read a name holding % or _ as a pattern, and it cannot use
-	// the path index. Everything under a directory sorts between prefix+"/" and
-	// prefix+"0" ("0" is the next character after "/").
-	rows, err := repo.DB().Query(`
-		SELECT e.path, COALESCE(e.size, 0), COALESCE(e.mtime, 0), COALESCE(e.bitrate, 0), COALESCE(e.format, ''),
-		       g.codec, g.bitrate_kbps, g.mode, g.size, g.mtime
-		FROM entries e LEFT JOIN generation_records g ON g.path = e.path
-		WHERE e.is_dir = 0 AND (e.path = ? OR (e.path >= ? AND e.path < ?))
-	`, rootPosix, prefix+"/", prefix+"0")
+	observed, err := repo.ObservedAudioEntries(normalizeScopePath(root))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	entries := make([]reconcile.AudioEntry, 0)
+	entries := make([]reconcile.AudioEntry, 0, len(observed))
 	seen := map[string]struct{}{}
-	for rows.Next() {
-		var e reconcile.AudioEntry
-		var codec, mode sql.NullString
-		var bitrateKbps, recordSize, recordMtime sql.NullInt64
-		if err := rows.Scan(
-			&e.PathPosix, &e.Size, &e.Mtime, &e.Bitrate, &e.Format,
-			&codec, &bitrateKbps, &mode, &recordSize, &recordMtime,
-		); err != nil {
-			return nil, err
-		}
-		if codec.Valid {
-			e.Generated = &reconcile.GeneratedFacts{
-				Codec:       reconcile.Codec(codec.String),
-				BitrateKbps: int(bitrateKbps.Int64),
-				Mode:        mode.String,
-				Size:        recordSize.Int64,
-				Mtime:       recordMtime.Int64,
-			}
-		}
-		if _, ok := seen[e.PathPosix]; ok {
+	for _, o := range observed {
+		if _, ok := seen[o.Path]; ok {
 			continue
 		}
-		seen[e.PathPosix] = struct{}{}
-		entries = append(entries, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		seen[o.Path] = struct{}{}
+		entry := reconcile.AudioEntry{
+			PathPosix: o.Path,
+			Size:      o.Size,
+			Mtime:     o.Mtime,
+			Bitrate:   o.Bitrate,
+			Format:    o.Format,
+		}
+		if o.Generated != nil {
+			entry.Generated = &reconcile.GeneratedFacts{
+				Codec:       reconcile.Codec(o.Generated.Codec),
+				BitrateKbps: o.Generated.BitrateKbps,
+				Mode:        o.Generated.Mode,
+				Size:        o.Generated.Size,
+				Mtime:       o.Generated.Mtime,
+			}
+		}
+		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].PathPosix < entries[j].PathPosix })
 	return entries, nil
