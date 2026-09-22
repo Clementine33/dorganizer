@@ -13,11 +13,11 @@ import path from 'node:path'
  * and the folder, the list's own filter is the one parameter that rides along,
  * and the retired long addresses say they do not exist instead of guessing.
  *
- * Skipped unless ONSEI_E2E=1 — it needs the launched stack (real backend +
+ * Skipped unless BROWSER_E2E=1 — it needs the launched stack (real backend +
  * Vite) and a generated fixture tree.
  */
 
-const e2eEnabled = process.env.ONSEI_E2E === '1'
+const e2eEnabled = process.env.BROWSER_E2E === '1'
 
 const NAMES = ['专辑 A', '🎵 emoji', '100%_hits', 'space here']
 
@@ -32,7 +32,7 @@ function makeNamedTree(): string {
 }
 
 test.describe('workbench addresses', () => {
-  test.skip(!e2eEnabled, 'e2e runs only with ONSEI_E2E=1')
+  test.skip(!e2eEnabled, 'e2e runs only with BROWSER_E2E=1')
 
   test('carry ids instead of names, keep deep links, and retire the long addresses', async ({ page }) => {
     test.setTimeout(180_000)

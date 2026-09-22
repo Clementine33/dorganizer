@@ -18,10 +18,10 @@ import { readStackState } from './helpers/stack-state.ts'
  * (e2e/.perf-results.json, gitignored), because a diagnostic that only asserts
  * a boolean would not show a regression that is still under the threshold.
  *
- * Skipped unless ONSEI_E2E=1 — opt-in diagnostics, not default CI.
+ * Skipped unless BROWSER_E2E=1 — opt-in diagnostics, not default CI.
  */
 
-const e2eEnabled = process.env.ONSEI_E2E === '1'
+const e2eEnabled = process.env.BROWSER_E2E === '1'
 
 interface PerfRound {
   painted: number
@@ -96,7 +96,7 @@ function makeFixtureTree(count: number): string {
 }
 
 test.describe('workbench return diagnostics', () => {
-  test.skip(!e2eEnabled, 'e2e diagnostics run only with ONSEI_E2E=1')
+  test.skip(!e2eEnabled, 'e2e diagnostics run only with BROWSER_E2E=1')
 
   test('returning from a member keeps the overview list, with timings', async ({ page }) => {
     test.setTimeout(180_000)

@@ -28,6 +28,12 @@ tasks:
     cmds:
       - golangci-lint run --fix ./...
 
+  vuln:go:
+    desc: Check Go code for known vulnerabilities
+    dir: backend/go
+    cmds:
+      - govulncheck ./...
+
   dev:web:
     desc: Run Go backend + Vite web app together (VITE_API_BASE wired from backend handshake)
     cmds:
@@ -52,10 +58,10 @@ tasks:
       - pnpm build
 
   e2e:web:
-    desc: Run web e2e smoke (Playwright; boots backend + Vite). Requires `pnpm exec playwright install chromium` once.
+    desc: Run all browser e2e tests (Playwright; boots backend + Vite). Requires `pnpm exec playwright install chromium` once.
     dir: frontend/web
     env:
-      ONSEI_E2E: '1'
+      BROWSER_E2E: '1'
     cmds:
       - pnpm exec playwright test
 
@@ -70,6 +76,7 @@ tasks:
     cmds:
       - task test:go
       - task lint:go
+      - task vuln:go
       - task typecheck:web
       - task test:web
       - task build:web

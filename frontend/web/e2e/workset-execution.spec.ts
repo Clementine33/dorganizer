@@ -22,7 +22,7 @@ import path from 'node:path'
  * owns its library, media root and workset, so no state crosses tests.
  */
 
-const e2eEnabled = process.env.ONSEI_E2E === '1'
+const e2eEnabled = process.env.BROWSER_E2E === '1'
 
 test.describe.configure({ timeout: 240_000 })
 
@@ -131,7 +131,7 @@ async function setHardDelete(page: Page): Promise<void> {
 }
 
 test.describe('workset execution', () => {
-  test.skip(!e2eEnabled, 'execution e2e runs only with ONSEI_E2E=1')
+  test.skip(!e2eEnabled, 'execution e2e runs only with BROWSER_E2E=1')
 
   test('soft deletion preserves recovery copies and a reload restores the finished session', async ({ page }) => {
     const root = makeFixtureRoot('exec-soft')

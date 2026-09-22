@@ -3,11 +3,11 @@ import { defineConfig, devices } from '@playwright/test'
 /**
  * Playwright e2e for the web/gin library prototype.
  *
- * The spec (e2e/library-scan-plan.spec.ts) is skipped unless ONSEI_E2E=1, so
+ * Browser specs are skipped unless BROWSER_E2E=1, so
  * this config is a no-op in ordinary `pnpm test` runs and only boots the full
  * stack (Go backend on a fresh temp data dir + Vite) on demand:
  *
- *   ONSEI_E2E=1 pnpm exec playwright test
+ *   BROWSER_E2E=1 pnpm exec playwright test
  *
  * The stack is started by `node e2e/launch-stack.mjs`, which spawns the real
  * backend binary via `go run`, parses the additive ONSEI_BACKEND_READY
@@ -16,7 +16,7 @@ import { defineConfig, devices } from '@playwright/test'
  * dev-server URL; the backend port is dynamic and never needs to be known
  * up front.
  */
-const e2eEnabled = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.ONSEI_E2E === '1'
+const e2eEnabled = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.BROWSER_E2E === '1'
 
 export default defineConfig({
   testDir: './e2e',

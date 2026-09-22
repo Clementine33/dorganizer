@@ -6,33 +6,71 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A pushed fix supersedes the run for the commit it replaced: that run's answer
+# is about code nobody is going to merge. Mainline runs are never cancelled —
+# the run on main is the record of what shipped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # --ff-only preserves the PR head SHA. A successful PR run marks that SHA
+  # after every required job passes; a missing marker runs the suite on main.
+  already-tested:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: read
+    outputs:
+      tested: ${{ steps.lookup.outputs.tested }}
+    steps:
+      - id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          tested=false
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" \
+            --jq '.statuses[] | select(.context == "ci/pr-verified") | .state' 2>/dev/null) || status=
+          if [ "$status" = success ]; then tested=true; fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+          echo "commit ${GITHUB_SHA:0:8}: already_tested=$tested"
+
   go-test:
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       # All runtimes (go, node, pnpm, task) come from mise.toml — single source of truth.
       - uses: jdx/mise-action@v4
         with:
-          version: 2026.8.13
+          minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-go
       - name: Run Go tests
         run: task test:go
       - name: Run Go linter
         run: task lint:go
+      - name: Check Go vulnerabilities
+        run: task vuln:go
 
   # The race detector is a separate job because it is not a subset of the run
   # above: it needs cgo and a slower build, and a data race is a different
   # failure class from a wrong answer. Only ./internal — the e2e package boots
   # a real binary and proves nothing extra under -race.
   go-race:
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
-          version: 2026.8.13
+          minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-go-race
       - name: Run Go tests with the race detector
@@ -40,12 +78,14 @@ jobs:
         run: go test ./internal/... -race -count=1
 
   web-quality:
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
-          version: 2026.8.13
+          minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-web
       # mise-action caches tool installs but not the pnpm store; the old
@@ -66,27 +106,28 @@ jobs:
         run: pnpm test:web
       - name: Build web app
         run: pnpm build:web
-      # Optional e2e smoke: boots the real Go backend (go from mise.toml)
-      # + Vite via the Playwright webServer launcher. Non-blocking for now —
-      # local runs use `task e2e:web` / ONSEI_E2E=1.
+      # One optional browser smoke; the full suite is available via task e2e:web.
       - name: Install Playwright Chromium
+        continue-on-error: true
         run: pnpm -C frontend/web exec playwright install chromium
       - name: Playwright e2e smoke (optional)
         continue-on-error: true
-        run: pnpm -C frontend/web exec playwright test
+        run: pnpm -C frontend/web exec playwright test e2e/library-scan-plan.spec.ts
         env:
-          ONSEI_E2E: '1'
+          BROWSER_E2E: '1'
 
   # Windows dev-environment gate: catches regressions in Windows-only paths
   # (dev-web.mjs isWin/.cmd handling, .exe build) that Linux CI cannot see.
   # Main jobs run on Linux for speed/cost; this stays lean.
   windows-smoke:
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
-          version: 2026.8.13
+          minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-windows
       - name: Build Windows backend binary
@@ -96,10 +137,29 @@ jobs:
       - name: Repository connection pragmas (Windows runtime, blocking)
         working-directory: backend/go
         run: go test ./internal/adapters/sqlite -run TestConnectionPragmasAreAppliedToEveryConnection -count=1
-      - name: Install Playwright Chromium
-        run: pnpm -C frontend/web exec playwright install chromium
-      - name: Playwright e2e smoke (optional, non-blocking)
-        continue-on-error: true
-        run: pnpm -C frontend/web exec playwright test
+
+  mark-tested:
+    needs: [go-test, go-race, web-quality, windows-smoke]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      needs.go-test.result == 'success' &&
+      needs.go-race.result == 'success' &&
+      needs.web-quality.result == 'success' &&
+      needs.windows-smoke.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark PR head as tested
         env:
-          ONSEI_E2E: '1'
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state=success -f context=ci/pr-verified \
+            -f description='All required CI jobs passed' -f target_url="$RUN_URL" >/dev/null; then
+            echo '::warning::Could not mark this commit as tested; main will run the suite'
+          fi

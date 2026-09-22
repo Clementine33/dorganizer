@@ -7,7 +7,7 @@ describe('Playwright stack configuration', () => {
   })
 
   it('does not start a web server when the e2e smoke is disabled', async () => {
-    vi.stubEnv('ONSEI_E2E', '')
+    vi.stubEnv('BROWSER_E2E', '')
     vi.resetModules()
 
     const { default: config } = await import('../playwright.config')
@@ -16,7 +16,7 @@ describe('Playwright stack configuration', () => {
   })
 
   it('starts the real stack when the e2e smoke is enabled', async () => {
-    vi.stubEnv('ONSEI_E2E', '1')
+    vi.stubEnv('BROWSER_E2E', '1')
     vi.resetModules()
 
     const { default: config } = await import('../playwright.config')

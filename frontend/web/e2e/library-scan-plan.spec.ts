@@ -28,14 +28,14 @@ async function pickUnitOption(page: Page, testId: string, option: string) {
  *      module, then return to the list,
  *   8. return to the library selection and delete the library.
  *
- * Skipped unless ONSEI_E2E=1 so CI can run it optionally and local `vitest`
+ * Skipped unless BROWSER_E2E=1 so CI can run it optionally and local `vitest`
  * runs never try to boot the stack (vitest only includes `src/**` anyway).
  */
 
-const e2eEnabled = process.env.ONSEI_E2E === '1'
+const e2eEnabled = process.env.BROWSER_E2E === '1'
 
 test.describe('workset operation smoke', () => {
-  test.skip(!e2eEnabled, 'e2e smoke runs only with ONSEI_E2E=1')
+  test.skip(!e2eEnabled, 'e2e smoke runs only with BROWSER_E2E=1')
 
   test('create library, scan, create workset, configure, generate and review', async ({ page }) => {
     const { fixtureRoot } = readStackState()
@@ -119,11 +119,9 @@ test.describe('workset operation smoke', () => {
     await expect(group).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByTestId('nav-conversion-settings')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByTestId('nav-conversion')).not.toHaveAttribute('aria-current', 'page')
-    // The fields are editable directly, and 恢复默认 puts a group back to the
-    // seeded value.
-    await page.getByTestId('common-classifier_tags-input').fill('SEなし')
-    await page.getByTestId('common-classifier_tags-input').press('Enter')
-    await pickUnitOption(page, 'common-matched-encoded', 'MP3')
+    // The seeded tag and MP3 320 preset are already defaults. Choose a
+    // different preset so applying the draft is a real edit.
+    await page.getByTestId('common-group-matched').getByRole('button', { name: 'Opus 160' }).click()
     await page.getByTestId('apply-common').click()
     await expect(page.getByTestId('conversion-settings')).toBeVisible()
 
