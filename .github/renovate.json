@@ -2,6 +2,6 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "timezone": "Asia/Singapore",
-  "schedule": ["on the first saturday of the month"],
+  "schedule": ["* * 1-7 * 6"],
   "ignoreDeps": ["go"]
 }
