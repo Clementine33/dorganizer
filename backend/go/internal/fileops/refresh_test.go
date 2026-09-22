@@ -7,8 +7,8 @@ import (
 	"github.com/onsei/organizer/backend/internal/adapters/filesystem"
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/fileops"
 	"github.com/onsei/organizer/backend/internal/inventory"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
 // TestTheInternalRefreshIsNotRefusedByTheSlotItHolds pins the rule that makes

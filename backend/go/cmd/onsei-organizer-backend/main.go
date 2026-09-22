@@ -24,10 +24,10 @@ import (
 	"github.com/onsei/organizer/backend/internal/admission"
 	"github.com/onsei/organizer/backend/internal/bootstrap"
 	"github.com/onsei/organizer/backend/internal/conversion"
+	"github.com/onsei/organizer/backend/internal/fileops"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
 	"github.com/onsei/organizer/backend/internal/maintenance"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
 	"github.com/onsei/organizer/backend/internal/workset"
 )
 

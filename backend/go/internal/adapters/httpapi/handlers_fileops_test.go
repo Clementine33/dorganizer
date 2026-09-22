@@ -12,8 +12,8 @@ import (
 
 	"github.com/onsei/organizer/backend/internal/adapters/sqlite"
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/fileops"
 	inventory "github.com/onsei/organizer/backend/internal/inventory"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
 // blockingScan is a scan double that holds the scanning slot until released,

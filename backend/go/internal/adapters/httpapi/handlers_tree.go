@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/onsei/organizer/backend/internal/admission"
+	"github.com/onsei/organizer/backend/internal/fileops"
 	"github.com/onsei/organizer/backend/internal/inventory"
 	"github.com/onsei/organizer/backend/internal/library"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
 )
 
 // dirResponse is one direct child directory of a library root: the observed

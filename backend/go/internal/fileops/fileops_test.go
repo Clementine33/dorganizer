@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/onsei/organizer/backend/internal/admission"
-	"github.com/onsei/organizer/backend/internal/services/fileops"
+	"github.com/onsei/organizer/backend/internal/fileops"
 )
 
 // fixture is a real library root with real members, since the whole point of
