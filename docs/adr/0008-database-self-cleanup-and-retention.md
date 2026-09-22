@@ -2,7 +2,7 @@
 
 Date: 2026-09-22
 
-Status: Draft
+Status: Accepted
 
 `cache.db` 是应用唯一打开的 SQLite 文件。它的两个属性与留存策略的假设逐渐脱节：
 

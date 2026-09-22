@@ -2,7 +2,7 @@
 
 Date: 2026-09-22
 
-Status: Draft
+Status: Accepted
 
 工作台的页面地址曾把目录的库相对路径放进查询串（`/worksets/libraries/:libraryId/files?folder=…`），树请求同样如此：地址因此携带目录名、分隔符与查询文本，层级也比需要更深。我们决定缩短路由，用后端计算的目录标识 `dir_id` 取代 URL 中的相对路径，并让地址只保留各页面明确支持的少量参数。
 
