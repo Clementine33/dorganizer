@@ -3,7 +3,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { cleanedQuery, installAddressHygiene, readMemberFilter } from './route-params'
 
 /**
- * Address hygiene (spec §9 自动隐藏规则): a page keeps only the parameters it
+ * Address hygiene (ADR 0003 §5): a page keeps only the parameters it
  * declares, with values from a closed vocabulary, and a cleaned address is
  * rewritten in place — no extra history entry, no redirect loop.
  *

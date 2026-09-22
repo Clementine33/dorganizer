@@ -495,7 +495,7 @@ func TestStartExecutionGates(t *testing.T) {
 	})
 
 	t.Run("gone_library", func(t *testing.T) {
-		// Deleting a library takes its records with it (spec L1), so a session
+		// Deleting a library takes its records with it (ADR 0001 §5), so a session
 		// start against that record has nothing to address: the record is gone,
 		// not orphaned into a readable read-only state.
 		f := newExecFixture(t)
@@ -517,7 +517,7 @@ func TestStartExecutionGates(t *testing.T) {
 
 	t.Run("orphaned_workset", func(t *testing.T) {
 		// A record whose library row vanished outside the delete path stays
-		// readable and refuses writes (ADR 0004 §2, D07).
+		// readable and refuses writes (ADR 0001 §5).
 		f := newExecFixture(t)
 		f.seedRevision("plan-or")
 		if _, err := f.repo.DB().Exec("UPDATE worksets SET library_id = NULL WHERE id = ?", f.worksetID); err != nil {

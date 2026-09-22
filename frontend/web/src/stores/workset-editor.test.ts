@@ -50,7 +50,7 @@ describe('editor session', () => {
     })
 
     // Re-picking the value that is already saved records an intent, but it
-    // changes nothing — it must not read as dirty (C09) or block a switch.
+    // changes nothing — it must not read as dirty or block a switch.
     store.setUnit('mode', { intent: 'set', value: base.mode })
     store.setUnit('matched', { intent: 'set', value: base.matched })
 

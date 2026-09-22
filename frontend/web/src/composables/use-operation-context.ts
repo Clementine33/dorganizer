@@ -42,8 +42,9 @@ export function useCurrentConversion(libraryId: Ref<string>) {
  * metadata, the operation aggregate, its sparse draft and — when a revision is
  * being reviewed — that revision's frozen detail.
  *
- * `revision` in the URL means read-only: nothing here creates an edit session
- * from a historical revision (E05).
+ * The revision being reviewed is always the operation's current plan: nothing
+ * here creates an edit session from another revision, and there is none to
+ * browse.
  */
 export function useOperationContext(
   worksetId: Ref<string | null>,
@@ -61,7 +62,7 @@ export function useOperationContext(
   const draftQuery = useQuery(computed(() => operationDraftQueryOptions(api, worksetId.value, operation)))
   // Without an explicit revision query the workbench reviews the operation's
   // CURRENT revision: the list conclusions and the member review both read the
-  // same immutable snapshot, and only `?revision=` switches to history.
+  // same immutable snapshot, and there is no revision history to switch to.
   const reviewedPlanId = computed(
     () => revisionPlanId.value ?? operationQuery.data.value?.current_revision?.plan_id ?? null,
   )

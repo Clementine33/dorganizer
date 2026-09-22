@@ -1,13 +1,13 @@
 import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 
-/** Workbench container tiers of the design layout table (§7.3). */
+/** Workbench container tiers. */
 export type ContainerTier = 'narrow' | 'mid' | 'wide'
 
 /**
  * Container breakpoints in CSS pixels. These are the single breakpoint
  * definition shared by the CSS container queries and the interaction switch:
  * the CSS decides sizes and visibility at the same boundaries at which the
- * carrier changes from inline detail to modal sheet to full page (F13).
+ * carrier changes from inline detail to modal sheet to full page.
  */
 export const CONTAINER_BREAKPOINTS = { mid: 641, wide: 1101 } as const
 

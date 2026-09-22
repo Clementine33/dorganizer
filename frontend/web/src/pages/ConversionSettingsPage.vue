@@ -12,7 +12,7 @@ import { useWorksetEditorStore } from '@/stores/workset-editor'
 /**
  * Common conversion settings. Each unit shows how many members it reaches, so
  * a common change never silently affects folders the user is not looking at
- * (C10). Generation and confirmation stay on the operation list page (F17).
+ *. Generation and execution stay on the operation list page.
  */
 const route = useRoute()
 const router = useRouter()

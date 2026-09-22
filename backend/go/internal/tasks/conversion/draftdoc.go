@@ -29,7 +29,7 @@ const (
 	SourceMember = "member"
 )
 
-// DraftDoc is the persisted sparse operation draft (ADR 0004 §3). The four
+// DraftDoc is the persisted sparse operation draft (ADR 0006 §1). The four
 // common setting groups are the base; a member overrides only the units it
 // explicitly replaces. Absence means inheritance — never truthiness — so an
 // explicitly empty tag list is a real override while null is not.
@@ -154,7 +154,7 @@ func normalizeDraft(doc *DraftDoc, members []*sqlite.WorksetMember) *DraftDoc {
 // generation: JSON shape (strict decoding at the transport), unit literals and
 // member identity. Business completeness — non-empty tags, declared outputs,
 // positive bitrates — is deliberately not checked here: a structurally valid
-// but incomplete draft is a normal, saveable editing state (ADR 0004 §3) and
+// but incomplete draft is a normal, saveable editing state (ADR 0006 §1) and
 // is rejected only when it must produce a plan.
 func validateDraftDoc(doc *DraftDoc, members []*sqlite.WorksetMember) error {
 	if doc.SchemaVersion != DraftSchemaVersion {

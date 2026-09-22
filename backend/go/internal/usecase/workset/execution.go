@@ -55,7 +55,7 @@ type StartExecutionResult struct {
 // ExecutionComponentView is one component's frozen work and observed outcome:
 // the wire shape of a `components[]` entry and of one `component` event. The
 // frozen half comes from the session's worklist, the observed half from the
-// component's own result row (ADR 0009).
+// component's own result row (ADR 0007 §5).
 type ExecutionComponentView struct {
 	ComponentIndex     int      `json:"component_index"`
 	ComponentID        string   `json:"component_id"`
@@ -360,7 +360,7 @@ func (s *serviceImpl) executionEligibility(
 }
 
 // executionBlockReasons collects every disqualifier of the current revision:
-// session history, draft drift, a running generation, blocked components and
+// an already-run revision, draft drift, a running generation, blocked components and
 // input freshness. Terminating errors are returned separately from the
 // fail-forward reasons.
 func (s *serviceImpl) executionBlockReasons(

@@ -24,7 +24,7 @@ export const useLibraryUiStore = defineStore('library-ui', {
     setActiveLibrary(id: string) {
       if (id === this.activeLibraryId) return
       this.activeLibraryId = id
-      // N2: switching libraries clears the previous library's temporary
+      // Switching libraries clears the previous library's temporary
       // selection; a scroll offset of another list means nothing here either.
       this.selectedDirPaths = []
       this.overviewScroll = 0

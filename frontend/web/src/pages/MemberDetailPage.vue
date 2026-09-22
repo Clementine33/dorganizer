@@ -7,7 +7,7 @@ import { useCurrentConversion } from '@/composables/use-operation-context'
 /**
  * One member's frozen review (`/worksets/:L/conversion/:M`). The page renders
  * inside whichever carrier the container chose; routing here never changes the
- * URL between carriers (R01).
+ * URL between carriers.
  */
 const route = useRoute()
 const router = useRouter()

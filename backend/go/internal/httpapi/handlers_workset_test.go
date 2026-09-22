@@ -361,7 +361,7 @@ func TestWorksetHTTPLifecycle(t *testing.T) {
 		t.Fatalf("cancel status = %d body=%s", got.Code, got.Body.String())
 	}
 	// There is no route to a record's revision history: a record keeps the
-	// current plan only, and the old list route is gone (spec R3, I1).
+	// current plan only, and the old list route is gone (ADR 0001 §2).
 	if got := req(t, h, http.MethodGet, opPath+"/revisions", testToken, nil); got.Code == http.StatusOK {
 		t.Fatalf("a record's revision history must not be readable: %s", got.Body.String())
 	}

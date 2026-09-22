@@ -75,7 +75,7 @@ func fileOpsServer(t *testing.T) (http.Handler, string, *blockingScan) {
 }
 
 // TestFileOperationRefusedWhileAScanRuns is the API-level half of the
-// admission contract (spec C1, A3): a running scan refuses direct file
+// admission contract (ADR 0002 §2): a running scan refuses direct file
 // management with a busy answer and the file stays exactly where it was.
 func TestFileOperationRefusedWhileAScanRuns(t *testing.T) {
 	handler, root, scan := fileOpsServer(t)

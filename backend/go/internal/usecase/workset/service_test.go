@@ -7,7 +7,7 @@ import (
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// TestCreateEstablishesConversionOperation covers R1: creating the current
+// TestCreateEstablishesConversionOperation covers creating the current
 // record materializes the requested operation only, and the operation starts
 // unplanned and addressable.
 func TestCreateEstablishesConversionOperation(t *testing.T) {
@@ -76,7 +76,7 @@ func TestCreateEstablishesConversionOperation(t *testing.T) {
 	}
 }
 
-// TestCreateCurrentSkipsUnusableFolders covers R1's scope reporting: a
+// TestCreateCurrentSkipsUnusableFolders covers the scope reporting: a
 // directory that cannot join is left out with its reason instead of being
 // silently dropped or silently kept, and a selection with nothing usable
 // creates no record at all.
@@ -181,7 +181,7 @@ func TestCreateCurrentValidation(t *testing.T) {
 	}
 }
 
-// TestCreateCurrentReplacesTheRecordTheCallerSaw covers R2's replacement rule:
+// TestCreateCurrentReplacesTheRecordTheCallerSaw covers the replacement rule:
 // the old record, its plan and its sessions go in the same transaction that
 // publishes the new one.
 func TestCreateCurrentReplacesTheRecordTheCallerSaw(t *testing.T) {
@@ -216,7 +216,7 @@ func TestCreateCurrentReplacesTheRecordTheCallerSaw(t *testing.T) {
 	}
 }
 
-// TestCreateCurrentRefusesAStaleExpectation covers R2's concurrency rule: a
+// TestCreateCurrentRefusesAStaleExpectation covers the concurrency rule: a
 // caller that saw another record as current must not overwrite the newer one.
 func TestCreateCurrentRefusesAStaleExpectation(t *testing.T) {
 	f := newFixture(t)
@@ -249,7 +249,7 @@ func TestCreateCurrentRefusesAStaleExpectation(t *testing.T) {
 	}
 }
 
-// TestCreateCurrentRefusesABusyRecord covers R2: a record with a queued or
+// TestCreateCurrentRefusesABusyRecord covers a record with a queued or
 // running session is never replaced, and it keeps its plan and members.
 func TestCreateCurrentRefusesABusyRecord(t *testing.T) {
 	f := newFixture(t)
@@ -279,7 +279,7 @@ func TestCreateCurrentRefusesABusyRecord(t *testing.T) {
 	}
 }
 
-// TestCreateCurrentRejectsAReusedKeyWithAnotherRequest covers R4: an
+// TestCreateCurrentRejectsAReusedKeyWithAnotherRequest covers the key rule: an
 // idempotency key belongs to the request that used it.
 func TestCreateCurrentRejectsAReusedKeyWithAnotherRequest(t *testing.T) {
 	f := newFixture(t)
@@ -301,7 +301,7 @@ func TestCreateCurrentRejectsAReusedKeyWithAnotherRequest(t *testing.T) {
 	}
 }
 
-// TestRecordScopeIsPerLibraryAndOperation covers R2's ownership: one record per
+// TestRecordScopeIsPerLibraryAndOperation covers the ownership rule: one record per
 // (library, operation), and another library keeps its own.
 func TestRecordScopeIsPerLibraryAndOperation(t *testing.T) {
 	f := newFixture(t)
@@ -326,9 +326,9 @@ func TestRecordScopeIsPerLibraryAndOperation(t *testing.T) {
 	}
 }
 
-// TestRenameUsesMetadataVersionOnly covers T10: a rename advances the workset
+// TestRenameUsesMetadataVersionOnly covers a rename advances the workset
 // metadata version and leaves the operation version (and therefore any draft
-// or confirmation guard) untouched.
+// generation or execution guard) untouched.
 func TestRenameUsesMetadataVersionOnly(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
@@ -355,7 +355,7 @@ func TestRenameUsesMetadataVersionOnly(t *testing.T) {
 	}
 }
 
-// TestRenameDoesNotDirtyOperationDraft covers P02: renaming the workset never
+// TestRenameDoesNotDirtyOperationDraft covers renaming the workset never
 // moves an operation from planned to needs_planning.
 func TestRenameDoesNotDirtyOperationDraft(t *testing.T) {
 	f := newFixture(t)
@@ -383,8 +383,8 @@ func TestRenameDoesNotDirtyOperationDraft(t *testing.T) {
 	}
 }
 
-// TestOrphanedWorksetIsReadOnly covers T15: an orphaned workset stays readable
-// but refuses every write, including generation and confirmation.
+// TestOrphanedWorksetIsReadOnly covers an orphaned workset stays readable
+// but refuses every write, including generation, draft edits and execution.
 func TestOrphanedWorksetIsReadOnly(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")

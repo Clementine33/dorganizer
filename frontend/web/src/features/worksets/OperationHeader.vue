@@ -7,7 +7,7 @@ import type { Operation, PlanningState, RevisionCounts } from '@/lib/api/types'
 
 /**
  * Compact operation context: workspace/operation identity, version state and
- * the five independent summary facts (F16). Blocking, unmet-target and stale
+ * the five independent summary facts. Blocking, unmet-target and stale
  * notices are never hidden for density. A planned revision is directly
  * executable — there is no separate confirmation step.
  */

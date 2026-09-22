@@ -2,13 +2,13 @@ import type { RouteLocationRaw } from 'vue-router'
 import type { Operation } from '@/lib/api/types'
 
 /**
- * The workbench navigation definition (N05, N18, N19).
+ * The workbench navigation definition.
  *
  * The inline sidebar of the mid/wide tiers and the narrow drawer both render
  * this one list, exactly as the global rail and bottom bar share
- * `global-nav` — two renderers, never two hard-coded entry lists (N20).
+ * `global-nav` — two renderers, never two hard-coded entry lists.
  * Entries carry only id/label/icon/to/children, and every location is built
- * from a *named* route plus `libraryId` (N18), so a path rename cannot quietly
+ * from a *named* route plus `libraryId`, so a path rename cannot quietly
  * break navigation.
  */
 export type WorkbenchNavId = 'overview' | 'conversion' | 'conversion-settings'
@@ -48,7 +48,7 @@ export function workbenchNav(libraryId: string): WorkbenchNavItem[] {
   ]
 }
 
-/** Route name → position in the workbench navigation (N21). */
+/** Route name → position in the workbench navigation. */
 export type WorkbenchRouteName =
   | 'workbench-overview'
   | 'overview-files'
@@ -65,7 +65,7 @@ export interface WorkbenchNavPosition {
   current: WorkbenchNavId
   /**
    * The entry whose section contains the current page. It is shown as the
-   * owning level, never as a second current page (N27).
+   * owning level, never as a second current page.
    */
   parent?: WorkbenchNavId
 }
@@ -92,7 +92,7 @@ export function workbenchNavPosition(routeName: unknown): WorkbenchNavPosition |
 }
 
 /**
- * Why 转换全局设置 cannot be edited right now (E09): generating, or orphaned
+ * Why 转换全局设置 cannot be edited right now: generating, or orphaned
  * against a deleted library. Shared so the overview and the conversion page
  * disable the entry with the same words, never one reason each.
  */

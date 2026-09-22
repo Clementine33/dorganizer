@@ -9,10 +9,10 @@ import { useWorksetEditorStore } from '@/stores/workset-editor'
 /**
  * Edit one member's units ("应用到该文件夹"). The session lives in the editor
  * store, so collapsing the carrier, returning to the list or crossing a
- * container breakpoint keeps the unapplied edits (E03, E04).
+ * container breakpoint keeps the unapplied edits.
  *
- * The editor route never carries a history query: a historical revision is
- * read-only and must be left before editing (E05).
+ * The editor always writes against the operation's current plan: there is no
+ * older revision to leave first, so the route carries no history query.
  */
 const route = useRoute()
 const router = useRouter()
@@ -45,7 +45,7 @@ watch(
       return
     }
     if (openSession(target)) return
-    // Another target holds unapplied edits (E04): the switch is a decision, not
+    // Another target holds unapplied edits: the switch is a decision, not
     // a silent redirect. Only an explicit discard drops them; refusing keeps
     // them and returns to the list, where 继续编辑 resumes that edit.
     if (!window.confirm('另一个范围还有未应用的修改，放弃它才能修改此文件夹。放弃吗？')) {

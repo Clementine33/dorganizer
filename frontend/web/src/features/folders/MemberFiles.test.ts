@@ -10,7 +10,7 @@ import MemberFiles from './MemberFiles.vue'
 import type { FileOperationResult, TreeNode, Workset } from '@/lib/api/types'
 
 /**
- * The shared current-files module (spec T1, T2, F1-F4).
+ * The shared current-files module (ADR 0001 §3; ADR 0002 §1).
  *
  * What these tests pin is the module's own contract: entering refreshes the
  * member and modification is refused until the refresh settles, a failed
@@ -286,7 +286,7 @@ describe('shared member files', () => {
     expect(wrapper.find('[data-testid="back-to-conversion"]').exists()).toBe(true)
   })
 
-  it('opens the frozen plan first when the operation has one (T3)', async () => {
+  it('opens the frozen plan first when the operation has one', async () => {
     const getOperation = vi.fn().mockResolvedValue({
       workset_id: 'ws-1',
       operation_type: 'conversion',

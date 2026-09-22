@@ -127,7 +127,7 @@ func TestLibrariesCRUD(t *testing.T) {
 }
 
 // TestRootChangeTakesTheFileManagementSlot covers the admission rule that a
-// root change is a path-rewriting action (spec C1, L1): it goes through while
+// root change is a path-rewriting action (ADR 0002 §2; ADR 0001 §5): it goes through while
 // nothing else holds the slot, releases it again, and is refused — not queued —
 // while a scan is running.
 func TestRootChangeTakesTheFileManagementSlot(t *testing.T) {

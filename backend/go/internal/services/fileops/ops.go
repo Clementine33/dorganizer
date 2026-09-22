@@ -13,7 +13,7 @@ import (
 
 // Operation names accepted by Apply. They are the first version's whole
 // vocabulary: no overwrite, no cross-member move, no directory creation, no
-// copy-then-delete across filesystems (spec F1).
+// copy-then-delete across filesystems (ADR 0002 §1).
 const (
 	OpRename     = "rename"
 	OpMove       = "move"
@@ -70,7 +70,7 @@ type ItemResult struct {
 
 // RefreshState reports the inventory refresh that follows a write. A failed
 // refresh never hides the writes that already happened: the two facts are
-// reported separately (spec F4).
+// reported separately (ADR 0001 §4).
 type RefreshState struct {
 	OK      bool   `json:"ok"`
 	Code    string `json:"code,omitempty"`

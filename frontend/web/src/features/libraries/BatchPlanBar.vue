@@ -3,10 +3,10 @@ import { Layers, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 
 /**
- * The overview's scope bar (spec N2, R1, L07). It belongs to a selection, so
- * the page mounts it only while something is selected (N15) — there is never
+ * The overview's scope bar (ADR 0001 §1, §2). It belongs to a selection, so
+ * the page mounts it only while something is selected — there is never
  * an empty strip above the bottom bar. It sits in the page's own column, so
- * the bottom bar and this bar never overlap (N08, N15).
+ * the bottom bar and this bar never overlap.
  *
  * The action lives here, not in a detail column, because it must be reachable
  * at every container tier — a phone has no room for a second column and the

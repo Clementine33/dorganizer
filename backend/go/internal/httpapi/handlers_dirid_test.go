@@ -256,7 +256,7 @@ func TestADirectoryOutsideTheInventoryHasNoIdentity(t *testing.T) {
 // TestMemberIdentityMatchesTheOverviewListing covers the cache the two entries
 // share: the identity the overview lists and the identity the record hands out
 // for the same directory are one value, so both entries address one file cache
-// entry (spec §9 缓存).
+// entry (ADR 0003 §6).
 func TestMemberIdentityMatchesTheOverviewListing(t *testing.T) {
 	engine, repo := newWorksetServer(t)
 	root := t.TempDir()
@@ -309,7 +309,7 @@ func TestMemberIdentityMatchesTheOverviewListing(t *testing.T) {
 // TestMatchDirIDRefusesAnAmbiguousIdentity pins the rule the API cannot reach:
 // the inventory cannot hold two rows for one path, so an identity two
 // directories claim is refused where the match is decided, never answered with
-// the first of them (spec §9 I1′).
+// the first of them (ADR 0003 §4).
 func TestMatchDirIDRefusesAnAmbiguousIdentity(t *testing.T) {
 	identity := dirID("lib-1", "/music", "albumA")
 

@@ -12,7 +12,7 @@ import MemberFiles from '@/features/folders/MemberFiles.vue'
 import { installAddressHygiene } from './route-params'
 
 /**
- * Route table (spec §2 N1, §9 N1′). Desktop and mobile use the same routes: the
+ * Route table (ADR 0003 §1). Desktop and mobile use the same routes: the
  * layout adapts to the container, never by navigating.
  *
  * Every address carries identities only — a library id, a member id, or a

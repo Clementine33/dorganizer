@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 
 /**
- * Workbench navigation UI state (N26): which groups are folded, keyed by the
+ * Workbench navigation UI state: which groups are folded, keyed by the
  * stable group id.
  *
  * Session scope — it never enters the URL, a query cache or the backend, and no

@@ -2,7 +2,7 @@
 
 ## Architecture
 - Go backend (`backend/go`, entry `cmd/onsei-organizer-backend/main.go`): a single net/http API on an ephemeral loopback port; startup prints an `ONSEI_BACKEND_READY token=… version=… http_port=…` handshake that web dev consumes via `VITE_API_BASE`.
-- Vue 3 + TS web frontend (`frontend/web`, pnpm workspace), entry `src/main.ts`; API client in `frontend/web/src/lib/api/`, server/cache state in `frontend/web/src/queries/` (Vue Query), UI/selection state in `frontend/web/src/stores/` (Pinia) — with one documented exception: the transient scan SSE lifecycle stays in `frontend/web/src/stores/scan.ts` (streaming process state, not a cacheable resource).
+- Vue 3 + TS web frontend (`frontend/web`, pnpm workspace), entry `src/main.ts`; API client in `frontend/web/src/lib/api/`, server/cache state in `frontend/web/src/queries/` (Vue Query), UI/selection state in `frontend/web/src/stores/` (Pinia) — with one documented exception: the transient SSE lifecycles stay in `frontend/web/src/stores/{scan,workset-generation,workset-execution}.ts` (streaming process state, not a cacheable resource; the matching `src/composables/use-*` file owns cache coordination).
 - `scripts/dev-web.mjs` boots backend + Vite together (`ONSEI_DATA_DIR` → `<repo>/.dev_data`).
 
 ## Go module structure & engineering rules
@@ -31,7 +31,7 @@
 - Web (from `frontend/web`): `pnpm typecheck` · `pnpm test` · `pnpm build`; dev: `task dev:web`; e2e: `task e2e:web` (install Chromium once: `pnpm exec playwright install chromium`)
 
 ## CI facts
-- `.github/workflows/ci.yml`: main jobs on ubuntu-latest run Go quality, web quality and an optional Playwright smoke; `windows-smoke` on windows-latest gates the Windows path (`task build:go:windows-x64` + optional e2e).
+- `.github/workflows/ci.yml`: main jobs on ubuntu-latest run Go quality, web quality and an optional Playwright smoke; `windows-smoke` on windows-latest gates the Windows path (`task build:go:windows-x64`, a blocking connection-pragma test, + optional e2e).
 - PRs reviewed by CodeRabbit (`.github/coderabbit.yaml`).
 
 ## Agent skills
@@ -46,4 +46,15 @@ Five canonical labels, each label string equal to its name: needs-triage, needs-
 
 ### Domain docs
 
-Single-context: [CONTEXT.md](CONTEXT.md) defines domain language; [ADR 0004](docs/adr/0004-independent-workset-operations.md) records the consolidated decisions; [docs/api.md](docs/api.md) describes HTTP/SSE contracts. `docs/` contains only ADRs and the API reference.
+Single-context: [CONTEXT.md](CONTEXT.md) defines domain language, `docs/adr/` holds the architecture records, and [docs/api.md](docs/api.md) describes HTTP/SSE contracts. `docs/` contains only ADRs and the API reference — a task-control spec is not a repository artifact.
+
+The record set and each record's status live in [docs/adr/0000-index.md](docs/adr/0000-index.md).
+
+### ADR charter
+
+- **A status is mandatory.** Every record opens with `Status:` — one of `Draft`, `Accepted`, `Superseded` — and its date. A record without a status is not a source of truth: fix it or delete it, never cite it.
+- **Before the branch merges, every ADR is a Draft.** A Draft records intent and reasoning, not system facts. Only a decision on the mainline is `Accepted`, so a reader can always tell a proposal from a commitment.
+- **Distil; do not chain.** Most refactors and fixes converge on implementation detail: rewrite the affected record and fold the overturned reason into its "Rejected alternatives". One living record per decision keeps the mainline readable.
+- **Chain only for a real reversal.** Use `Superseded by ADR NNNN` when the change is a cross-team architectural pitfall, an external compliance change, or the abandonment of something already shipped — cases where the old record must stay readable as the reason the new one looks the way it does.
+- **Cite the record, not the task.** Source comments cite `ADR NNNN §n` or `docs/api.md`; a task-control spec is not a repository artifact and is never cited from the tree.
+- **0000 is the index, not a decision.** It lists the records and mirrors their statuses, carries no `Status` line of its own, and is updated in the same commit that changes a record's status.

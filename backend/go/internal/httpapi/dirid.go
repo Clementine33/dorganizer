@@ -18,8 +18,8 @@ const dirIDLen = 32
 
 // dirID derives the navigation identity of one member directory from durable
 // facts only: the version marker, the library, the canonical identity of the
-// library root, and the exact relative path the inventory stores (spec §9 N3′,
-// ADR 0008 §2).
+// library root, and the exact relative path the inventory stores (ADR 0003
+// §2).
 //
 // The stored path is hashed as it is: no case folding, no Unicode
 // normalization, no repeated URL decoding. A directory is therefore identified
@@ -59,7 +59,7 @@ func validDirID(value string) bool {
 
 // matchDirID finds the one library-relative directory whose identity is id. It
 // reports the match, and whether more than one directory claims the identity:
-// an ambiguous identity is never resolved to the first match (spec §9 I1′).
+// an ambiguous identity is never resolved to the first match (ADR 0003 §4).
 func matchDirID(candidates []string, libraryID, rootPath, id string) (rel string, found, ambiguous bool) {
 	for _, candidate := range candidates {
 		if dirID(libraryID, rootPath, candidate) != id {

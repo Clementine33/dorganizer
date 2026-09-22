@@ -51,7 +51,7 @@ function submit() {
     @click.self="emit('close')"
   >
     <!-- Scrolls inside the remaining space instead of being clipped by the
-         shell's bottom bar (L08); the safe area is paid once, at the edge. -->
+         shell's bottom bar; the safe area is paid once, at the edge. -->
     <form
       class="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-popover p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl rail:p-5 rail:pb-5"
       @submit.prevent="submit"

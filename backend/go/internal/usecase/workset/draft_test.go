@@ -48,7 +48,7 @@ func TestDraftSaveAdvancesOperationVersion(t *testing.T) {
 	f.saveDraft(ws.WorksetID, draftDoc(), saved.Version)
 }
 
-// TestDraftSaveAllowsIncompleteButGenerationRejects covers the C13 boundary:
+// TestDraftSaveAllowsIncompleteButGenerationRejects covers the boundary between a saved and a valid draft:
 // an incomplete draft is a legal editing state and only generation refuses it.
 func TestDraftSaveAllowsIncompleteButGenerationRejects(t *testing.T) {
 	f := newFixture(t)
@@ -196,7 +196,7 @@ func TestDraftRejectsUnknownCodecAndMode(t *testing.T) {
 	}
 }
 
-// TestDraftEditRejectedWhileGenerating covers D05/E09 at the service boundary:
+// TestDraftEditRejectedWhileGenerating covers the generating and read-only guards:
 // a queued session freezes the draft against edits, and only this operation's
 // draft is affected.
 func TestDraftEditRejectedWhileGenerating(t *testing.T) {

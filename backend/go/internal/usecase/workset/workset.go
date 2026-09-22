@@ -214,7 +214,7 @@ func (s *serviceImpl) persistCurrentWorkset(
 	}
 	// Only the requested operation is materialized: a record exists for the
 	// work someone asked for, and creation never initializes a task that was
-	// not requested (ADR 0007 §1).
+	// not requested (ADR 0001 §1).
 	task, err := s.requireTask(req.OperationType)
 	if err != nil {
 		return nil, err
@@ -289,7 +289,7 @@ func (s *serviceImpl) resolveSelectedMembers(
 			continue
 		}
 		// A member is a direct child of the library root: a nested directory is
-		// browsable inside its member, never a scope of its own (spec N3).
+		// browsable inside its member, never a scope of its own (ADR 0001 §1).
 		if strings.Contains(rel, "/") {
 			skipped = append(skipped, SkippedFolder{Path: rel, Reason: SkipNotDirect})
 			continue

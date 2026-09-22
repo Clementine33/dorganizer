@@ -8,7 +8,7 @@ import PlanReviewTree from './PlanReviewTree.vue'
 import type { ComponentOutcome, RevisionDetailResponse, Workset } from '@/lib/api/types'
 
 /**
- * The plan's own view of a member (spec T3).
+ * The plan's own view of a member (ADR 0001 §3).
  *
  * It renders the frozen conclusions — kept, deleted, generated — and marks a
  * planned output as pending because that file does not exist yet. It reads no

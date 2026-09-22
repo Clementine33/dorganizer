@@ -7,16 +7,16 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  The global shell breakpoint (N12): application width > 640px shows the
+  The global shell breakpoint: application width > 640px shows the
   desktop rail, <= 640px the mobile bottom bar. One definition for every
   consumer (AppShell, list-page menus) so the boundary cannot drift; the
   workbench container tiers keep their own breakpoints in
-  `composables/use-container-tier.ts` (N10).
+  `composables/use-container-tier.ts`.
 */
 @custom-variant rail (@media (width >= 641px));
 
 /*
-  Touch devices (N25, F15): the 44px minimum applies wherever the pointer is
+  Touch devices: the 44px minimum applies wherever the pointer is
   coarse, at any width — a tablet at 900px is touch too, so this is a pointer
   query rather than a width one.
 */
@@ -108,23 +108,23 @@
 
   Two layers, one authority: the shadcn/semantic tokens above stay the
   compatibility layer for existing pages (ADR 0004 §7.1, F04); the role tokens
-  below are the finite ladder the workset workbench consumes (F03). Components
+  below are the finite ladder the workset workbench consumes. Components
   never invent colors, sizes or durations — they read a role token.
 
   Roles:
     --brand-*      identity color for the workbench. The accepted reference is
                    #5E6AD2; `--brand` is the FILL, `--brand-ink` is the
                    readable text/link variant, and neither is the neutral
-                   shadcn `--accent` hover surface (F02).
+                   shadcn `--accent` hover surface.
     --success/warning/danger/info-*   status roles, each with fill, readable
                    ink, weak background and border variants. Status is never
                    communicated by color alone: badges carry a label/icon.
     --text-*       the three text weights (primary, secondary, muted).
     --control-*    interactive control metrics and the control border, which is
                    deliberately stronger than the decorative --border hairline
-                   so control boundaries and focus rings reach 3:1 (F05).
+                   so control boundaries and focus rings reach 3:1.
     --row-h/--toolbar-h/--title-h  density for list rows, toolbars and page
-                   titles (F15): 40/36/40px base, sized in rem so zoom grows
+                   titles: 40/36/40px base, sized in rem so zoom grows
                    them instead of clipping text.
     --motion-*     durations; a reduced-motion preference collapses them.
 
@@ -349,7 +349,7 @@
   }
   /* The workbench reads role tokens; the reduced-motion preference collapses
      them so container and carrier changes never animate against the user's
-     stated preference (F19). */
+     stated preference. */
   @media (prefers-reduced-motion: reduce) {
     :root {
       --motion-fast: 1ms;

@@ -11,7 +11,7 @@ import type { FileDecision } from '@/lib/api/types'
  * The execution session of the revision in view
  * (`.../conversion/execution`). Like every other detail it renders in the
  * carrier the container chose — inline beside the list on wide, a modal sheet
- * on mid, the full page on narrow (R01, §7.3) — so progress and the result
+ * on mid, the full page on narrow — so progress and the result
  * never crowd the member list. The same page serves a live run (the store's
  * snapshot/progress) and the finished report (the session entry), and it
  * offers the cancel action itself so the run can be stopped from here.

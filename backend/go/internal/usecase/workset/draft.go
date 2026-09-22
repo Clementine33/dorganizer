@@ -71,7 +71,7 @@ func (s *serviceImpl) SaveDraft(
 		return nil, validateErr
 	}
 	// Reject while a generation is queued/running: the session freezes the
-	// draft at enqueue time and must not race a replace (ADR 0004 §2, D05).
+	// draft at enqueue time and must not race a replace (ADR 0001 §2).
 	active, err := s.repo.GetActiveGenerationForOperation(worksetID, operationType)
 	if err != nil {
 		return nil, NewError(ErrKindInternal, "INTERNAL", "failed to check active generation", err)
@@ -84,7 +84,7 @@ func (s *serviceImpl) SaveDraft(
 			nil,
 		)
 	}
-	// An active execution runs the confirmation of the revision this draft
+	// An active execution runs the revision this draft
 	// belongs to; editing the draft under it would move the operation version
 	// and desynchronize the session's frozen input.
 	activeExec, err := s.repo.GetActiveExecutionForOperation(worksetID, operationType)

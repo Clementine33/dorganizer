@@ -98,7 +98,7 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 
 	// A root change rebinds every member path of the library, so it takes the
 	// direct-file-management slot: it neither interleaves with a file operation
-	// nor with a scan (spec C1, L1). A name-only edit touches no path and needs
+	// nor with a scan (ADR 0002 §2; ADR 0001 §5). A name-only edit touches no path and needs
 	// no admission.
 	if pathnorm.RootPathKey(rootPath) != pathnorm.RootPathKey(lib.RootPath) {
 		release, ok := s.beginManual(w)
@@ -123,7 +123,7 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 				w,
 				http.StatusConflict,
 				"LIBRARY_HAS_WORKSETS",
-				"cannot change the library root while worksets are linked; delete the library to orphan its worksets first",
+				"cannot change the library root while a record is linked; delete the library (its record goes with it) and re-create it at the new root",
 			)
 			return
 		}
@@ -136,7 +136,7 @@ func (s *Server) patchLibrary(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 	// Deleting a library removes its records, plans and sessions, so it takes
 	// the direct-file-management slot: it cannot interleave with a file
-	// operation on the same tree (spec C1, L1).
+	// operation on the same tree (ADR 0002 §2; ADR 0001 §5).
 	release, ok := s.beginManual(w)
 	if !ok {
 		return

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { apiClientKey } from '@/lib/api/client'
 import { apiStub } from '@/test/api-stub'
 import { installTestQueryPlugin } from '@/test/query-client'
-// The shell derives the current entry from the router's own route name (N21),
+// The shell derives the current entry from the router's own route name,
 // so the test drives the real route table. The slot stands in for the page:
 // AppShell renders no RouterView, so no page component is mounted here.
 import { router } from '@/app/router'

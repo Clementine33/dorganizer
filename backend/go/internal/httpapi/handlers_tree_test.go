@@ -287,7 +287,7 @@ func TestMemberTree(t *testing.T) {
 //
 // Traversal and absolute paths are no longer expressible here at all: the
 // address carries an opaque identity, and a value that is not one is a bad
-// request before any lookup happens (spec §9 I1′).
+// request before any lookup happens (ADR 0003 §4).
 func TestMemberTreeRefusals(t *testing.T) {
 	var repo *sqlite.Repository
 	engine := newTestServer(t, func(d *Dependencies) { repo = d.Repo })
@@ -433,7 +433,7 @@ func TestRefreshMemberTree(t *testing.T) {
 	}
 }
 
-// TestRefreshMemberTreeFailureIsReported covers T2's failure contract: a failed
+// TestRefreshMemberTreeFailureIsReported covers the failure contract: a failed
 // refresh is reported as a failed refresh, and it never looks like a tree.
 func TestRefreshMemberTreeFailureIsReported(t *testing.T) {
 	var repo *sqlite.Repository

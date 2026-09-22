@@ -1,7 +1,7 @@
 import type { RouteLocationNormalized, Router } from 'vue-router'
 
 /**
- * The URL parameters each page supports (spec §9 自动隐藏规则).
+ * The URL parameters each page supports (ADR 0003 §5).
  *
  * Addresses carry identities, never names: a page's own parameters are the few
  * closed vocabularies below, and everything else — a retired `folder`, a search

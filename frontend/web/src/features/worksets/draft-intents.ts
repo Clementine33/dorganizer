@@ -7,7 +7,7 @@ import type {
 } from '@/lib/api/types'
 
 /**
- * Editing intents over the sparse draft (design §3.1, C07-C09).
+ * Editing intents over the sparse draft.
  *
  * Every edit names exactly one target and one intent per unit. The document is
  * rebuilt from the persisted base document plus those intents — the form never
@@ -131,7 +131,7 @@ export function sameDocument(a: OperationDraftDocument, b: OperationDraftDocumen
 /**
  * Reads the current value and provenance of one unit for a target. A batch
  * whose members disagree reports `mixed`: a mixed value is a display state,
- * never something that can be saved (C07).
+ * never something that can be saved.
  */
 export function readUnit(doc: OperationDraftDocument, target: EditTarget, unit: OverrideUnit): UnitValue {
   if (target.kind === 'common') {
@@ -233,7 +233,7 @@ function pruneMembers(doc: OperationDraftDocument): void {
 /**
  * Builds the document to save from the persisted base plus the session's
  * intents. The base is never mutated; only units with a `set`/`inherit` intent
- * change, so C08 holds: editing one unit leaves every other value and every
+ * change, so this holds: editing one unit leaves every other value and every
  * other member's inheritance relationship byte-identical.
  */
 export function applyIntent(
@@ -284,7 +284,7 @@ export function applyIntent(
   return doc
 }
 
-/** True when the intent would write anything at all (C09). */
+/** True when the intent would write anything at all. */
 export function intentIsEmpty(intent: EditIntent): boolean {
   if (intent.participation !== 'keep') return false
   if (intent.deleteMode && intent.deleteMode.intent !== 'keep') return false

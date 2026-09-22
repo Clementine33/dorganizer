@@ -55,8 +55,12 @@ Non-2xx JSON responses always use the same shape:
 ```
 
 Common codes: `INVALID_ARGUMENT` (400), `UNAUTHORIZED` (401),
-`LIBRARY_NOT_FOUND` / `FOLDER_NOT_FOUND` / `LIBRARY_FOLDER_NOT_FOUND` (404),
-`LIBRARY_EXISTS` (409), `SCOPE_REQUIRED` (400), `INTERNAL` (500).
+`LIBRARY_NOT_FOUND` / `DIRECTORY_NOT_FOUND` / `MEMBER_MISSING` (404),
+`LIBRARY_EXISTS` / `BUSY` (409), `INTERNAL` (500). The session routes add their
+own guards: `IDEMPOTENCY_KEY_REQUIRED`, `VERSION_REQUIRED`,
+`INVALID_IDEMPOTENCY_KEY`, `INVALID_PAGE` (400) and `PAYLOAD_TOO_LARGE` (413).
+Codes such as `SCOPE_REQUIRED` are a planning session's `error_code`, never an
+HTTP envelope.
 
 ## Endpoints
 
@@ -96,9 +100,10 @@ Common codes: `INVALID_ARGUMENT` (400), `UNAUTHORIZED` (401),
 `root_path` clears the scanned inventory of the old root and the prior scan
 state; the library must be scanned again before anything is planned from it.
 A root change is rejected with `LIBRARY_HAS_WORKSETS` while the library still
-has a processing record: rename the record's scope or delete the library first.
+has a processing record: delete the library — its record goes with it — and
+re-create it at the new root.
 Both a root change and a deletion take the direct-file-management slot, so
-neither interleaves with file management (spec C1).
+neither interleaves with file management (ADR 0002 §2).
 
 `DELETE /api/v1/libraries/:id` removes the library **together with its
 processing record**: the record's members, operation, draft, current plan and
@@ -110,11 +115,11 @@ disk are never touched. Deletion is blocked by active operation generation
 
 ### Scan: POST + SSE
 
-`POST /api/v1/libraries/:id/scans` requires a JSON object body; send `{}`
-when no override is needed. A zero-byte request body is invalid. An optional
-`root_path` is retained for client compatibility but must resolve to the
-selected library's configured root; cross-library scan overrides are rejected
-with `ROOT_PATH_OUTSIDE_LIBRARY`. The response is
+`POST /api/v1/libraries/:id/scans` takes a JSON object body; an empty body is
+read as "no override", like `{}`. An optional `root_path` is retained for
+client compatibility but must resolve to the selected library's configured
+root; cross-library scan overrides are rejected with
+`ROOT_PATH_OUTSIDE_LIBRARY`. The response is
 `Content-Type: text/event-stream` and is cancelled automatically if the client
 disconnects.
 
@@ -137,7 +142,7 @@ A scan is refused with `EXECUTION_IN_PROGRESS` (409) while any record of the
 library has a queued/running execution: an execution validates the inventory
 the scan would rewrite. It is also refused with `BUSY` (409) while direct file
 management holds the admission slot, and it takes the scanning side of that
-slot itself, so a file operation refuses a running scan in turn (spec C1).
+slot itself, so a file operation refuses a running scan in turn (ADR 0002 §2).
 
 ### Directories and member trees
 
@@ -158,7 +163,7 @@ counts. The library-level recovery directory is not a member and is left out:
 `rel_path` is the data identity: it is stable across rescans, where a
 scan-scoped folder id is not, and it is what a record's scope and file
 management address. `dir_id` is the navigation identity a page address carries
-instead of the name (ADR 0008): the backend derives it from a fixed version
+instead of the name (ADR 0003): the backend derives it from a fixed version
 marker, the library, the canonical identity of its root and the stored relative
 path (SHA-256, first 128 bits, lowercase hex). The same root and path keep the
 same value across rescans and restarts; renaming the directory, or changing the
@@ -214,7 +219,7 @@ caller keeps the tree it already shows and marks it unrefreshed.
 ### Direct file management
 
 `POST /api/v1/libraries/:id/file-operations` is the second, explicitly
-non-plan write path (ADR 0007 §4). It holds the direct-file-management slot
+non-plan write path (ADR 0002 §1). It holds the direct-file-management slot
 for the whole request — including the inventory refresh that follows the
 writes — and is refused with `BUSY` (409) while any scan is running or any
 planning session or execution is queued or running.
@@ -260,7 +265,8 @@ Response (200):
 }
 ```
 
-`status` is `ok`, `failed`, `skipped` or `not_attempted`. A soft delete keeps
+`status` is `ok`, `failed`, `skipped` or `not_attempted`; a rename or move
+reports where the item landed as `target` (member-relative). A soft delete keeps
 the item's path relative to the library root under `<library root>/Delete/` and
 never overwrites media recycled earlier (a collision becomes `<stem>.N<ext>`);
 `recovered_path` is that location, for the user to restore from with their own
@@ -274,8 +280,7 @@ pair: the fixed, ordered set of 1–500 member folders a user selected, plus the
 operation that works on them. `conversion` is the only operation type in this
 iteration, and no unimplemented operation has an addressable route. At most one
 record exists per pair — that is a storage-level unique index, not an
-application check. Decisions: [ADR 0007](adr/0007-library-workbench-and-current-operation-record.md),
-which supersedes the multi-workset model of [ADR 0004](adr/0004-independent-workset-operations.md).
+application check. Decisions: [ADR 0001](adr/0001-library-workbench-and-processing-record.md).
 
 **Status: implemented and machine-checked.** The Go handler, repository and
 e2e tests are the reference for the shapes below. There is no revision-history
@@ -285,8 +290,8 @@ execution sessions — in the same transaction. The pre-operation workset routes
 (`/worksets/{id}/draft`, `/worksets/{id}/revisions`,
 `/worksets/{id}/planning-sessions/*`) and the old record-creation route
 (`POST /worksets` with `folder_ids`) were removed in the same delivery. An
-incompatible database is refused at startup, never migrated or cleared (spec
-D2).
+incompatible database is refused at startup, never migrated or cleared
+(ADR 0008 §3).
 
 ### Creating the current record
 
@@ -297,7 +302,7 @@ directory that did not become a member instead of dropping it silently:
 
 | `skipped[].reason` | Meaning |
 | --- | --- |
-| `no_audio` | the directory holds no audio anywhere beneath it; conversion skips it (R1) |
+| `no_audio` | the directory holds no audio anywhere beneath it; conversion skips it |
 | `missing` | the inventory does not know it as a directory of this root |
 | `not_direct_child` | only direct children of the library root are members |
 | `recovery_dir` | the library-level `Delete/` is not a member |
@@ -335,14 +340,14 @@ All routes require auth and use the standard error envelope.
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/api/v1/libraries/{id}/operations/{type}/current` | The library's current record for one operation, or `{"workset": null}` with 200 when it has none. A library that does not exist is 404. |
-| PUT | `/api/v1/libraries/{id}/operations/{type}/current` | Create or replace. Body `{"folder_paths":[...],"expected_current_id":"…","title":"…"}` (title optional; the library's name is the default), `Idempotency-Key` required. 201 `{"workset":…,"created":true,"recorded":N,"skipped":[{"path","reason"}]}`; 200 for an idempotent replay. The new record and the removal of the one it replaces — members, operation, draft, plan and sessions — are one transaction. |
+| PUT | `/api/v1/libraries/{id}/operations/{type}/current` | Create or replace. Body `{"folder_paths":[...],"expected_current_id":"…","title":"…"}` (title optional; the library's name is the default), `Idempotency-Key` optional (`INVALID_IDEMPOTENCY_KEY` when malformed, and an absent key means the call is never a replay). 201 `{"workset":…,"created":true,"recorded":N,"skipped":[{"path","reason"}]}`; 200 for an idempotent replay. The new record and the removal of the one it replaces — members, operation, draft, plan and sessions — are one transaction. |
 | GET | `/api/v1/worksets` | Keyset list (`limit`, `cursor` → `next_cursor`, `library_id`, `status=active` excludes orphaned). |
 | GET | `/api/v1/worksets/{id}` | Metadata view: `workset_id`, `title`, `version`, `library`, `members[]`, `operations[]`. Member coverage and planning state belong to an operation, never to the member or the workset. |
 | PATCH | `/api/v1/worksets/{id}` | Rename only. `If-Match` = workset metadata version (`VERSION_REQUIRED` without it, `VERSION_CONFLICT` when stale, `ORPHANED_WORKSET` when the library is gone). |
 | GET | `/api/v1/worksets/{id}/operations/{type}` | Operation view: `version`, `planning_state`, `current_revision`, `active_generation`, `latest_generation`, `active_execution`, `latest_execution`. Unknown workset, unsupported type and unestablished operation are all 404 (`UNKNOWN_OPERATION_TYPE` for a type this iteration does not implement). |
 | GET | `/api/v1/worksets/{id}/operations/{type}/draft` | The operation version plus the sparse draft wrapped in its task envelope: `task: {kind, schema_version, payload}`. The payload is task-owned (conversion: the sparse document). |
 | PUT | `/api/v1/worksets/{id}/operations/{type}/draft` | Full replacement of the sparse document, `If-Match` = operation version. Structural validation only: an incomplete draft saves. `GENERATION_IN_PROGRESS` while a session is queued/running; `EXECUTION_IN_PROGRESS` while an execution session is; `ORPHANED_WORKSET` when read-only. |
-| POST | `/api/v1/worksets/{id}/operations/{type}/revisions` | Start generation. No request body; `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"generation":…}`; 200 with `revision` when nothing semantic changed, or with `generation` for a key replay. Conflicts: `GENERATION_IN_PROGRESS`, `EXECUTION_IN_PROGRESS`, `SCAN_IN_PROGRESS`, `NO_ACTIVE_MEMBERS`, `INVALID_POLICY`, `VERSION_CONFLICT`. |
+| POST | `/api/v1/worksets/{id}/operations/{type}/revisions` | Start generation. No request body; `If-Match` (operation version) and `Idempotency-Key` are both required. 202 `{"created":true,"generation":…}`; 200 with `revision` when nothing semantic changed, or 202 with `generation` for a key replay. Conflicts: `GENERATION_IN_PROGRESS`, `EXECUTION_IN_PROGRESS`, `SCAN_IN_PROGRESS`, `NO_ACTIVE_MEMBERS`, `VERSION_CONFLICT`; `INVALID_POLICY` is 400. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}` | Session detail. Statuses `queued`, `running`, `completed`, `failed`, `canceled`, `interrupted`. A session of another workset or operation is 404. |
 | GET | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/events` | SSE progress (`session_snapshot`, `progress`, terminal event). |
 | POST | `/api/v1/worksets/{id}/operations/{type}/planning-sessions/{genId}/cancel` | Cooperative cancel; idempotent on terminal sessions. |
@@ -479,8 +484,9 @@ library root (`<library root>/Delete/<member path>/…`), beside the member
 folder rather than inside it, so recovered media never re-enters a member's own
 inventory. A sync failure is disclosed per
 component (`inventory_synced:false`, `inventory_sync_error`) instead of being
-reported as "unchanged"; the library folder counts still only change on the
-next scan. The executed revision keeps its frozen fingerprints, so it reports
+reported as "unchanged". The library folder counts are computed from the
+inventory, so a component's sync moves them before the next scan does. The
+executed revision keeps its frozen fingerprints, so it reports
 `validation_state:"stale"` once the inventory moved — a follow-up run needs a
 new generation.
 

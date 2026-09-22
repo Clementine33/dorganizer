@@ -3,13 +3,13 @@ import type { Component } from 'vue'
 import type { RouteLocationRaw } from 'vue-router'
 
 /**
- * The global navigation definition (N05, N18-N20).
+ * The global navigation definition.
  *
  * One list, two renderers: the desktop rail and the mobile bottom bar both
  * iterate this array, so their labels, order and targets cannot drift apart.
  * Entries carry only id/label/icon/to — no permissions, no business state, no
- * plugin registry. The media-library *list* is page content on /libraries,
- * never a global entry (N03).
+ * plugin registry. The media-library *list* is page content on /worksets,
+ * never a global entry (ADR 0001 §1).
  */
 export type GlobalNavId = 'worksets'
 
@@ -25,7 +25,7 @@ export const GLOBAL_NAV: readonly GlobalNavItem[] = [
 ]
 
 /**
- * Route name → owning global entry (N21). The current item is derived from the
+ * Route name → owning global entry. The current item is derived from the
  * router's own route name, never from a stored `activeNavId` that could drift
  * from the URL. An explicit mapping — not a URL-prefix guess — keeps every
  * workbench child route under 工作集 without pretending to be a second route

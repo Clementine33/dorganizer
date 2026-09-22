@@ -15,9 +15,9 @@ function ui() {
 }
 
 /**
- * The overview is where a library's conversion scope is chosen (spec N3, R1).
+ * The overview is where a library's conversion scope is chosen (ADR 0001 §1, §2).
  * These tests drive the real page against a stubbed API: what they pin is the
- * behavior the spec names — the create carries the selected library-relative
+ * behavior the record contract names — the create carries the selected library-relative
  * paths and the record it saw, a creation reports the folders it skipped, and
  * replacing an existing record is confirmed first.
  *
@@ -99,7 +99,7 @@ describe('workbench overview', () => {
 
     expect(api.listDirs).toHaveBeenCalled()
     // The overview shares the workbench navigation with the conversion page
-    // instead of hand-rolling its own entry list (N20). jsdom's zero-width
+    // instead of hand-rolling its own entry list. jsdom's zero-width
     // container is the narrow tier, so the same list lives in the drawer.
     await wrapper.get('[data-testid="workbench-nav-toggle"]').trigger('click')
     await flushPromises()
@@ -111,7 +111,7 @@ describe('workbench overview', () => {
     // The overview has no detail to show, so it does not reserve the wide
     // tier's detail column: the list is what the page is.
     expect(wrapper.find('[data-testid="workbench-detail-inline"]').exists()).toBe(false)
-    // Browsing alone creates nothing, and there is no empty action strip (N15).
+    // Browsing alone creates nothing, and there is no empty action strip.
     expect(wrapper.find('[data-testid="enter-conversion"]').exists()).toBe(false)
 
     ui().toggleDir('albumA', dirs)
@@ -166,7 +166,7 @@ describe('workbench overview', () => {
     await flushPromises()
 
     // Nothing was sent until the confirmation is accepted, and the dialog
-    // says what replacing costs (spec R1.3). The modal is portalled, so it is
+    // says what replacing costs (ADR 0001 §2). The modal is portalled, so it is
     // the document that holds it.
     expect(createCurrentRecord).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('删除它的设置、当前计划与执行结果')

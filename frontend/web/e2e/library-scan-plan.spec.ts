@@ -47,7 +47,7 @@ test.describe('workset operation smoke', () => {
 
     // The global shell exists before any page content: at the default desktop
     // width the rail owns the navigation, and 工作集 is the only entry — the
-    // old 媒体库 entry is gone with its page (N02, N08, N21).
+    // old 媒体库 entry is gone with its page.
     await expect(page.getByTestId('global-rail')).toBeVisible()
     await expect(page.getByTestId('global-bottom-bar')).toBeHidden()
     await expect(page.getByTestId('global-rail').getByRole('link', { name: '工作集' })).toHaveAttribute(
@@ -94,7 +94,7 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByText('尚无计划版本')).toBeVisible()
 
     // 转换 is a group whose label navigates and whose arrow only folds — two
-    // adjacent controls (N25); the settings child is reachable while unfolded.
+    // adjacent controls; the settings child is reachable while unfolded.
     const group = page.getByTestId('nav-group-conversion')
     await expect(group).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByTestId('nav-conversion-settings')).toBeVisible()
@@ -110,12 +110,12 @@ test.describe('workset operation smoke', () => {
     await page.getByTestId('nav-conversion-settings').click()
     await expect(page.getByTestId('conversion-settings')).toBeVisible()
     // The settings are an edit carrier of this operation, not a page of their
-    // own: the list and the shell stay put (R01, §7.3).
+    // own: the list and the shell stay put.
     await expect(page).toHaveURL(/\/conversion\/settings$/)
     await expect(page.getByTestId('workbench-header')).toBeVisible()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
     // Entering the settings page unfolds the group and marks the child as the
-    // current page; the parent only shows its owning state (N27).
+    // current page; the parent only shows its owning state.
     await expect(group).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByTestId('nav-conversion-settings')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByTestId('nav-conversion')).not.toHaveAttribute('aria-current', 'page')
@@ -145,12 +145,11 @@ test.describe('workset operation smoke', () => {
     // A narrow container shows one layer at a time, and the route does not
     // change: the member detail becomes a full-page drill-down, 修改此文件夹
     // opens the editor inside the same workbench, and 取消 returns to the
-    // detail. The carrier is chosen by the container, never by a separate URL
-    // (§7.3, F13).
+    // detail. The carrier is chosen by the container, never by a separate URL.
     await page.setViewportSize({ width: 600, height: 800 })
     // Below the shared 641px breakpoint the bottom bar replaces the rail in
     // CSS only — the route, the drill-down and the editing session are
-    // untouched (N02, N12).
+    // untouched.
     await expect(page.getByTestId('global-bottom-bar')).toBeVisible()
     await expect(page.getByTestId('global-rail')).toBeHidden()
     await expect(page.getByTestId('global-bottom-bar').getByRole('link', { name: '工作集' })).toHaveAttribute(
@@ -160,11 +159,11 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('member-review')).toBeVisible()
     await expect(page.getByTestId('member-toolbar')).toBeHidden()
     // The narrow header carries the local navigation button and two context
-    // lines instead of the full path (N31).
+    // lines instead of the full path.
     await expect(page.getByTestId('workspace-breadcrumb')).toBeHidden()
     await expect(page.getByTestId('workbench-context')).toContainText('文件夹详情')
     // The drawer holds the same levels as the sidebar: folding a group leaves it
-    // open, and only a successful page selection closes it (N20, N28).
+    // open, and only a successful page selection closes it.
     await page.getByTestId('workbench-nav-toggle').click()
     const drawer = page.getByTestId('workbench-nav-drawer')
     await expect(drawer).toBeVisible()
@@ -175,14 +174,14 @@ test.describe('workset operation smoke', () => {
     await expect(page).toHaveURL(/\/worksets\/[^/]+$/)
     await expect(drawer).toBeHidden()
     await expect(page.getByTestId('workbench-context')).toContainText('概览与成员')
-    // Every narrow page keeps a fixed parent to return to (N32): the overview
+    // Every narrow page keeps a fixed parent to return to: the overview
     // goes to the list, 转换 to the overview, a carrier to the list, and the
     // member editor to that member's detail.
     await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', '/worksets')
 
     // Back into the operation, then the same drill-down as before: the narrow
     // carrier is a full page, and the local back control returns to the fixed
-    // parent of the page in view (N32, R06).
+    // parent of the page in view.
     await page.getByTestId('current-record').click()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
     await expect(page.getByTestId('workbench-back')).toHaveAttribute('href', /\/worksets\/[^/]+$/)
@@ -238,7 +237,7 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('operation-counts')).toBeVisible({ timeout: 30_000 })
 
     // 7. The shared file module: the same tree the overview browses, here for
-    //    a conversion member, with the plan as a read-only second view (T1-T3).
+    //    a conversion member, with the plan as a read-only second view.
     //    A member the plan covers opens on its plan, so 当前文件 — the view that
     //    allows modification — is named in the address explicitly.
     await page.getByTestId('nav-conversion').click()
@@ -254,7 +253,7 @@ test.describe('workset operation smoke', () => {
 
     // Renaming one file: the request carries the member-relative path, and the
     // result reports both what happened and whether the inventory refreshed
-    // (F1, F4).
+    //.
     await page.getByTestId('rename-test1.mp3').click()
     const renameInput = page.getByTestId('rename-input')
     await renameInput.fill('renamed.mp3')
@@ -264,21 +263,21 @@ test.describe('workset operation smoke', () => {
     await expect(page.getByTestId('member-tree')).toContainText('renamed.mp3')
 
     // Back to the list: the workbench survives, and the member list is where
-    // it was (N2). The crumb is the way back at every tier.
+    // it was. The crumb is the way back at every tier.
     await page.getByTestId('workspace-breadcrumb').getByRole('link', { name: '转换' }).click()
     await expect(page.getByTestId('member-toolbar')).toBeVisible()
     await expect(page).toHaveURL(/\/conversion$/)
 
     // 8. Back to the library selection through the global rail: the global
     //    entry is reachable inside the workbench and always targets /worksets
-    //    (G01, N22).
+    //   .
     await page.getByTestId('global-rail').getByRole('link', { name: '工作集' }).click()
     await expect(page.getByTestId('worksets-page')).toBeVisible()
 
     // 9. Clean up: delete the library this spec created so the stack returns
     //    to its initial state for the sibling diagnostics spec. The record,
     //    its plan and its execution results go with it; the media on disk does
-    //    not (L1).
+    //    not.
     page.on('dialog', (dialog) => void dialog.accept())
     // The selection page lists one row per library, each with its own edit
     // entry (the label names the library it edits).

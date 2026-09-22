@@ -1,7 +1,7 @@
 // Package fileops owns direct file management inside a library member
 // (rename, move, soft delete) and the process-wide admission control that
 // keeps it from interleaving with the scanning, planning and execution paths
-// that also read and write the same trees (ADR 0007 §4, §5; spec C1).
+// that also read and write the same trees (ADR 0002 §1, §2).
 package fileops
 
 import (

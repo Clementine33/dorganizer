@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { router } from './router'
 
 /**
- * The route table as a contract (spec §9 N1′): the documented addresses are the
+ * The route table as a contract (ADR 0003 §1): the documented addresses are the
  * only ones that resolve, they carry identities rather than names, and the
  * retired long addresses land on the not-found page instead of being guessed at.
  */

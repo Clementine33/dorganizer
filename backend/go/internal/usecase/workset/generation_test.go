@@ -7,7 +7,7 @@ import (
 	worksetusecase "github.com/onsei/organizer/backend/internal/usecase/workset"
 )
 
-// TestGenerationPublishesRevisionAndReplays covers T11's happy path plus P03:
+// TestGenerationPublishesRevisionAndReplays covers the happy path and the replay:
 // a successful session publishes exactly one revision, promotes it, and a
 // second start with unchanged draft, members and input replays it instead of
 // planning again.
@@ -83,7 +83,7 @@ func TestGenerationPublishesRevisionAndReplays(t *testing.T) {
 	}
 }
 
-// TestDraftChangeMakesOperationNeedPlanning covers P02: after a draft change
+// TestDraftChangeMakesOperationNeedPlanning covers the transition: after a draft change
 // the operation is dirty, and the next successful session publishes a new
 // revision.
 func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
@@ -111,7 +111,7 @@ func TestDraftChangeMakesOperationNeedPlanning(t *testing.T) {
 	}
 }
 
-// TestGenerationFailureKeepsCurrentRevision covers T11's failure half: a
+// TestGenerationFailureKeepsCurrentRevision covers the failure half: a
 // failed session leaves the promoted revision untouched and is not published.
 func TestGenerationFailureKeepsCurrentRevision(t *testing.T) {
 	f := newFixture(t)
@@ -173,7 +173,7 @@ func TestCancelQueuedSessionIsNotPublished(t *testing.T) {
 	}
 }
 
-// TestSingleActiveSessionPerOperation covers D05.
+// TestSingleActiveSessionPerOperation pins one active session per operation.
 func TestSingleActiveSessionPerOperation(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")
@@ -226,8 +226,8 @@ func TestGenerationRejectsScanInProgress(t *testing.T) {
 	}
 }
 
-// TestGenerationScopedAddressing covers T10: sessions and revisions are
-// addressable only through their owning operation.
+// TestGenerationScopedAddressing covers the scoping rule: sessions and revisions
+// are addressable only through their owning operation.
 func TestGenerationScopedAddressing(t *testing.T) {
 	f := newFixture(t)
 	ids := f.standardLibrary("albumA")

@@ -10,7 +10,7 @@ import { useWorksetEditorStore } from '@/stores/workset-editor'
 import { useWorksetUiStore } from '@/stores/workset-ui'
 import BatchEditPage from './BatchEditPage.vue'
 
-/** Batch editing answers an E04 conflict the same way the member editor does. */
+/** Batch editing answers an unapplied-edits conflict the same way the member editor does. */
 const workset: Workset = {
   workset_id: 'ws-1',
   title: 'T',

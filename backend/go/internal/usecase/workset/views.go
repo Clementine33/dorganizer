@@ -8,7 +8,7 @@ import (
 	"github.com/onsei/organizer/backend/internal/repo/sqlite"
 )
 
-// Limit defaults/caps for feed and revision history pagination.
+// Limit defaults/caps for the record feed pagination.
 const (
 	DefaultPageLimit = 50
 	MaxPageLimit     = 200

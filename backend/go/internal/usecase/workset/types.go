@@ -11,7 +11,7 @@ import (
 
 // OperationTypeConversion is the only publicly available operation type of
 // this iteration. Encode/delete filesystem actions are a different concept and
-// never appear here (ADR 0004 §2).
+// never appear here (ADR 0001 §1).
 const OperationTypeConversion = "conversion"
 
 // Operation planning states (derived per operation, never stored).
@@ -103,7 +103,7 @@ type MemberView struct {
 	RelPath    string
 }
 
-// RevisionCounts are independent plan facts (ADR 0004 §4): a component with
+// RevisionCounts are independent plan facts (ADR 0001 §2): a component with
 // changes, an unmet target, a blocked component and an unchanged component are
 // separate counts that may overlap. No exclusive status label is derived.
 type RevisionCounts struct {

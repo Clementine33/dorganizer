@@ -6,7 +6,7 @@ import type { FileOperationItemResult, FileOperationResult, RefreshState } from 
  * The backend reports a stable machine code per item and a refresh verdict for
  * the request as a whole; this module is the one place that turns those codes
  * into sentences, so a rename, a move and a batch delete never disagree about
- * what the same refusal means (ADR 0007 §4).
+ * what the same refusal means (ADR 0002 §1).
  */
 const ITEM_CODE_TEXT: Record<string, string> = {
   PATH_INVALID: '路径不合法，已拒绝',

@@ -5,7 +5,7 @@ import { createRouter, createWebHistory, type Router } from 'vue-router'
 import WorkbenchShell from './WorkbenchShell.vue'
 
 /**
- * The shell is the framework seam for §7.3 and NAV2: the carrier that shows a
+ * The shell is the framework seam for the container tiers: the carrier that shows a
  * detail is chosen by the workbench container's own width, only one carrier
  * mounts, and the narrow drawer is a modal layer over the whole application.
  * jsdom has no layout, so the width is driven through a stub ResizeObserver —
@@ -115,7 +115,7 @@ describe('workbench container tiers', () => {
 
     await toggle().trigger('click')
 
-    // No icon-only rail survives a collapse (N04, §10.4): the whole sidebar is
+    // No icon-only rail survives a collapse: the whole sidebar is
     // hidden and the toggle is the way back.
     expect(navDisplay()).toBe('none')
     expect(toggle().attributes('aria-expanded')).toBe('false')
@@ -208,7 +208,7 @@ describe('narrow workbench drawer', () => {
     const { wrapper, elementWidth } = await mountAt(420)
     await openDrawer(wrapper)
 
-    // A fold control is not a page selection (N25, N28).
+    // A fold control is not a page selection.
     await wrapper.get('[data-testid="fold-action"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="workbench-nav-drawer"]').exists()).toBe(true)

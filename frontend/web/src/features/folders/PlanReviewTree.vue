@@ -7,7 +7,7 @@ import { decisionGroups, keepReasonText, memberConclusion, partitionFacts, resol
 import type { ComponentOutcome } from '@/lib/api/types'
 
 /**
- * The plan's own view of one member (spec T3).
+ * The plan's own view of one member (ADR 0001 §3).
  *
  * It is built from the FROZEN plan — never from the latest scan — so what it
  * shows is what the plan will do, not what the disk happens to hold now. It is
@@ -60,7 +60,7 @@ const conclusion = computed(() =>
 /** The plan is not there yet: the operation says whether it ever was. */
 const planMissing = computed(() => Boolean(operation.value) && !operation.value?.current_revision)
 
-/** The frozen proposal stays on screen, with the fact that it is no longer current (T3). */
+/** The frozen proposal stays on screen, with the fact that it is no longer current. */
 const needsPlanning = computed(() => {
   const op = operation.value
   if (!op?.current_revision) return false
@@ -83,7 +83,7 @@ interface Row {
   pending: boolean
   resolution: string
   /** The plan's own code, as the member review keeps it; the words come from
-   *  the same map, at the same point, so the two views cannot drift (T3). */
+   *  the same map, at the same point, so the two views cannot drift. */
   reasonCode: string
   /** The plan expects this output and no decision of this component names it. */
   projected: boolean

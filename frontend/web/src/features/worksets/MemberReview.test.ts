@@ -149,8 +149,8 @@ describe('MemberReview', () => {
 
     const editable = mount(MemberReview, { props: { member, revision: excluded, editable: true } })
     expect(editable.get('[data-testid="member-review-edit"]').text()).toContain('修改此文件夹')
-    // Only a historical revision removes the way in (E05).
-    const historical = mount(MemberReview, { props: { member, revision: excluded, editable: false } })
-    expect(historical.find('[data-testid="member-review-edit"]').exists()).toBe(false)
+    // A caller that offers no way in hides the edit entry.
+    const withoutEdit = mount(MemberReview, { props: { member, revision: excluded, editable: false } })
+    expect(withoutEdit.find('[data-testid="member-review-edit"]').exists()).toBe(false)
   })
 })

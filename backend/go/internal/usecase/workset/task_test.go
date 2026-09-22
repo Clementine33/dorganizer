@@ -149,7 +149,7 @@ func (stubTask) ReviewRevision(in worksetusecase.RevisionFacts) (worksetusecase.
 
 // TestCreateCurrentMaterializesOnlyTheRequestedTask covers the registry
 // contract: creating a record writes the operation that was requested and its
-// seeded draft, and never a task nobody asked for (ADR 0007 §1).
+// seeded draft, and never a task nobody asked for (ADR 0001 §1).
 func TestCreateCurrentMaterializesOnlyTheRequestedTask(t *testing.T) {
 	f := newFixture(t)
 	worksetusecase.RegisterTasksForTest(f.svc, []worksetusecase.Task{

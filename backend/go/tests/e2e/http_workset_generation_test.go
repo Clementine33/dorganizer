@@ -400,7 +400,7 @@ func TestHTTPWorksetGenerationLoop(t *testing.T) {
 	}
 	// The library is gone with its record: the current-record read answers
 	// "none", the old record is not addressable, and its plans went with it
-	// (spec L1). The media on disk is untouched.
+	// (ADR 0001 §5). The media on disk is untouched.
 	var orphan struct {
 		Operations []struct {
 			OperationType string `json:"operation_type"`

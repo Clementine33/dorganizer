@@ -7,7 +7,7 @@ beforeEach(() => {
 })
 
 describe('workbench navigation store', () => {
-  it('starts with every group unfolded (N26)', () => {
+  it('starts with every group unfolded', () => {
     const nav = useWorkbenchNavStore()
     expect(nav.isGroupCollapsed('conversion')).toBe(false)
   })

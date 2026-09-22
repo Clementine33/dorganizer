@@ -25,7 +25,7 @@ import { useScanStore } from '@/stores/scan'
 import { CONVERSION, type SkippedFolder, type SkippedReason } from '@/lib/api/types'
 
 /**
- * The workbench overview of one library (spec N2, N3, R1).
+ * The workbench overview of one library (ADR 0001 §1, §2).
  *
  * The library IS the workbench: entering it lists every direct child directory
  * the last scan saw — empty ones and ones without audio included — and that is
@@ -204,7 +204,7 @@ async function runScan() {
 
 // ---- misc -------------------------------------------------------------
 
-/** Opening a member: its files, in this same workbench (N2, N3). The address
+/** Opening a member: its files, in this same workbench. The address
  * carries the directory's identity, so the folder's name stays out of it. */
 async function openMember(dirId: string) {
   await router.push({
@@ -218,7 +218,7 @@ function onSelectAll(value: boolean) {
   else ui.clearSelection()
 }
 
-/** The page in view, named as the navigation names it (spec N1, N31). */
+/** The page in view, named as the navigation names it (ADR 0001 §1; ADR 0003 §1). */
 const pageTitle = computed(() => (filesOpen.value ? '文件' : '概览与成员'))
 const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
 </script>
@@ -260,7 +260,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
       <!-- Files view: a member of this library, addressed by its relative
            path. It covers the list rather than replacing it, so the list keeps
            its layout — and with it the selection, the filters and the scroll
-           position (N2). -->
+           position. -->
       <div v-if="filesOpen" class="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
         <RouterView />
       </div>
@@ -268,7 +268,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
       <section class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="overview">
         <div class="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col p-4">
           <!-- Library identity, its scan state and the library-level actions
-               (N3): management and scanning live here, not in a second page. -->
+              : management and scanning live here, not in a second page. -->
           <div class="flex flex-wrap items-start gap-3">
             <div class="min-w-0">
               <h1 class="truncate font-heading text-base font-semibold tracking-tight">
@@ -294,7 +294,7 @@ const libraryRoot = computed(() => activeLibrary.value?.root_path ?? '')
                 <Square class="size-3" />
                 取消
               </Button>
-              <!-- Library management stays reachable from the workbench (N3):
+              <!-- Library management stays reachable from the workbench:
                    the entry lives here, not only on the selection page. -->
               <Button
                 v-if="activeLibrary"

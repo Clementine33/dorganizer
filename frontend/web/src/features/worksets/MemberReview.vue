@@ -14,13 +14,13 @@ import type { ComponentOutcome, RevisionDetailResponse, RevisionMember, WorksetM
 /**
  * One member's frozen review: the configuration the revision was planned with
  * (effective values plus per-unit sources), its input status and the planned
- * components. Historical revisions show their frozen data, never the live
- * common values (P01, T13).
+ * components. It shows the revision's frozen data, never the live common
+ * values.
  */
 const props = defineProps<{
   member: WorksetMember
   revision: RevisionDetailResponse
-  /** A historical revision is read-only: it offers no way into an editor (E05). */
+  /** Whether this review offers the way into the editor at all. */
   editable: boolean
 }>()
 
@@ -166,8 +166,8 @@ function componentFacts(component: ComponentOutcome): { label: string; tone: 'su
     </section>
 
     <!-- An excluded member is still editable: participation is one of the
-         units the editor writes, so hiding the way in would trap it. A
-         historical revision is the only state that stays read-only (E05). -->
+         units the editor writes, so hiding the way in would trap it. The
+         caller decides whether the way in is offered at all. -->
     <div v-if="editable">
       <slot name="actions" :edit="emit">
         <button

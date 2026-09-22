@@ -8,7 +8,7 @@ import (
 
 // FolderScan refreshes one folder subtree's stored inventory from disk. It is
 // the seam a session uses to plan and to execute against what is on disk now
-// rather than against whatever the last scan left behind (ADR 0004 §4).
+// rather than against whatever the last scan left behind (ADR 0001 §2).
 //
 // rootPath is the owning library's root: entries are keyed by it, so a scoped
 // scan must not rewrite that key with the folder it walked.

@@ -31,7 +31,7 @@ type fileOperationItem struct {
 // The whole request holds the direct-file-management slot, so it is refused
 // while any scan, planning session or execution is running, and it refuses
 // those in turn. Direct file management is its own write path with its own
-// path, conflict and admission rules (ADR 0007 §4, §5); it is not a plan and
+// path, conflict and admission rules (ADR 0002 §1, §2); it is not a plan and
 // is not recorded as one.
 func (s *Server) applyFileOperation(w http.ResponseWriter, r *http.Request) {
 	lib, ok := s.library(w, r)

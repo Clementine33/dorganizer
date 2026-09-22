@@ -10,7 +10,7 @@ import { createTreeModel, type TreeModel, type TreeModelNode } from './tree-mode
  * page and a conversion member's file page. It reads, selects and manages the
  * files of ONE member directory; it knows nothing about plans, drafts or
  * revisions — the plan's own review view is a separate component fed by the
- * frozen plan (ADR 0007 §3).
+ * frozen plan (ADR 0001 §3).
  *
  * Selection is by member-relative path, which is also how every file
  * operation addresses its items. A symlinked path never appears as a

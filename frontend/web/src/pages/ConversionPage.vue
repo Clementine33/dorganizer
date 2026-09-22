@@ -25,7 +25,7 @@ import { useWorksetUiStore } from '@/stores/workset-ui'
 import type { ComponentOutcome, WorksetMember } from '@/lib/api/types'
 
 /**
- * The conversion section of one library's workbench (spec N1, N2, R2).
+ * The conversion section of one library's workbench (ADR 0001 §1, §2; ADR 0003 §1).
  *
  * The page addresses the library, never a record id: the library's current
  * conversion record is looked up, and its operation — draft, plan, sessions —
@@ -59,7 +59,7 @@ const revision = workspace.revision
 const members = computed<WorksetMember[]>(() => workset.value?.members ?? [])
 // Every jump below is a named route: no page assembles a path from ids and
 // names by hand. The list's filter is the one view parameter this subtree
-// carries along (spec §9 自动隐藏规则), and nothing else is forwarded.
+// carries along (ADR 0003 §5), and nothing else is forwarded.
 const filter = computed<MemberFilter>(() => readMemberFilter(route.query.filter))
 const listQuery = computed(() => (filter.value === 'all' ? {} : { filter: filter.value }))
 const listRoute = computed(() => ({
@@ -337,14 +337,14 @@ watch(
  */
 const settingsBlockedReason = computed(() => settingsEditBlockedReason(operation.value))
 
-/** The page in view, for the narrow header context (N31). */
+/** The page in view, for the narrow header context. */
 const currentPage = computed(() => {
   if (filesOpen.value) return '文件'
   if (detailOpen.value) return carrierTitle.value
   return '转换'
 })
 
-/** The fixed parent of the current page (N32), never guessed from history. */
+/** The fixed parent of the current page, never guessed from history. */
 const parentLink = computed(() => {
   if (route.name === 'conversion-member-edit') {
     return {
@@ -407,7 +407,7 @@ const parentLink = computed(() => {
 
     <template #main="{ tier }">
       <!-- The record is gone or the library has none: the workbench says which
-           and offers the one action that makes sense (spec R2). -->
+           and offers the one action that makes sense (ADR 0001 §2). -->
       <div
         v-if="!recordQuery.isPending.value && !record"
         class="grid min-h-0 flex-1 place-items-center px-6 text-center"
@@ -427,7 +427,7 @@ const parentLink = computed(() => {
       <div class="relative flex min-h-0 flex-1 flex-col">
       <!-- The list is covered, never replaced, while a member's files are
            open: it keeps its layout, and with it the selection, the filters
-           and the scroll position (N2). A narrow container shows one layer at
+           and the scroll position. A narrow container shows one layer at
            a time, so an open drill-down takes the main area there. -->
       <div
         v-show="record && (tier !== 'narrow' || !detailOpen)"

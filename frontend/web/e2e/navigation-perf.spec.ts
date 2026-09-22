@@ -8,7 +8,7 @@ import { readStackState } from './helpers/stack-state.ts'
  * Returning to the overview keeps the list — behaviour, not a timing.
  *
  * The workbench's own navigation model says a return must preserve what the
- * user had: selection, filters and scroll position (spec N2). Keeping the
+ * user had: selection, filters and scroll position (ADR 0001 §1). Keeping the
  * list mounted is how that is implemented, and this diagnostic proves the
  * consequence: after a round trip into a member's files and back, the checked
  * directory is still checked and the list is back where it was scrolled —
@@ -139,7 +139,7 @@ test.describe('workbench return diagnostics', () => {
     for (let i = 0; i < 3; i++) {
       await visibleRow.click()
       // The member's address is its directory identity: the folder's name is
-      // not in it (spec §9 N1′).
+      // not in it (ADR 0003 §1).
       await expect(page).toHaveURL(/\/f\/[0-9a-f]{32}$/)
       await expect(page.getByTestId('member-tree')).toBeVisible({ timeout: 30_000 })
 

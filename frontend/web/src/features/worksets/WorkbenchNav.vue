@@ -7,18 +7,18 @@ import { useWorkbenchNavStore } from '@/stores/workbench-nav'
 import { workbenchNav, workbenchNavPosition, type WorkbenchNavId } from './workbench-nav'
 
 /**
- * The workbench's contextual navigation (N05, N20, N24-N27).
+ * The workbench's contextual navigation.
  *
  * One list, two carriers: the inline sidebar and the narrow drawer render this
  * same component, always with labels — the sidebar is either shown in full or
- * hidden as a whole (N04, §10.4), so there is no icon-only mode to style here.
+ * hidden as a whole, so there is no icon-only mode to style here.
  * 转换's label is a link (it navigates) and the arrow beside it is a separate
  * button that only folds the group — two adjacent controls, never a link
  * wrapping a button.
  */
 const props = defineProps<{
   libraryId: string
-  /** Why 转换全局设置 is unavailable (generating / orphaned / historical, E09). */
+  /** Why 转换全局设置 is unavailable (generating / orphaned). */
   settingsBlockedReason: string | null
 }>()
 
@@ -29,7 +29,7 @@ const items = computed(() => workbenchNav(props.libraryId))
 const position = computed(() => workbenchNavPosition(route.name))
 
 // Entering 转换全局设置 unfolds its group, by direct load or by navigation
-// (N27). The watch is on the route name, never on query data, so a collapse
+//. The watch is on the route name, never on query data, so a collapse
 // the user made afterwards is not undone by an unrelated refetch.
 watch(
   () => position.value?.current,
@@ -44,7 +44,7 @@ function rowClass(current: boolean, parent: boolean, child = false): string {
     'flex items-center gap-2 rounded-md px-2 text-xs focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:outline-none',
     child ? 'ml-4' : 'min-w-0 flex-1',
     // Touch devices get the 44px minimum at any width — the tablet tiers are
-    // touch too, so this is a pointer query, not a width one (N25, F15).
+    // touch too, so this is a pointer query, not a width one.
     'h-8 pointer-coarse:min-h-11',
     current ? 'bg-sidebar-accent font-medium' : parent ? 'bg-sidebar-accent/60' : 'hover:bg-sidebar-accent',
   ].join(' ')
@@ -67,7 +67,7 @@ function isCollapsed(id: WorkbenchNavId): boolean {
         >
           <span aria-hidden="true">{{ item.icon }}</span>
           <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
-          <!-- An unapplied edit is never hidden behind the section switch (E04). -->
+          <!-- An unapplied edit is never hidden behind the section switch. -->
           <span
             v-if="item.id === 'conversion' && editor.isDirty"
             class="size-1.5 shrink-0 rounded-full bg-[var(--warning-ink)]"
@@ -76,8 +76,7 @@ function isCollapsed(id: WorkbenchNavId): boolean {
           />
         </RouterLink>
         <!-- The fold control is its own button: activating 转换 navigates, the
-             arrow only folds (N25). No empty arrow when there is nothing below
-             (N24). -->
+             arrow only folds. No empty arrow when there is nothing below. -->
         <button
           v-if="(item.children?.length ?? 0) > 0"
           type="button"
@@ -112,7 +111,7 @@ function isCollapsed(id: WorkbenchNavId): boolean {
             <span aria-hidden="true">{{ child.icon }}</span>
             {{ child.label }}
           </RouterLink>
-          <!-- E09: a frozen, orphaned or historical operation disables the edit
+          <!-- a frozen or orphaned operation disables the edit
                entry instead of letting the form fail on save. -->
           <span
             v-else

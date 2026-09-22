@@ -11,7 +11,7 @@ import MemberEditPage from './MemberEditPage.vue'
 
 /**
  * Entering one member's editor is a decision when another target still holds
- * unapplied edits (E04): the page must ask, never silently bounce the user back
+ * unapplied edits: the page must ask, never silently bounce the user back
  * to the list (the reported "修改此文件夹 does nothing").
  */
 const workset: Workset = {

@@ -11,7 +11,7 @@ import { intentUnitCount } from '@/features/worksets/draft-intents'
 
 /**
  * Fixed-name batch editing. The name list is frozen when the entry point is
- * clicked and never follows later list selection or filtering (E02, T18). The
+ * clicked and never follows later list selection or filtering. The
  * read-only list is always available for checking exactly who is affected.
  */
 const route = useRoute()
@@ -44,7 +44,7 @@ function openSession(): boolean {
 }
 
 // A batch route without a frozen list is not an error but a missing session:
-// the user is returned to the list to choose folders first (R04).
+// the user is returned to the list to choose folders first.
 watch(
   [draft, memberIds],
   () => {
@@ -56,7 +56,7 @@ watch(
     const current = editor.session
     if (current && current.worksetId === worksetId.value && current.target.kind === 'batch') return
     if (openSession()) return
-    // Another target holds unapplied edits (E04): ask before dropping them;
+    // Another target holds unapplied edits: ask before dropping them;
     // refusing keeps them and returns to the list, where 继续编辑 resumes them.
     if (!window.confirm('另一个范围还有未应用的修改，放弃它才能批量修改这些文件夹。放弃吗？')) {
       void router.replace(listRoute.value)

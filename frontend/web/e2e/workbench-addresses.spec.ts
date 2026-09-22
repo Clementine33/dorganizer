@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 /**
- * The workbench's addresses (spec §9): they carry identities, never names.
+ * The workbench's addresses (ADR 0003): they carry identities, never names.
  *
  * The fixture is built from the names an address could never carry — Chinese,
  * an emoji, a percent sign, spaces. The browser flow then checks what the rules

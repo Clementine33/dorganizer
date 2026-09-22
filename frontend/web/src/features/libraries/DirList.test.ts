@@ -95,7 +95,7 @@ describe('DirList', () => {
     await settle()
 
     // The compact (phone) layout keeps the count under the name, so the merged
-    // row still shows checkbox, name, audio count and view (L03); the desktop
+    // row still shows checkbox, name, audio count and view; the desktop
     // layout shows the count in its own column. Both come from the one template
     // and the root never forces a horizontal minimum.
     const row = rowOf(wrapper, 'dir-link-f-0')
@@ -148,7 +148,7 @@ describe('DirList', () => {
     await wrapper.find('[data-testid="dir-checkbox-f-0"]').setValue(true)
     expect(wrapper.emitted('select')).toEqual([['f-0', true]])
 
-    // The row body navigates; it never toggles the checkbox (L06).
+    // The row body navigates; it never toggles the checkbox.
     await wrapper.find('[data-testid="dir-link-f-1"]').trigger('click')
     // The row opens the directory's page: the identity it is addressed by, not
     // the name it is displayed under.

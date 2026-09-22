@@ -256,7 +256,7 @@ func TestSparseOverridesSurviveRoundTrip(t *testing.T) {
 	}
 }
 
-// TestExplicitEmptyTagsAreNotAbsence covers the C02 pair: "clear tags" stores
+// TestExplicitEmptyTagsAreNotAbsence covers the pair: "clear tags" stores
 // an explicit empty array and keeps behaving differently from restored
 // inheritance when the common value changes afterwards.
 func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
@@ -283,7 +283,7 @@ func TestExplicitEmptyTagsAreNotAbsence(t *testing.T) {
 	}
 }
 
-// TestEqualValueDifferentSource covers T04: same effective value, different
+// TestEqualValueDifferentSource covers equal values from different sources: same effective value, different
 // provenance, and a common change that reaches only the inheriting member.
 func TestEqualValueDifferentSource(t *testing.T) {
 	f := newFixture(t)
@@ -323,7 +323,7 @@ func TestEqualValueDifferentSource(t *testing.T) {
 	}
 }
 
-// TestExcludingEveryMemberBlocksGeneration covers T09: all-excluded saves but
+// TestExcludingEveryMemberBlocksGeneration covers an all-excluded draft that saves but
 // cannot generate.
 func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 	f := newFixture(t)
@@ -349,7 +349,7 @@ func TestExcludingEveryMemberBlocksGeneration(t *testing.T) {
 	}
 }
 
-// TestHistoricalRevisionKeepsItsFrozenValues covers T13: after the common
+// TestHistoricalRevisionKeepsItsFrozenValues covers the frozen values: after the common
 // settings change, an older revision still reports the configuration and
 // sources it was planned with.
 func TestHistoricalRevisionKeepsItsFrozenValues(t *testing.T) {

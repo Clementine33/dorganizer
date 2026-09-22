@@ -19,7 +19,7 @@ import { useLibraryUiStore } from '@/stores/library-ui'
 import type { CreateLibraryInput } from '@/lib/api/types'
 
 /**
- * 工作集 — the media-library selection (`/worksets`, spec N1, N2).
+ * 工作集 — the media-library selection (`/worksets`, ADR 0001 §1; ADR 0003 §1).
  *
  * The product entry keeps the name 工作集, and what it selects is a media
  * library: choosing one enters its workbench, where browsing, conversion and

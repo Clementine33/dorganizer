@@ -9,7 +9,7 @@ import (
 
 // ==================== Workset operations ====================
 
-// Operation is one independent Workset Operation (ADR 0004 §2) keyed by
+// Operation is one independent Workset Operation (ADR 0001 §1) keyed by
 // (workset, type). Version is the operation concurrency counter advanced by
 // draft saves and revision publication; CurrentRevisionID is "" until the
 // first successful generation publishes.
@@ -214,7 +214,7 @@ var ErrRevisionNotFound = errors.New("revision not found")
 
 // OperationRevision is the immutable revision association row. ExcludedScope
 // (NUL-joined member_ids) and DraftSnapshot (frozen sparse draft JSON) are part
-// of the immutable snapshot (ADR 0004 §4).
+// of the immutable snapshot (ADR 0001 §2).
 type OperationRevision struct {
 	PlanID           string
 	WorksetID        string

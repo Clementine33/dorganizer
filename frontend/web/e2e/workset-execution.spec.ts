@@ -10,7 +10,7 @@ import path from 'node:path'
  * a short tone as the lossless source beside a below-target 128k mp3, which
  * the frozen plan rebuilds at the default 320k.
  *
- * Covered here (the M3 acceptance list):
+ * Covered here:
  *   - soft deletion: the disk matches the report (Delete/ recovery, rebuilt
  *     bitrate) and a reload restores the finished session from the server;
  *   - hard deletion: replaced and obsolete media is gone, no Delete/ at all;

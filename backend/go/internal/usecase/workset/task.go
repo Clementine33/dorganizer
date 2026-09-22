@@ -9,7 +9,7 @@ import (
 
 // Task is one kind of work a workset operation can carry. The workset module
 // owns the operation lifecycle — identity, ownership, versioning, drafts,
-// revisions, confirmations, planning and execution sessions — and a Task
+// revisions, planning and execution sessions — and a Task
 // supplies the business content behind it.
 //
 // Contract (binding on every Task implementation):
@@ -53,7 +53,7 @@ type Task interface {
 
 	// ValidateSessionInput checks that a frozen session input can produce a
 	// plan: the executable business validation behind the generation boundary
-	// (ADR 0004 §3, C13). It runs synchronously at enqueue time.
+	// (ADR 0006 §1). It runs synchronously at enqueue time.
 	ValidateSessionInput(rawDraft []byte, members []*sqlite.WorksetMember) error
 
 	// PlanSession plans one generation session from its frozen input and

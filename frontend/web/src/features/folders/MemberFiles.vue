@@ -22,13 +22,13 @@ import { currentRecordQueryOptions, operationQueryOptions } from '@/queries/work
 import { CONVERSION, type FileOperation, type FileOperationResult, type TreeNode } from '@/lib/api/types'
 
 /**
- * The shared current-files page (spec T1, T2).
+ * The shared current-files page (ADR 0001 §3).
  *
- * One page, two entries: the overview browses a member by its library-relative
- * path, and a conversion member resolves the same path from its stable member
- * id. The module receives (library, member path, where to go back to) and owns
+ * One page, two entries: the overview browses a member by the directory identity
+ * in its address, and a conversion member resolves that same identity from its
+ * stable member id. The module receives (library, member path, where to go back to) and owns
  * reading, refreshing, selecting and modifying the files inside that member —
- * it never reads a conversion draft or interprets a plan (ADR 0007 §3).
+ * it never reads a conversion draft or interprets a plan (ADR 0001 §3).
  *
  * The plan review is a *view of this same page* on the conversion entry only:
  * it renders the frozen plan, is read-only, and switching back to 当前文件 is
@@ -44,7 +44,7 @@ const libraryId = computed(() => (route.params.libraryId as string) || '')
 // once: the conversion entry carries a stable member id and resolves its
 // directory identity from the record, the overview carries that identity in the
 // address itself. Neither address names a directory: the path it stands for
-// comes back with the tree (spec §9 N3′, 缓存).
+// comes back with the tree (ADR 0003 §2, §6).
 const memberId = computed(() => (route.params.memberId as string) || null)
 const recordQuery = useQuery(() => currentRecordQueryOptions(api, libraryId.value, CONVERSION))
 const record = computed(() => recordQuery.data.value?.workset ?? null)
@@ -59,7 +59,7 @@ const dirId = computed(() =>
 const worksetId = computed(() => (memberId.value ? (record.value?.workset_id ?? null) : null))
 // A member link that no longer resolves against the current record: it was
 // replaced by another page, and the only honest thing to offer is the way back
-// to the conversion entry (N2).
+// to the conversion entry.
 const recordChanged = computed(
   () => Boolean(memberId.value) && recordQuery.isSuccess.value && member.value === null,
 )
@@ -90,7 +90,7 @@ const memberPath = computed(() => member.value?.rel_path ?? treeQuery.data.value
 /**
  * Why the tree is not there, in the user's terms. A directory that disappeared,
  * a library whose root moved and a record that was replaced are different
- * facts, and each says so instead of opening something else (spec §9).
+ * facts, and each says so instead of opening something else (ADR 0003).
  */
 const TREE_ERROR_TEXT: Record<string, string> = {
   DIRECTORY_NOT_FOUND: '这个文件夹已不在媒体库里（被改名、删除或换了库根）。它没有被自动创建，也没有跳到别的文件夹。',
@@ -113,7 +113,7 @@ const hasPlan = computed(() => Boolean(operationQuery.data.value?.current_revisi
 
 // View mode: the conversion entry offers 当前文件 / 计划审阅, and a member the
 // plan covers opens on its plan — the proposal is the reason the page exists
-// (spec T3); with no plan the current files are the only view there is. The
+// (ADR 0001 §3); with no plan the current files are the only view there is. The
 // mode is one of the few parameters a page supports, so a return visit and the
 // browser's back button land where the user left off.
 const mode = computed<'current' | 'plan'>(() => {
@@ -331,7 +331,7 @@ function submitDelete() {
 
     <!-- A member link that no longer resolves against the current record: the
          record was replaced by another page, and the only honest thing to
-         offer is the way back to the conversion entry (spec N2). -->
+         offer is the way back to the conversion entry (ADR 0001 §1). -->
     <div
       v-if="recordChanged"
       class="grid min-h-0 flex-1 place-items-center px-4 text-center"
@@ -355,7 +355,7 @@ function submitDelete() {
 
     <!-- The plan review is built from the frozen plan alone, so it stands on
          its own: a directory that moved, a failed refresh or a changed input
-         does not take the plan off the screen (T3). -->
+         does not take the plan off the screen. -->
     <PlanReviewTree
       v-else-if="mode === 'plan' && canReview"
       class="min-h-0 flex-1"

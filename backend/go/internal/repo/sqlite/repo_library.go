@@ -160,7 +160,7 @@ var ErrGenerationInProgress = errors.New("generation in progress")
 // and the prior scan state in the same transaction, so no stale paths remain
 // attached and the next scan starts from nothing. A root-path change is
 // rejected with ErrLibraryHasWorksets while a processing record still belongs
-// to the library (L1: a record keeps its root until it is replaced); name
+// to the library (a record keeps its root until it is replaced); name
 // edits stay allowed.
 func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) {
 	candidateRoot := pathnorm.CleanRootPath(rootPath)
@@ -211,7 +211,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 	if rootChanged {
 		// The inventory of the previous root is not the inventory of the new
 		// one: drop it and let the next scan rebuild it, so nothing reads a
-		// stale listing as if it described the new root (L1).
+		// stale listing as if it described the new root.
 		if _, err := tx.Exec("DELETE FROM entries WHERE root_path = ?", currentRoot); err != nil {
 			return nil, err
 		}
@@ -226,7 +226,7 @@ func (r *Repository) UpdateLibrary(id, name, rootPath string) (*Library, error) 
 // owns, in one transaction: the records' plans, executions, members, drafts and
 // sessions go with them, so no orphaned record survives its library. Media
 // files and the library-level recovery directory on disk are never touched
-// (L1).
+//.
 //
 // It fails with ErrGenerationInProgress while a record has a queued or running
 // planning session and with ErrExecutionInProgress while one has a queued or

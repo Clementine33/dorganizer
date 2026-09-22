@@ -53,7 +53,7 @@ func parseCORSOrigins(raw string) []string {
 // retentionWindows are how long the idle-time maintenance pass keeps finished
 // session records: scans are disposable once their inventory has been merged,
 // while a planning session is the record of a generation key and has to outlive
-// the idempotency-key guarantee the workset service makes (ADR 0004, ADR 0010).
+// the idempotency-key guarantee the workset service makes (ADR 0001, ADR 0008).
 const (
 	scanRetention       = 7 * 24 * time.Hour
 	generationRetention = 30 * 24 * time.Hour
@@ -137,7 +137,7 @@ func main() {
 
 	// Whether this database can give freed space back is worth one line at
 	// startup: the answer is fixed when the file is created, and reclamation
-	// cannot change it later (ADR 0010).
+	// cannot change it later (ADR 0008).
 	logAutoVacuumMode(ctx, repo)
 
 	// Build token (use env if provided, else empty)
@@ -181,7 +181,7 @@ func runServer(
 	// Direct file management and the managed task paths share one admission
 	// control: a file operation is refused while a scan, planning session or
 	// execution is running, and starting one of those is refused while a file
-	// operation holds the slot (ADR 0007 §5).
+	// operation holds the slot (ADR 0002 §2).
 	gate := fileops.NewGate(repo.HasActiveSession)
 	fileOpsSvc := fileops.NewService(gate, func(scanCtx context.Context, folderPath, rootPath string) error {
 		_, scanErr := memberScanner.ScanFolderCtx(scanCtx, folderPath, rootPath)

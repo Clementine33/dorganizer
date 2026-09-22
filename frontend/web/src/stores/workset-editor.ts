@@ -11,7 +11,7 @@ import {
 } from '@/features/worksets/draft-intents'
 
 /**
- * The workbench's single active edit session (E02-E04).
+ * The workbench's single active edit session.
  *
  * The session owns everything that must survive collapsing the editor,
  * returning to the list, or switching carriers at a container breakpoint:
@@ -57,7 +57,7 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
     /**
      * Opens a session. Returns false when another target already has
      * unapplied edits — the caller must ask the user to discard or continue
-     * rather than silently switching the edit target (E04).
+     * rather than silently switching the edit target.
      */
     open(input: {
       worksetId: string
@@ -140,7 +140,7 @@ export const useWorksetEditorStore = defineStore('workset-editor', {
       // "wait for the generation" advice: neither cause is true any more.
       session.error = null
     },
-    /** Discard: only an explicit user action drops unapplied edits (E08). */
+    /** Discard: only an explicit user action drops unapplied edits. */
     close() {
       this.session = null
     },
@@ -168,7 +168,7 @@ function saveFailureMessage(error: { code?: string; message?: string }): string 
  * Whether a session holds edits that would actually change the saved document.
  * A recorded intent that lands on the value already persisted — re-picking the
  * same option, clearing an override that was never set — is not an edit, so it
- * must not read as dirty or block switching the edit target (E04, C09).
+ * must not read as dirty or block switching the edit target.
  */
 function sessionHasChanges(session: EditSession): boolean {
   // Both sides are built by applyIntent so the comparison is normalization-

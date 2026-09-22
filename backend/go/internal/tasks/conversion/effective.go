@@ -44,7 +44,7 @@ func CommonPolicy(doc *DraftDoc) reconcile.Policy {
 // ResolveEffective resolves every member's effective config from the sparse
 // draft. Excluded members are resolved too — exclusion changes participation,
 // never the stored overrides — so restoring participation returns the member to
-// its previous inheritance relationships (ADR 0004 §3, C11).
+// its previous inheritance relationships (ADR 0006 §1).
 func ResolveEffective(doc *DraftDoc, members []*sqlite.WorksetMember) ([]MemberEffective, error) {
 	if err := validateDraftDoc(doc, members); err != nil {
 		return nil, err

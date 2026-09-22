@@ -93,7 +93,7 @@ func revisionSummaryReason(detail *sqlite.PlanDetail) string {
 
 // revisionCounts derives the four independent plan facts from the frozen
 // snapshot. Changed, unmet, blocked and unchanged are separate facts that may
-// overlap; no exclusive status label is used to derive them (ADR 0004 §4).
+// overlap; no exclusive status label is used to derive them (ADR 0001 §2).
 func revisionCounts(detail *sqlite.PlanDetail, review PlanReview) RevisionCounts {
 	summary := planSummaryOf(detail)
 	withOperations := map[string]bool{}

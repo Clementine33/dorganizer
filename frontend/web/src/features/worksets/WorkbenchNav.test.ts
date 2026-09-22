@@ -64,7 +64,7 @@ describe('workbench navigation', () => {
     const settings = await mountNav('/worksets/lib-1/conversion/settings')
     expect(settings.get('[data-testid="nav-conversion-settings"]').attributes('aria-current')).toBe('page')
     // The parent shows its owning state without pretending to be a second
-    // current page (N27).
+    // current page.
     expect(settings.get('[data-testid="nav-conversion"]').attributes('aria-current')).toBeUndefined()
     expect(settings.get('[data-testid="nav-conversion"]').classes().join(' ')).toContain('bg-sidebar-accent/60')
   })
@@ -107,7 +107,7 @@ describe('workbench navigation', () => {
     expect(wrapper.get('[data-testid="nav-group-conversion"]').attributes('aria-expanded')).toBe('true')
 
     // The user may fold it again while staying on the settings page; nothing
-    // re-expands it behind their back (N27).
+    // re-expands it behind their back.
     await wrapper.get('[data-testid="nav-group-conversion"]').trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.get('[data-testid="nav-group-conversion"]').attributes('aria-expanded')).toBe('false')
@@ -126,7 +126,7 @@ describe('workbench navigation', () => {
 
   it('asks for a 44px target whenever the pointer is coarse, at any width', async () => {
     // The tablet tiers are touch too, so the minimum is a pointer query rather
-    // than a width one (N25, F15).
+    // than a width one.
     const wrapper = await mountNav('/worksets/lib-1')
 
     expect(wrapper.get('[data-testid="nav-overview"]').classes()).toContain('pointer-coarse:min-h-11')

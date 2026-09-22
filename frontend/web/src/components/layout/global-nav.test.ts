@@ -11,7 +11,7 @@ describe('global navigation definition', () => {
 })
 
 describe('global navigation ownership', () => {
-  // The mapping is explicit on purpose (N18): asserting it against the real
+  // The mapping is explicit on purpose: asserting it against the real
   // route table means a renamed or added route fails here instead of silently
   // losing its highlight.
   it('assigns every application route to a global entry', () => {

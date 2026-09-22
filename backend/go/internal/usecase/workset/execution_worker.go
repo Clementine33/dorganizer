@@ -167,7 +167,7 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 	// The run revalidates the revision's recorded inputs against the disk before
 	// the first write: a folder that drifted after planning stops the session
 	// here, with every file untouched, instead of failing component by component
-	// halfway through (ADR 0004 §4).
+	// halfway through (ADR 0001 §2).
 	if code, message, verified := d.verifyInputs(ctx, ex, run); !verified {
 		status := sqlite.ExecStatusFailed
 		if code == "CANCELED" {
@@ -210,7 +210,7 @@ func (d *dispatcher) executeRun(ex *sqlite.PlanExecution) {
 		// including at N = 1, where the window empties after every commit. Each
 		// boundary publishes the next head with the result it commits, so only
 		// the first unit needs a write of its own, before preparation or
-		// delivery can block (ADR 0006 decision 4).
+		// delivery can block (ADR 0007 decision 4).
 		if i == 0 {
 			d.persistPosition(ex.ExecutionID, req.Units[i])
 		}

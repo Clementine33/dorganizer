@@ -14,10 +14,10 @@ import { cn } from '@/lib/utils'
 
 /**
  * Modal side sheet on the same Reka Dialog primitive as Modal: a 380px
- * right-aligned carrier for the middle container tier (§7.3). Modal semantics,
+ * right-aligned carrier for the middle container tier. Modal semantics,
  * Esc handling and focus restoration come from the primitive, and the closed
  * sheet unmounts entirely — the wide tier renders its own inline detail
- * instead, so a detail is never mounted twice (F08, F09).
+ * instead, so a detail is never mounted twice.
  */
 const props = withDefaults(
   defineProps<{

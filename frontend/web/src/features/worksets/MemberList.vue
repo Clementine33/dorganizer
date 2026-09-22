@@ -10,10 +10,10 @@ import type { OperationDraftDocument, WorksetMember } from '@/lib/api/types'
 /**
  * The operation's member list.
  *
- * Clicking a row body opens the member (view), the checkbox only selects
- * (E01): selection never drills in and viewing never selects. Filtering never
+ * Clicking a row body opens the member (view), the checkbox only selects:
+ * selection never drills in and viewing never selects. Filtering never
  * clears the selection, and a filter that hides selected rows reports how many
- * are hidden so "修改 N 个文件夹" never counts invisible names (E10).
+ * are hidden so "修改 N 个文件夹" never counts invisible names.
  */
 const props = defineProps<{
   members: WorksetMember[]
@@ -26,7 +26,7 @@ const props = defineProps<{
   /**
    * Drill-down tier: the row keeps only the name, a status icon and the view
    * action, so a narrow container is not spent on text that the member detail
-   * repeats in full (F14, §7.3).
+   * repeats in full.
    */
   compact?: boolean
 }>()
@@ -231,7 +231,7 @@ function conclusionTitle(member: WorksetMember): string {
             <td class="px-2 align-middle">
               <div class="flex items-center gap-0.5">
                 <!-- The member's files: the shared file module, opened inside
-                     this workbench (spec T1, N1). -->
+                     this workbench (ADR 0001 §1, §3). -->
                 <Button
                   variant="ghost"
                   size="icon-sm"

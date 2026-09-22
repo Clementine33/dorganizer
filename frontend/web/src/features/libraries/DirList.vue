@@ -5,7 +5,7 @@ import { computed, ref } from 'vue'
 import type { LibraryDir } from '@/lib/api/types'
 
 /**
- * The overview's directory list (spec N3).
+ * The overview's directory list (ADR 0001 §1).
  *
  * Every direct child directory of the library root, empty ones and ones
  * without audio included: the audio count is shown as a status, never used to
@@ -55,7 +55,7 @@ const scrollEl = ref<HTMLElement | null>(null)
 // @tanstack/vue-virtual owns the scroll observation (it attaches its own
 // scroll/resize listeners once getScrollElement resolves) and re-renders
 // reactively after each scroll; the window is a slice of the same single data
-// source in every layout (L05: no second mobile list).
+// source in every layout (no second mobile list).
 const virtualizer = useVirtualizer(
   computed(() => ({
     count: props.dirs.length,
@@ -153,7 +153,7 @@ function dirAt(index: number): LibraryDir {
             </span>
             <span v-else class="text-[var(--warning-ink,var(--text-secondary))]">无音频</span>
           </div>
-          <!-- Always on screen, never hover-only (L06); the phone tier keeps a
+          <!-- Always on screen, never hover-only; the phone tier keeps a
                44px target while the desktop tier stays compact. -->
           <button
             type="button"

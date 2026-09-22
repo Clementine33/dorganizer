@@ -2,7 +2,7 @@ package reconcile
 
 import "regexp"
 
-// Core domain types for the reconcile_audio_outputs workflow step.
+// Core domain types for the reconcile_audio_outputs planning pass.
 //
 // The pipeline is: Observed Inventory -> classifier partition -> Component
 // discovery -> Variant Groups -> Desired Audio Profile -> lane reconciliation
@@ -188,7 +188,7 @@ type DesiredProfile struct {
 	Encoded  *AudioOutputSpec `json:"encoded,omitempty"`
 }
 
-// Conversion modes (ADR 0003 §4.1). The zero value and the empty string are
+// Conversion modes (ADR 0005 §3). The zero value and the empty string are
 // the strict behavior: old policies and old clients keep byte-identical
 // outcomes. "available_sources" is the relaxed mode for new batches.
 const (

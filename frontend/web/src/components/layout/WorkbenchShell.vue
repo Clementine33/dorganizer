@@ -7,33 +7,33 @@ import { Button } from '@/components/ui/button'
 import { useContainerTier } from '@/composables/use-container-tier'
 
 /**
- * Container-adaptive workbench shell (§7.3, F11-F13, N09, N28).
+ * Container-adaptive workbench shell.
  *
  * One named container decides every size in CSS at the shared breakpoints; the
  * composable observes the same element only to pick the interaction model
  * (inline sidebar vs drawer). Widths: <=640 hides the contextual nav behind a
  * drawer; above that it is the inline 200px sidebar, and the header toggle
- * collapses it to fully hidden — there is no icon-only rail (N04, §10.4).
+ * collapses it to fully hidden — there is no icon-only rail.
  *
  * The narrow drawer is a Reka Dialog: modal semantics, focus containment over
  * the whole application (the global rail and bottom bar included), Esc on the
- * topmost layer and focus restoration come from the primitive (N17, F08). It
+ * topmost layer and focus restoration come from the primitive. It
  * is deliberately not portalled — Reka hides every sibling of the content, so
  * the background becomes inert while the drawer stays inside the shell. The
  * named container lives on the inner column, never on the drawer's own
  * ancestor: `container-type` makes an element the containing block for fixed
  * descendants, which would clip the scrim to the shell box and leave the rail
- * and bottom bar undimmed (N17).
+ * and bottom bar undimmed.
  */
 withDefaults(
   defineProps<{
     navTitle?: string
     detailColumn?: boolean
-    /** Narrow header context (N31): the subject and the page in view. */
+    /** Narrow header context: the subject and the page in view. */
     contextTitle?: string
     contextPage?: string
     /** Fixed parent of the current page, for the narrow header's back control
-     *  (N32); it is a route, never a guess from history. */
+     * ; it is a route, never a guess from history. */
     contextBackTo?: RouteLocationRaw
     contextBackLabel?: string
   }>(),
@@ -52,7 +52,7 @@ const shell = ref<HTMLElement | null>(null)
 const toggle = ref<InstanceType<typeof Button> | null>(null)
 const { tier } = useContainerTier(shell)
 // Wide containers default to the full 200px sidebar, mid containers to hidden
-// (N04, §10.4); the user's toggle then wins until the tier changes.
+//; the user's toggle then wins until the tier changes.
 const expanded = ref(true)
 const drawerOpen = ref(false)
 const narrow = computed(() => tier.value === 'narrow')
@@ -62,7 +62,7 @@ watch(tier, (value) => {
   if (value !== 'narrow') drawerOpen.value = false
 })
 
-// The drawer closes once a page selection succeeded (N28). A navigation the
+// The drawer closes once a page selection succeeded. A navigation the
 // unapplied-edit guard refused never changes the path, so the drawer, the form
 // and the route all stay as they were.
 watch(
@@ -77,14 +77,14 @@ function toggleNav() {
   else expanded.value = !expanded.value
 }
 
-/** Closing returns focus to the control that opened the drawer (N17). */
+/** Closing returns focus to the control that opened the drawer. */
 function restoreNavFocus(event: Event) {
   event.preventDefault()
   const element = toggle.value?.$el
   if (element instanceof HTMLElement) element.focus()
 }
 
-/** A tap on the page you are already on is a selection too (N28), and a
+/** A tap on the page you are already on is a selection too, and a
  *  duplicated navigation runs no guards, so closing here cannot hide a refused
  *  leave. Everything else waits for the route watcher. */
 function onDrawerClick(event: MouseEvent) {
@@ -115,7 +115,7 @@ function onDrawerClick(event: MouseEvent) {
         </Button>
 
         <!-- Narrow: the local navigation button plus the subject and the page in
-             view, two truncatable lines with their full text available (N31).
+             view, two truncatable lines with their full text available.
              The desktop tiers keep the complete breadcrumb. -->
         <div
           v-if="narrow && (contextTitle || contextPage)"
@@ -149,12 +149,12 @@ function onDrawerClick(event: MouseEvent) {
         </slot>
       </header>
 
-      <!-- The named container for every §7.3 rule and for the tier this shell
+      <!-- The named container for every layout rule and for the tier this shell
            reports: one measurement source, and no containment on the drawer's
            ancestor. -->
       <div ref="shell" class="@container flex min-h-0 flex-1">
         <!-- Mid/wide: the inline contextual navigation. Collapsing hides the
-             whole sidebar instead of shrinking it to an icon rail (N04, §10.4);
+             whole sidebar instead of shrinking it to an icon rail;
              the header toggle brings the same labelled list back. -->
         <nav
           v-if="!narrow"
@@ -202,7 +202,7 @@ function onDrawerClick(event: MouseEvent) {
          page you are already on is still a selection, and it can never hide a
          refused leave (a duplicated navigation runs no guards), so it closes
          here; every other navigation closes through the route watcher above
-         only once it succeeded (N28). -->
+         only once it succeeded. -->
     <DialogPortal v-if="narrow" disabled>
       <DialogOverlay class="fixed inset-0 z-40 bg-black/40" data-testid="workbench-nav-scrim" />
       <DialogContent

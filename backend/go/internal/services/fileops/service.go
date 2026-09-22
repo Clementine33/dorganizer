@@ -34,11 +34,11 @@ func NewService(gate *Gate, scan MemberScan) *Service {
 //
 // The whole request — including its refresh — runs inside one direct-file-
 // management slot, so the refresh is part of the same protected operation and
-// never re-enters admission against itself (spec C1).
+// never re-enters admission against itself (ADR 0002 §2).
 //
 // Execution stops at the first failure: the remaining items are reported as
 // not attempted, and nothing already done is undone. A failed refresh is
-// reported as a refresh failure, never as a failed write (spec F2, F4).
+// reported as a refresh failure, never as a failed write (ADR 0002 §1; ADR 0001 §4).
 func (s *Service) Apply(ctx context.Context, req Request) (*Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (s *Service) Apply(ctx context.Context, req Request) (*Result, error) {
 		return nil, &PathError{CodePathInvalid, "the request has no items"}
 	}
 	// A rename and a move each act on one item; only soft delete is a batch
-	// (ADR 0007 §4). A request that asks for several renames is refused as a
+	// (ADR 0002 §1). A request that asks for several renames is refused as a
 	// whole — before the member is touched — rather than applied item by item.
 	if req.Operation != OpSoftDelete && len(req.Items) != 1 {
 		return nil, &PathError{
@@ -133,7 +133,7 @@ type planned struct {
 // already covers — a directory and its own child are one operation, and
 // deleting the parent first would otherwise leave the child "missing" — as
 // well as an item named twice, which is the same operation asked for twice
-// (spec F2).
+// (ADR 0002 §1).
 func planItems(items []Item) []planned {
 	cleaned := make([]string, len(items))
 	for i, item := range items {

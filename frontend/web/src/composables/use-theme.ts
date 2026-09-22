@@ -28,7 +28,7 @@ function apply(value: Theme): void {
   document.documentElement.classList.toggle('dark', dark)
 }
 
-// One theme state for the whole application (N14): the desktop rail and the
+// One theme state for the whole application: the desktop rail and the
 // list pages' 更多 menu both render from it, so no entry can hold a stale value
 // and react to a system-preference change with a preference the user already
 // replaced. Created on first use, never per component instance.

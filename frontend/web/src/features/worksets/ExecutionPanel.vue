@@ -14,7 +14,7 @@ import type {
 } from '@/lib/api/types'
 
 /**
- * Live progress and the observed result of one execution session (M3). Every
+ * Live progress and the observed result of one execution session. Every
  * number here is a count that actually happened — no estimated percentage —
  * and a failure keeps its partial facts: completed components, the operations
  * that never ran, and the files preserved for an operator.

@@ -18,7 +18,7 @@ import (
 // library-relative path — a rescan renumbers nothing the caller navigates by —
 // and DirID is that path's navigation identity, which is what a page address
 // carries. The audio count is a status fact: a directory without audio is still
-// listed and still browsable (spec N3, I1; §9 N3′).
+// listed and still browsable (ADR 0001 §1; ADR 0003 §2).
 type dirResponse struct {
 	Name           string `json:"name"`
 	Path           string `json:"path"`
@@ -73,7 +73,7 @@ type treeNode struct {
 
 // getMemberTree returns the stored tree of one member directory, addressed by
 // its directory id. The resolved identity comes back with the tree, so a caller
-// that only knows the identity still learns which path it names (spec §9 I1′).
+// that only knows the identity still learns which path it names (ADR 0003 §4).
 func (s *Server) getMemberTree(w http.ResponseWriter, r *http.Request) {
 	member, ok := s.memberByDir(w, r)
 	if !ok {
@@ -98,7 +98,7 @@ func (s *Server) getMemberTree(w http.ResponseWriter, r *http.Request) {
 // refreshMemberTree re-scans one member directory and answers with the
 // refreshed tree. Refreshing is a scan, so it takes the scanning side of the
 // admission control: a running file operation refuses it instead of letting
-// two writers touch the same tree (spec T2, C1).
+// two writers touch the same tree (ADR 0001 §3; ADR 0002 §2).
 func (s *Server) refreshMemberTree(w http.ResponseWriter, r *http.Request) {
 	member, ok := s.memberByDir(w, r)
 	if !ok {
@@ -158,7 +158,7 @@ type resolvedMember struct {
 // inventory knows — an identity that names no directory of it, that is
 // malformed, or that two directories claim, is refused — and only the single
 // match is then validated on disk, so the workbench never invents a directory
-// and a symlinked member is not a member (spec T2, §9 I1′).
+// and a symlinked member is not a member (ADR 0001 §3; ADR 0003 §4).
 func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedMember, bool) {
 	lib, ok := s.library(w, r)
 	if !ok {
@@ -181,7 +181,7 @@ func (s *Server) memberByDir(w http.ResponseWriter, r *http.Request) (*resolvedM
 	rel, found, ambiguous := matchDirID(children, lib.ID, lib.RootPath, raw)
 	if ambiguous {
 		// Answering "not found" would hide a real state and answering with one
-		// of the matches would be a guess (spec §9 I1′).
+		// of the matches would be a guess (ADR 0003 §4).
 		writeError(
 			w,
 			http.StatusConflict,

@@ -138,7 +138,7 @@ export function createCurrentRecordMutationOptions(
 }
 
 // Immutable revision detail (frozen members with sources, roots, component
-// ownership, confirmation). staleTime is finite: validation is derived at read
+// ownership). staleTime is finite: validation is derived at read
 // time from the live inventory, so a revisit should see fresher state.
 export function operationRevisionDetailQueryOptions(
   api: ApiClientContract,

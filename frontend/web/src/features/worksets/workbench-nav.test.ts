@@ -14,7 +14,7 @@ describe('workbench navigation definition', () => {
       name: 'conversion-settings',
       params: { libraryId: 'lib-1' },
     })
-    // Only the group carries children, so only it gets a fold control (N24).
+    // Only the group carries children, so only it gets a fold control.
     expect(nav[0].children).toBeUndefined()
   })
 

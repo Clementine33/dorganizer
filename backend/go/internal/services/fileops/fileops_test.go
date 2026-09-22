@@ -275,7 +275,7 @@ func TestSoftDeleteIntoTheLibraryRecoveryDirectory(t *testing.T) {
 	}
 }
 
-// TestBatchStopsAtTheFirstFailure covers F2: the first failure ends the run,
+// TestBatchStopsAtTheFirstFailure covers the batch rule: the first failure ends the run,
 // what already happened is reported as done, and what never ran is named as
 // not attempted.
 func TestBatchStopsAtTheFirstFailure(t *testing.T) {
@@ -312,7 +312,7 @@ func TestBatchStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
-// TestParentAndChildAreNotProcessedTwice covers F2's de-duplication: selecting
+// TestParentAndChildAreNotProcessedTwice covers the de-duplication: selecting
 // a directory and something inside it is one operation, not two.
 func TestParentAndChildAreNotProcessedTwice(t *testing.T) {
 	f := newFixture(t, false)
@@ -545,7 +545,7 @@ func TestRenameAndMoveTakeOneItem(t *testing.T) {
 	}
 }
 
-// TestRefreshFailureIsReportedSeparately covers F4: the writes happened, so a
+// TestRefreshFailureIsReportedSeparately covers the refresh rule: the writes happened, so a
 // failed refresh is reported as a refresh failure and never as a failed write.
 func TestRefreshFailureIsReportedSeparately(t *testing.T) {
 	f := newFixture(t, false)

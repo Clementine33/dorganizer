@@ -132,7 +132,7 @@ func TestMissingRootIsBlockedButNotStaleUntilAudioAppears(t *testing.T) {
 	}
 }
 
-// TestOnlyTheCurrentPlanSurvivesTheNextGeneration covers R3: generating a new
+// TestOnlyTheCurrentPlanSurvivesTheNextGeneration covers generating a new
 // plan publishes it and retires the one it replaced, in that order — a record
 // keeps one plan, and a failed or canceled generation never touches it.
 func TestOnlyTheCurrentPlanSurvivesTheNextGeneration(t *testing.T) {

@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
  * Modal dialog on Reka's Dialog primitive: modal semantics, focus trap, Esc to
  * close the topmost layer, and focus restoration to the trigger on close come
  * from the primitive itself. `title` is required so every dialog carries an
- * accessible name (F08).
+ * accessible name.
  */
 const props = defineProps<{
   open: boolean

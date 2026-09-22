@@ -11,7 +11,7 @@ import {
 import { useTheme, type Theme } from '@/composables/use-theme'
 
 /**
- * The header menu (N13, N14, L02).
+ * The header menu.
  *
  * The shared theme options always come last, so every entry is the same theme
  * state and action. A page may pass secondary actions into the default slot —

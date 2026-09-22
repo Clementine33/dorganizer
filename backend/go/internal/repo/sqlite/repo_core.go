@@ -83,7 +83,7 @@ type Repository struct {
 // schemaVersion is the on-disk schema generation this build reads and writes.
 // The marker row in schema_meta is what makes an older database recognisable:
 // a database without it (or with another version) is refused at open time, and
-// neither migrated nor cleared (ADR 0007 §7, spec D2).
+// neither migrated nor cleared (ADR 0008 §3).
 const schemaVersion = "3"
 
 // ErrIncompatibleDatabase marks a database this build must not open: it was
@@ -333,7 +333,7 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 
 -- On-disk schema marker. A database without it (or with another version) was
 -- created by a different generation and is refused at open time rather than
--- migrated or reset (ADR 0007 §7).
+-- migrated or reset (ADR 0008 §3).
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
@@ -482,7 +482,7 @@ CREATE TABLE IF NOT EXISTS workset_members (
     UNIQUE (workset_id, rel_path)
 );
 
--- Independent Workset Operations (ADR 0004 §2), keyed by (workset, type).
+-- Independent Workset Operations (ADR 0001 §1), keyed by (workset, type).
 -- version is the operation concurrency counter: draft saves and revision
 -- publication advance it, and If-Match on draft/generation
 -- writes is bound to it. current_revision_id is never mutated by a failed,
@@ -572,7 +572,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_generations_queue
     ON plan_generations(status, created_at, generation_id);
 
 -- Workset execution sessions: the durable record of one revision
--- being executed (ADR 0004 §4, M2). status: queued|running|succeeded|failed|
+-- being executed (ADR 0001 §2). status: queued|running|succeeded|failed|
 -- canceled|interrupted. A revision is executed at most once: the unique
 -- idempotency index holds the key for the session's whole life, and the
 -- plan_id index answers "has this revision already been executed".

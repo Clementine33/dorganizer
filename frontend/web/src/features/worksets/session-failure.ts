@@ -1,6 +1,6 @@
 /**
  * Why a session stopped, in the user's words. The server's codes are stable
- * contract values (ADR 0004 §4); its English message is a fallback, not the
+ * contract values (ADR 0007 §4); its English message is a fallback, not the
  * primary text the user reads.
  */
 const SESSION_FAILURES: Record<string, string> = {
