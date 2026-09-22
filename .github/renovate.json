@@ -1,7 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "group:allNonMajor"],
   "timezone": "Asia/Singapore",
   "schedule": ["* * 1-7 * 6"],
-  "ignoreDeps": ["go"]
+  "ignoreDeps": ["go"],
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "GitHub Actions non-major",
+      "groupSlug": "github-actions-non-major"
+    }
+  ]
 }
