@@ -5,81 +5,84 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A pushed fix supersedes the run for the commit it replaced: that run's answer
-# is about code nobody is going to merge. Mainline runs are never cancelled —
-# the run on main is the record of what shipped.
+# A new PR commit supersedes its older run. Keep main's result for shipped code.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # --ff-only preserves the PR head SHA. A successful PR run marks that SHA
-  # after every required job passes; a missing marker runs the suite on main.
-  already-tested:
-    if: github.event_name == 'push'
+  prepare:
     runs-on: ubuntu-latest
     permissions:
-      statuses: read
+      actions: write
+      contents: read
+      pull-requests: read
     outputs:
-      tested: ${{ steps.lookup.outputs.tested }}
+      # PR checks cannot satisfy a push's full suite, even for the same tree.
+      duplicate: ${{ steps.duplicate.outcome == 'success' && steps.duplicate.outputs.should_skip == 'true' && fromJSON(steps.duplicate.outputs.skipped_by).event == 'push' }}
+      go: ${{ steps.paths.outcome != 'success' || steps.paths.outputs.go == 'true' }}
+      web: ${{ steps.paths.outcome != 'success' || steps.paths.outputs.web == 'true' }}
     steps:
-      - id: lookup
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          tested=false
-          status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" \
-            --jq '.statuses[] | select(.context == "ci/pr-verified") | .state' 2>/dev/null) || status=
-          if [ "$status" = success ]; then tested=true; fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
-          echo "commit ${GITHUB_SHA:0:8}: already_tested=$tested"
+      - id: duplicate
+        if: github.event_name == 'push'
+        continue-on-error: true
+        uses: fkirc/skip-duplicate-actions@v5
+      - id: paths
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            go:
+              - 'backend/go/**'
+              - 'mise.toml'
+              - 'Taskfile.yml'
+              - '.github/workflows/ci.yml'
+              - 'config.json.template'
+            web:
+              - 'frontend/web/**'
+              - 'scripts/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'mise.toml'
+              - 'Taskfile.yml'
+              - '.github/workflows/ci.yml'
 
   go-test:
-    needs: already-tested
-    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.duplicate != 'true' && (github.event_name != 'pull_request' || needs.prepare.outputs.go == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # All runtimes (go, node, pnpm, task) come from mise.toml — single source of truth.
       - uses: jdx/mise-action@v4
         with:
           minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-go
-      - name: Run Go tests
-        run: task test:go
-      - name: Run Go linter
-        run: task lint:go
-      - name: Check Go vulnerabilities
-        run: task vuln:go
-
-  # The race detector is a separate job because it is not a subset of the run
-  # above: it needs cgo and a slower build, and a data race is a different
-  # failure class from a wrong answer. Only ./internal — the e2e package boots
-  # a real binary and proves nothing extra under -race.
-  go-race:
-    needs: already-tested
-    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
+      - name: Find Go cache paths
+        id: go-cache
+        run: |
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
         with:
-          minimum_release_age: 7d
-          cache: true
-          cache_key_prefix: mise-go-race
-      - name: Run Go tests with the race detector
-        working-directory: backend/go
-        run: go test ./internal/... -race -count=1
+          path: |
+            ${{ steps.go-cache.outputs.modules }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-normal-${{ hashFiles('mise.toml', 'backend/go/go.sum') }}-${{ github.sha }}
+          restore-keys: go-${{ runner.os }}-${{ runner.arch }}-normal-${{ hashFiles('mise.toml', 'backend/go/go.sum') }}-
+      - run: task test:go
+      - run: task lint:go
 
   web-quality:
-    needs: already-tested
-    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.duplicate != 'true' && (github.event_name != 'pull_request' || needs.prepare.outputs.web == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -88,40 +91,50 @@ jobs:
           minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-web
-      # mise-action caches tool installs but not the pnpm store; the old
-      # setup-node `cache: pnpm` is gone, so cache the store explicitly.
-      - name: Get pnpm store path
+      - name: Find pnpm store
         id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Typecheck web app
-        run: pnpm typecheck:web
-      - name: Run web unit tests
-        run: pnpm test:web
-      - name: Build web app
-        run: pnpm build:web
-      # One optional browser smoke; the full suite is available via task e2e:web.
-      - name: Install Playwright Chromium
-        continue-on-error: true
-        run: pnpm -C frontend/web exec playwright install chromium
-      - name: Playwright e2e smoke (optional)
-        continue-on-error: true
-        run: pnpm -C frontend/web exec playwright test e2e/library-scan-plan.spec.ts
-        env:
-          BROWSER_E2E: '1'
+          path: ${{ steps.pnpm-cache.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck:web
+      - run: pnpm test:web
+      - run: pnpm build:web
 
-  # Windows dev-environment gate: catches regressions in Windows-only paths
-  # (dev-web.mjs isWin/.cmd handling, .exe build) that Linux CI cannot see.
-  # Main jobs run on Linux for speed/cost; this stays lean.
+  # Expensive checks start only after both fast suites pass. Main and manual
+  # runs are full; pull requests get the path-filtered fast suites above.
+  go-race:
+    needs: [prepare, go-test, web-quality]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.prepare.outputs.duplicate != 'true' && needs.go-test.result == 'success' && needs.web-quality.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          minimum_release_age: 7d
+          cache: true
+          cache_key_prefix: mise-go-race
+      - name: Find Go cache paths
+        id: go-cache
+        run: |
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.modules }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-race-${{ hashFiles('mise.toml', 'backend/go/go.sum') }}-${{ github.sha }}
+          restore-keys: go-${{ runner.os }}-${{ runner.arch }}-race-${{ hashFiles('mise.toml', 'backend/go/go.sum') }}-
+      - working-directory: backend/go
+        run: go test ./internal/... -race -count=1
+
   windows-smoke:
-    needs: already-tested
-    if: ${{ !cancelled() && needs.already-tested.outputs.tested != 'true' }}
+    needs: [prepare, go-test, web-quality]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.prepare.outputs.duplicate != 'true' && needs.go-test.result == 'success' && needs.web-quality.result == 'success' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -130,36 +143,83 @@ jobs:
           minimum_release_age: 7d
           cache: true
           cache_key_prefix: mise-windows
-      - name: Build Windows backend binary
-        run: task build:go:windows-x64
-      # Compiling for Windows does not prove the DSN opens a database there:
-      # the connection pragmas are built into the path, so this runs for real.
-      - name: Repository connection pragmas (Windows runtime, blocking)
+      - run: task build:go:windows-x64
+      - name: Check SQLite connection pragmas on Windows
         working-directory: backend/go
         run: go test ./internal/adapters/sqlite -run TestConnectionPragmasAreAppliedToEveryConnection -count=1
 
-  mark-tested:
-    needs: [go-test, go-race, web-quality, windows-smoke]
-    if: >-
-      !cancelled() && github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]' &&
-      needs.go-test.result == 'success' &&
-      needs.go-race.result == 'success' &&
-      needs.web-quality.result == 'success' &&
-      needs.windows-smoke.result == 'success'
+  web-e2e:
+    needs: [prepare, go-test, web-quality]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.prepare.outputs.duplicate != 'true' && needs.go-test.result == 'success' && needs.web-quality.result == 'success' }}
     runs-on: ubuntu-latest
-    permissions:
-      statuses: write
     steps:
-      - name: Mark PR head as tested
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          minimum_release_age: 7d
+          cache: true
+          cache_key_prefix: mise-e2e
+      - name: Find pnpm store
+        id: pnpm-cache
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-cache.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C frontend/web exec playwright install chromium --with-deps
+      - run: task e2e:web
+
+  # Advisory data changes without source changes, so this never uses duplicate
+  # results. It waits for fast checks to avoid work on an already broken build.
+  go-vuln:
+    needs: [prepare, go-test, web-quality]
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' &&
+          (needs.prepare.outputs.duplicate == 'true' ||
+           (needs.go-test.result == 'success' && needs.web-quality.result == 'success')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          minimum_release_age: 7d
+          cache: true
+          cache_key_prefix: mise-vuln
+      - run: task vuln:go
+
+  # Stable required status: skipped jobs are valid only when paths or a prior
+  # successful full push explain them. All other skips fail closed.
+  result:
+    needs: [prepare, go-test, web-quality, go-race, windows-smoke, web-e2e, go-vuln]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required checks
         env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          PREPARE: ${{ needs.prepare.result }}
+          DUPLICATE: ${{ needs.prepare.outputs.duplicate }}
+          GO_CHANGED: ${{ needs.prepare.outputs.go }}
+          WEB_CHANGED: ${{ needs.prepare.outputs.web }}
+          GO: ${{ needs.go-test.result }}
+          WEB: ${{ needs.web-quality.result }}
+          RACE: ${{ needs.go-race.result }}
+          WINDOWS: ${{ needs.windows-smoke.result }}
+          E2E: ${{ needs.web-e2e.result }}
+          VULN: ${{ needs.go-vuln.result }}
         run: |
-          if ! gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-            -f state=success -f context=ci/pr-verified \
-            -f description='All required CI jobs passed' -f target_url="$RUN_URL" >/dev/null; then
-            echo '::warning::Could not mark this commit as tested; main will run the suite'
+          test "$PREPARE" = success
+          if [ "$EVENT" = pull_request ]; then
+            if [ "$GO_CHANGED" = true ]; then test "$GO" = success; else test "$GO" = skipped; fi
+            if [ "$WEB_CHANGED" = true ]; then test "$WEB" = success; else test "$WEB" = skipped; fi
+            for check in "$RACE" "$WINDOWS" "$E2E" "$VULN"; do test "$check" = skipped; done
+          elif [ "$DUPLICATE" = true ]; then
+            for check in "$GO" "$WEB" "$RACE" "$WINDOWS" "$E2E"; do test "$check" = skipped; done
+            test "$VULN" = success
+          else
+            for check in "$GO" "$WEB" "$RACE" "$WINDOWS" "$E2E" "$VULN"; do
+              test "$check" = success
+            done
           fi
